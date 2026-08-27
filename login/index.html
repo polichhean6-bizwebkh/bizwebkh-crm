@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign In — BizWeb KH Internal CRM</title>
+<link rel="icon" href="../assets/img/favicon.png">
+<link rel="stylesheet" href="../css/styles.css">
+</head>
+<body>
+
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="logo-mark">BW</div>
+      <div>
+        <strong>BizWeb KH</strong>
+        <span>Internal CRM</span>
+      </div>
+    </div>
+
+    <h2>Sign in to continue</h2>
+
+    <div id="loginError"></div>
+
+    <form id="loginForm" autocomplete="on">
+      <div class="form-field" style="margin-bottom:14px">
+        <label for="emailInput">Email</label>
+        <input id="emailInput" type="email" placeholder="you@bizwebkh.com" autocomplete="username" required>
+      </div>
+      <div class="form-field" style="margin-bottom:8px">
+        <label for="passwordInput">Password</label>
+        <div class="password-field">
+          <input id="passwordInput" type="password" placeholder="••••••••" autocomplete="current-password" required>
+          <button type="button" class="password-toggle" id="togglePassword" aria-label="Show password" tabindex="-1"></button>
+        </div>
+      </div>
+      <div style="text-align:right;margin-bottom:18px">
+        <a href="#" class="login-forgot" id="forgotLink">Forgot password?</a>
+      </div>
+      <button type="submit" class="btn btn-primary btn-block">Sign In</button>
+    </form>
+
+    <p class="login-foot">BizWeb KH Internal CRM<br>Authorized BizWeb KH team members only.</p>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="../js/supabase-config.js"></script>
+<script src="../js/data.js"></script>
+<script src="../js/auth.js"></script>
+<script>
+  Auth.redirectIfLoggedIn();
+
+  const eyeOpen = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const eyeClosed = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a20.3 20.3 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a20.3 20.3 0 0 1-2.16 3.19M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="M1 1l22 22"/></svg>';
+  const toggleBtn = document.getElementById('togglePassword');
+  const pwInput = document.getElementById('passwordInput');
+  toggleBtn.innerHTML = eyeOpen;
+  toggleBtn.addEventListener('click', ()=>{
+    const showing = pwInput.type === 'text';
+    pwInput.type = showing ? 'password' : 'text';
+    toggleBtn.innerHTML = showing ? eyeOpen : eyeClosed;
+    toggleBtn.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+  });
+
+  document.getElementById('forgotLink').addEventListener('click', (e)=>{
+    e.preventDefault();
+    showMessage('Password reset isn\'t available yet — contact your Founder/Admin for help signing in.', 'info');
+  });
+
+  document.getElementById('loginForm').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const email = document.getElementById('emailInput').value.trim();
+    const password = pwInput.value;
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    let user = null;
+    try{
+      user = await Auth.login(email, password);
+    }catch(err){
+      console.error('Login failed', err);
+    }
+    if(!user){
+      submitBtn.disabled = false;
+      showMessage('Incorrect email or password.', 'error');
+      return;
+    }
+    window.location.href = '../dashboard/index.html';
+  });
+
+  function showMessage(msg, kind){
+    const errEl = document.getElementById('loginError');
+    const cls = kind==='info' ? 'login-error login-error-info' : 'login-error';
+    errEl.innerHTML = `<div class="${cls}">${msg}</div>`;
+  }
+</script>
+</body>
+</html>

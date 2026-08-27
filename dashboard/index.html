@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BizWeb KH — Internal CRM</title>
+<link rel="icon" href="../assets/img/favicon.png">
+<link rel="stylesheet" href="../css/styles.css">
+</head>
+<body>
+
+<div id="app"><div class="empty-state">Loading…</div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="../js/supabase-config.js"></script>
+<script src="../js/data.js"></script>
+<script src="../js/auth.js"></script>
+<script>
+  // Session-first + data-first bootstrap: app.js and every other feature
+  // module assume (a) Auth.currentUser() already resolves synchronously to
+  // the signed-in user, and (b) DB.all()/DB.find() already read live data
+  // out of DB._cache. Both of those are only true once this async IIFE has
+  // finished — so app.js (and the feature modules that render into it) are
+  // loaded via injected <script> tags at the very end of this block,
+  // instead of being static <script src> tags like the rest of the app.
+  (async function bootstrap(){
+    const session = await Auth.restoreSession();
+    if(!session){
+      window.location.href = '../login/index.html';
+      return;
+    }
+
+    try{
+      await DB.init();
+    }catch(err){
+      console.error('DB.init() failed', err);
+      document.getElementById('app').innerHTML =
+        '<div class="empty-state">Could not load data from the server. Please check your connection and refresh.</div>';
+      return;
+    }
+
+    // None of these feature modules run any top-level code that touches
+    // DB.* or Auth.* immediately on script load — they only define
+    // functions, which app.js's initApp()/router() call after all of them
+    // are loaded. app.js itself DOES run top-level code the instant it
+    // loads (`const CURRENT_USER = Auth.requireAuth();` and, at the very
+    // bottom, `if(CURRENT_USER){ initApp(); }`) — which is exactly why it's
+    // loaded LAST, after Auth/DB are both already populated above.
+    const scripts = [
+      '../js/dashboard.js', '../js/leads.js', '../js/pipeline.js',
+      '../js/projects.js', '../js/quotations.js', '../js/followups.js',
+      '../js/payments.js', '../js/activity.js', '../js/app.js'
+    ];
+    for(const src of scripts){
+      await new Promise((resolve, reject)=>{
+        const s = document.createElement('script');
+        s.src = src;
+        s.onload = resolve;
+        s.onerror = reject;
+        document.body.appendChild(s);
+      });
+    }
+  })();
+</script>
+</body>
+</html>

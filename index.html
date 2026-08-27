@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BizWeb KH — Internal CRM</title>
+<script>
+  (function(){
+    try{
+      var session = localStorage.getItem('bizwebkh_crm_session_v1');
+      if(session){ window.location.replace('dashboard/index.html'); }
+      else { window.location.replace('login/index.html'); }
+    }catch(e){ window.location.replace('login/index.html'); }
+  })();
+</script>
+</head>
+<body>
+  <noscript>Please enable JavaScript to use the BizWeb KH Internal CRM.</noscript>
+</body>
+</html>
