@@ -6,6 +6,36 @@
 <title>Sign In — BizWeb KH Internal CRM</title>
 <link rel="icon" href="../assets/img/favicon.png">
 <link rel="stylesheet" href="../css/styles.css">
+<script>
+  // Runs synchronously, before the page paints, so a visitor arriving from
+  // a Supabase password-recovery email never sees a flash of the normal
+  // Sign In form first. This is a cheap URL heuristic only (no Supabase SDK
+  // loaded yet) — supabase-config.js/auth.js further down confirm it via
+  // the real PASSWORD_RECOVERY auth event and can correct course either way
+  // if this guess turns out wrong (e.g. an expired/invalid link).
+  (function(){
+    var hash = window.location.hash || '';
+    var search = window.location.search || '';
+    // Hash-fragment (implicit) recovery links: #access_token=...&type=recovery
+    // PKCE/code-based recovery links: ?code=...  (Supabase's verify redirect
+    // for type=recovery always lands here with a `code` param; we don't
+    // require an explicit type= on the query string since Supabase doesn't
+    // always include one for the PKCE case — the PASSWORD_RECOVERY event
+    // fired by the SDK below is the final authority either way).
+    var looksLikeRecovery = /type=recovery/.test(hash) || /type=recovery/.test(search) || /[?&]code=/.test(search);
+    var looksLikeAuthError = /error=/.test(hash) || /error=/.test(search);
+    if(looksLikeRecovery || looksLikeAuthError){
+      document.documentElement.classList.add('recovery-mode');
+    }
+  })();
+</script>
+<style>
+  /* Paired with the synchronous script above: applies before first paint,
+     so recovery-mode never flashes the wrong form even for a split second. */
+  #recoverySection{display:none}
+  html.recovery-mode #signInSection{display:none}
+  html.recovery-mode #recoverySection{display:block}
+</style>
 </head>
 <body>
 
@@ -19,29 +49,66 @@
       </div>
     </div>
 
-    <h2>Sign in to continue</h2>
+    <!-- ===================== Normal Sign In (unchanged for everyone else) ===================== -->
+    <div id="signInSection">
+      <h2>Sign in to continue</h2>
 
-    <div id="loginError"></div>
+      <div id="loginError"></div>
 
-    <form id="loginForm" autocomplete="on">
-      <div class="form-field" style="margin-bottom:14px">
-        <label for="emailInput">Email</label>
-        <input id="emailInput" type="email" placeholder="you@bizwebkh.com" autocomplete="username" required>
-      </div>
-      <div class="form-field" style="margin-bottom:8px">
-        <label for="passwordInput">Password</label>
-        <div class="password-field">
-          <input id="passwordInput" type="password" placeholder="••••••••" autocomplete="current-password" required>
-          <button type="button" class="password-toggle" id="togglePassword" aria-label="Show password" tabindex="-1"></button>
+      <form id="loginForm" autocomplete="on">
+        <div class="form-field" style="margin-bottom:14px">
+          <label for="emailInput">Email</label>
+          <input id="emailInput" type="email" placeholder="you@bizwebkh.com" autocomplete="username" required>
         </div>
-      </div>
-      <div style="text-align:right;margin-bottom:18px">
-        <a href="#" class="login-forgot" id="forgotLink">Forgot password?</a>
-      </div>
-      <button type="submit" class="btn btn-primary btn-block">Sign In</button>
-    </form>
+        <div class="form-field" style="margin-bottom:8px">
+          <label for="passwordInput">Password</label>
+          <div class="password-field">
+            <input id="passwordInput" type="password" placeholder="••••••••" autocomplete="current-password" required>
+            <button type="button" class="password-toggle" id="togglePassword" aria-label="Show password" tabindex="-1"></button>
+          </div>
+        </div>
+        <div style="text-align:right;margin-bottom:18px">
+          <a href="#" class="login-forgot" id="forgotLink">Forgot password?</a>
+        </div>
+        <button type="submit" class="btn btn-primary btn-block">Sign In</button>
+      </form>
 
-    <p class="login-foot">BizWeb KH Internal CRM<br>Authorized BizWeb KH team members only.</p>
+      <p class="login-foot">BizWeb KH Internal CRM<br>Authorized BizWeb KH team members only.</p>
+    </div>
+
+    <!-- ===================== Password recovery (Supabase reset-email landing) ===================== -->
+    <div id="recoverySection">
+      <h2>Set a new password</h2>
+      <p class="lead-sub" style="margin-top:-14px">You're resetting your BizWeb KH CRM password.</p>
+
+      <div id="recoveryError"></div>
+
+      <!-- Shown while we're waiting to confirm this is a real, still-valid recovery link -->
+      <div id="recoveryVerifying" class="login-error login-error-info">Verifying your reset link…</div>
+
+      <form id="recoveryForm" class="hidden" autocomplete="off">
+        <div class="form-field" style="margin-bottom:14px">
+          <label for="newPasswordInput">New Password</label>
+          <div class="password-field">
+            <input id="newPasswordInput" type="password" placeholder="••••••••" autocomplete="new-password" minlength="8" required>
+            <button type="button" class="password-toggle" data-toggle-for="newPasswordInput" aria-label="Show password" tabindex="-1"></button>
+          </div>
+          <span class="form-hint">At least 8 characters.</span>
+        </div>
+        <div class="form-field" style="margin-bottom:18px">
+          <label for="confirmPasswordInput">Confirm New Password</label>
+          <div class="password-field">
+            <input id="confirmPasswordInput" type="password" placeholder="••••••••" autocomplete="new-password" minlength="8" required>
+            <button type="button" class="password-toggle" data-toggle-for="confirmPasswordInput" aria-label="Show password" tabindex="-1"></button>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-block" id="updatePasswordBtn">Update Password</button>
+      </form>
+
+      <p class="login-foot" id="recoveryBackToSignIn" style="display:none">
+        <a href="#" class="login-forgot" id="backToSignInLink">&larr; Back to Sign In</a>
+      </p>
+    </div>
   </div>
 </div>
 
@@ -50,29 +117,202 @@
 <script src="../js/data.js"></script>
 <script src="../js/auth.js"></script>
 <script>
-  Auth.redirectIfLoggedIn();
+  /* ------------------------------------------------------------------ */
+  /* Shared helpers                                                      */
+  /* ------------------------------------------------------------------ */
 
   const eyeOpen = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"/><circle cx="12" cy="12" r="3"/></svg>';
   const eyeClosed = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a20.3 20.3 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a20.3 20.3 0 0 1-2.16 3.19M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="M1 1l22 22"/></svg>';
-  const toggleBtn = document.getElementById('togglePassword');
-  const pwInput = document.getElementById('passwordInput');
-  toggleBtn.innerHTML = eyeOpen;
-  toggleBtn.addEventListener('click', ()=>{
-    const showing = pwInput.type === 'text';
-    pwInput.type = showing ? 'password' : 'text';
-    toggleBtn.innerHTML = showing ? eyeOpen : eyeClosed;
-    toggleBtn.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+
+  // Generalized so it works for the Sign In password field AND both
+  // recovery-form password fields (New Password / Confirm New Password).
+  function wirePasswordToggle(inputEl, toggleBtn){
+    toggleBtn.innerHTML = eyeOpen;
+    toggleBtn.addEventListener('click', ()=>{
+      const showing = inputEl.type === 'text';
+      inputEl.type = showing ? 'password' : 'text';
+      toggleBtn.innerHTML = showing ? eyeOpen : eyeClosed;
+      toggleBtn.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+    });
+  }
+  wirePasswordToggle(document.getElementById('passwordInput'), document.getElementById('togglePassword'));
+  document.querySelectorAll('#recoveryForm .password-toggle').forEach(btn=>{
+    wirePasswordToggle(document.getElementById(btn.dataset.toggleFor), btn);
   });
 
-  document.getElementById('forgotLink').addEventListener('click', (e)=>{
+  function showMessage(targetId, msg, kind){
+    const el = document.getElementById(targetId);
+    const cls = kind==='info' ? 'login-error login-error-info' : (kind==='success' ? 'login-error login-error-success' : 'login-error');
+    el.innerHTML = `<div class="${cls}">${msg}</div>`;
+  }
+  function clearMessage(targetId){ document.getElementById(targetId).innerHTML = ''; }
+
+  /* ------------------------------------------------------------------ */
+  /* Production redirect targets for resetPasswordForEmail() (spec §8/§9). */
+  /* Never localhost. Picks the domain the page is actually being served  */
+  /* from right now, so a password-reset email sent while crm.bizwebkh.com */
+  /* is still mid-DNS-transition correctly falls back to the GitHub Pages  */
+  /* URL, and automatically switches to the real domain once DNS is live —*/
+  /* no code change needed when that cutover happens.                     */
+  /* ------------------------------------------------------------------ */
+  const PRODUCTION_LOGIN_URL = 'https://crm.bizwebkh.com/login/index.html';
+  const GITHUB_PAGES_FALLBACK_LOGIN_URL = 'https://polichhean6-bizwebkh.github.io/bizwebkh-crm/login/index.html';
+  function productionRedirectTo(){
+    return window.location.hostname === 'crm.bizwebkh.com'
+      ? PRODUCTION_LOGIN_URL
+      : GITHUB_PAGES_FALLBACK_LOGIN_URL;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Recovery-link detection                                             */
+  /* ------------------------------------------------------------------ */
+
+  const signInSection = document.getElementById('signInSection');
+  const recoverySection = document.getElementById('recoverySection');
+  const recoveryVerifying = document.getElementById('recoveryVerifying');
+  const recoveryForm = document.getElementById('recoveryForm');
+  const recoveryBackToSignIn = document.getElementById('recoveryBackToSignIn');
+
+  function showRecoveryForm(){
+    document.documentElement.classList.add('recovery-mode');
+    signInSection.classList.add('hidden');
+    recoverySection.classList.remove('hidden');
+    recoveryVerifying.classList.add('hidden');
+    recoveryForm.classList.remove('hidden');
+    clearMessage('recoveryError');
+  }
+  function showRecoveryError(msg){
+    signInSection.classList.add('hidden');
+    recoverySection.classList.remove('hidden');
+    recoveryVerifying.classList.add('hidden');
+    recoveryForm.classList.add('hidden');
+    recoveryBackToSignIn.style.display = '';
+    showMessage('recoveryError', msg, 'error');
+  }
+  document.getElementById('backToSignInLink').addEventListener('click', (e)=>{
     e.preventDefault();
-    showMessage('Password reset isn\'t available yet — contact your Founder/Admin for help signing in.', 'info');
+    // Drop any recovery/error tokens from the URL rather than just hiding
+    // the form, so a refresh doesn't re-trigger recovery mode on a dead link.
+    window.location.replace(window.location.pathname);
+  });
+
+  const looksLikeRecovery = document.documentElement.classList.contains('recovery-mode');
+  const urlHadAuthError = /error=/.test(window.location.hash) || /error=/.test(window.location.search);
+
+  if(looksLikeRecovery){
+    // Skip the normal "already logged in? bounce to dashboard" check —
+    // a recovery link must always be handled here, even if a stale normal
+    // session happens to exist in this browser (spec §2).
+    recoverySection.classList.remove('hidden');
+    signInSection.classList.add('hidden');
+    if(urlHadAuthError){
+      showRecoveryError('This password reset link is invalid or has expired. Please request a new one from the Sign In page.');
+    }
+  } else {
+    Auth.redirectIfLoggedIn();
+  }
+
+  // Authoritative confirmation: Supabase's SDK parses the recovery URL
+  // (hash-fragment tokens OR the PKCE `code` param — both formats, spec §7)
+  // on load and fires PASSWORD_RECOVERY once it establishes the temporary
+  // recovery session. This is what actually flips us into "set new
+  // password" mode; the URL heuristic above only prevents an initial flash
+  // of the wrong form.
+  supabaseClient.auth.onAuthStateChange((event, session)=>{
+    if(event === 'PASSWORD_RECOVERY'){
+      showRecoveryForm();
+    }
+  });
+
+  // If the URL looked like a recovery link but Supabase never confirms it
+  // (expired/already-used/tampered token — no error param, it just silently
+  // never fires), don't leave the visitor staring at "Verifying…" forever.
+  if(looksLikeRecovery && !urlHadAuthError){
+    setTimeout(()=>{
+      if(!recoveryForm.classList.contains('hidden')) return; // already confirmed good
+      showRecoveryError('This password reset link is invalid or has expired. Please request a new one from the Sign In page.');
+    }, 6000);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Recovery form submit — Set New Password (spec §3/§4/§5/§6)          */
+  /* ------------------------------------------------------------------ */
+
+  recoveryForm.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    clearMessage('recoveryError');
+    const newPassword = document.getElementById('newPasswordInput').value;
+    const confirmPassword = document.getElementById('confirmPasswordInput').value;
+
+    if(!newPassword || !confirmPassword){
+      showMessage('recoveryError', 'Please fill in both password fields.', 'error');
+      return;
+    }
+    if(newPassword.length < 8){
+      showMessage('recoveryError', 'Password must be at least 8 characters.', 'error');
+      return;
+    }
+    if(newPassword !== confirmPassword){
+      showMessage('recoveryError', 'Passwords do not match.', 'error');
+      return;
+    }
+
+    const submitBtn = document.getElementById('updatePasswordBtn');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Updating…';
+
+    const { error } = await supabaseClient.auth.updateUser({ password: newPassword });
+
+    if(error){
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Update Password';
+      showMessage('recoveryError', error.message || 'Could not update your password. Please try again.', 'error');
+      return;
+    }
+
+    showMessage('recoveryError', 'Password updated. Redirecting you to Sign In…', 'success');
+    recoveryForm.classList.add('hidden');
+
+    // Sign the one-time recovery session out — the user signs back in fresh
+    // with their new password on the normal Sign In form (spec §6), rather
+    // than silently staying "logged in" via the recovery token. Auth.logout()
+    // already does exactly this (signOut + clear in-memory/localStorage
+    // session cache) — reuse it instead of duplicating the logic here.
+    try{ await Auth.logout(); }catch(err){ console.error('Recovery session sign-out failed', err); }
+
+    setTimeout(()=>{
+      window.location.replace(window.location.pathname); // strips the used token from the URL
+    }, 1500);
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* Normal Sign In (unchanged behavior)                                  */
+  /* ------------------------------------------------------------------ */
+
+  document.getElementById('forgotLink').addEventListener('click', async (e)=>{
+    e.preventDefault();
+    const email = document.getElementById('emailInput').value.trim();
+    if(!email){
+      showMessage('loginError', 'Enter your email above first, then click "Forgot password?".', 'info');
+      document.getElementById('emailInput').focus();
+      return;
+    }
+    const link = e.target;
+    link.style.pointerEvents = 'none';
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+      redirectTo: productionRedirectTo()
+    });
+    link.style.pointerEvents = '';
+    // Deliberately generic either way — never confirm/deny whether an
+    // email address has an account.
+    if(error) console.error('resetPasswordForEmail failed', error);
+    showMessage('loginError', 'If an account exists for that email, a password reset link has been sent.', 'info');
   });
 
   document.getElementById('loginForm').addEventListener('submit', async (e)=>{
     e.preventDefault();
     const email = document.getElementById('emailInput').value.trim();
-    const password = pwInput.value;
+    const password = document.getElementById('passwordInput').value;
     const submitBtn = e.target.querySelector('button[type="submit"]');
     submitBtn.disabled = true;
     let user = null;
@@ -83,17 +323,11 @@
     }
     if(!user){
       submitBtn.disabled = false;
-      showMessage('Incorrect email or password.', 'error');
+      showMessage('loginError', 'Incorrect email or password.', 'error');
       return;
     }
     window.location.href = '../dashboard/index.html';
   });
-
-  function showMessage(msg, kind){
-    const errEl = document.getElementById('loginError');
-    const cls = kind==='info' ? 'login-error login-error-info' : 'login-error';
-    errEl.innerHTML = `<div class="${cls}">${msg}</div>`;
-  }
 </script>
 </body>
 </html>
