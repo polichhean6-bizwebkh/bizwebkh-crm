@@ -290,11 +290,15 @@ function renderProjectDetail(code){
 function paymentHistoryTableHtml(ledger){
   if(!ledger.length) return `<p class="text-muted" style="font-size:12.5px;margin:8px 0 0">No payments recorded yet.</p>`;
   const canEdit = canEditPayments(CURRENT_USER.role);
+  // Columns kept to exactly what's needed at a glance (spec §8) — "Recorded
+  // By" moves into the same small sub-row already used for Voided/Note
+  // details below each row, rather than crowding the main row with an
+  // eighth column. Edit is a small ghost-button link, not a large CTA.
   return `
     <div class="table-wrap scroll-x">
       <table class="data-table">
         <thead>
-          <tr><th>Payment #</th><th>Type</th><th>Amount</th><th>Payment Date</th><th>Method</th><th>Reference</th><th>Recorded By</th><th>Action</th></tr>
+          <tr><th>Payment #</th><th>Type</th><th>Amount</th><th>Payment Date</th><th>Method</th><th>Reference</th><th>Action</th></tr>
         </thead>
         <tbody>
           ${ledger.map(p=>`
@@ -305,20 +309,19 @@ function paymentHistoryTableHtml(ledger){
               <td>${fmtDate(p.date)}</td>
               <td>${escapeHtml(p.method||'—')}</td>
               <td>${escapeHtml(p.reference||'—')}</td>
-              <td>${escapeHtml(p.recordedBy||'—')}</td>
               <td>
                 ${p.voided
                   ? `<span class="badge st-cancelled"><span class="badge-dot"></span>Voided</span>`
                   : canEdit
-                    ? `<div class="flex-row" style="gap:6px">
-                         <button class="btn btn-ghost btn-sm" data-edit-payment="${p.id}">Edit</button>
-                         <button class="btn btn-ghost btn-sm" style="color:var(--red)" data-void-payment="${p.id}">Void</button>
+                    ? `<div class="flex-row" style="gap:2px">
+                         <button class="btn btn-ghost btn-sm" data-edit-payment="${p.id}" title="Edit payment" aria-label="Edit payment" style="padding:5px 8px">${icon('edit')}</button>
+                         <button class="btn btn-ghost btn-sm" style="color:var(--red);padding:5px 8px" data-void-payment="${p.id}" title="Void payment" aria-label="Void payment">${icon('x')}</button>
                        </div>`
                     : `<span class="text-muted" style="font-size:11.5px">—</span>`}
               </td>
             </tr>
-            ${p.voided ? `<tr style="${p.voided?'':''}"><td colspan="8" style="padding-top:0"><span class="text-muted" style="font-size:11px">Voided by ${escapeHtml(p.voidedBy||'—')} on ${fmtDate(p.voidedAt)}${p.voidReason?' — '+escapeHtml(p.voidReason):''}</span></td></tr>` : ''}
-            ${p.note ? `<tr><td colspan="8" style="padding-top:0"><span class="text-muted" style="font-size:11px">${escapeHtml(p.note)}</span></td></tr>` : ''}
+            ${p.voided ? `<tr><td colspan="7" style="padding-top:0"><span class="text-muted" style="font-size:11px">Voided by ${escapeHtml(p.voidedBy||'—')} on ${fmtDate(p.voidedAt)}${p.voidReason?' — '+escapeHtml(p.voidReason):''}</span></td></tr>` : `<tr><td colspan="7" style="padding-top:0"><span class="text-muted" style="font-size:11px">Recorded by ${escapeHtml(p.recordedBy||'—')}</span></td></tr>`}
+            ${p.note ? `<tr><td colspan="7" style="padding-top:0"><span class="text-muted" style="font-size:11px">${escapeHtml(p.note)}</span></td></tr>` : ''}
           `).join('')}
         </tbody>
       </table>
@@ -342,7 +345,17 @@ function openEditPaymentModal(paymentId, proj, onDone){
   const html = `
     <div class="modal-head"><h3>Edit Payment — ${escapeHtml(payment.paymentNumber||'')}</h3><button class="modal-close" id="epyClose">&times;</button></div>
     <div class="modal-body">
+      <div class="pd-keyinfo" style="margin-bottom:14px">
+        <div>
+          ${infoRow('Project Code', proj.id)}
+          ${infoRow('Client / Business', `${escapeHtml(proj.clientName||'—')}${proj.businessName?' — '+escapeHtml(proj.businessName):''}`)}
+        </div>
+        <div>
+          ${infoRow('Current Project Value', money(proj.confirmedValue))}
+        </div>
+      </div>
       <div class="form-grid">
+        <div class="form-field"><label class="required">Payment Number</label><input id="epy_number" value="${escapeHtml(payment.paymentNumber||'')}" placeholder="e.g. 1st Payment"></div>
         <div class="form-field"><label class="required">Payment Type</label>
           <select id="epy_type">${PAYMENT_TYPES.map(t=>`<option ${payment.type===t?'selected':''}>${t}</option>`).join('')}</select>
         </div>
@@ -362,28 +375,66 @@ function openEditPaymentModal(paymentId, proj, onDone){
     overlay.querySelector('#epyClose').onclick = closeModal;
     overlay.querySelector('#epyCancel').onclick = closeModal;
     overlay.querySelector('#epySave').onclick = ()=>{
+      // Second line of defense — the button is already hidden from Sales in
+      // the table, but never trust the UI alone for a founder-only action.
+      if(!canEditPayments(CURRENT_USER.role)){ toast('Only Founder/Admin can edit payments.', 'error'); return; }
+
+      const newNumber = overlay.querySelector('#epy_number').value.trim();
       const newAmount = Number(overlay.querySelector('#epy_amount').value)||0;
       const newDate = overlay.querySelector('#epy_date').value;
       const newMethod = overlay.querySelector('#epy_method').value;
       const newType = overlay.querySelector('#epy_type').value;
       const newReference = overlay.querySelector('#epy_reference').value.trim();
       const newNote = overlay.querySelector('#epy_note').value.trim();
-      if(newAmount<=0 || !newDate){ toast('Please enter a valid amount and date.', 'error'); return; }
+      if(!newNumber){ toast('Please enter a payment number.', 'error'); return; }
+      if(newAmount<=0){ toast('Please enter a valid amount.', 'error'); return; }
+      if(!newDate){ toast('Please select a payment date.', 'error'); return; }
+      if(!newType){ toast('Please select a payment type.', 'error'); return; }
+      if(!newMethod){ toast('Please select a payment method.', 'error'); return; }
 
       // If raising the amount would push Total Paid past Project Value,
       // warn and require confirmation before proceeding (same guard as
-      // Record Payment — see openRecordPaymentModal).
+      // Record Payment — see openRecordPaymentModal). This is a warning,
+      // not a hard block — spec §4 only requires blocking if an existing
+      // rule already does, and none does here.
       const otherPaid = paymentsForProject(proj.id).filter(p=>p.id!==payment.id).reduce((s,p)=>s+p.amount,0);
       const newTotal = otherPaid + newAmount;
       if(newTotal > proj.confirmedValue + 0.004){
         if(!confirm(`This payment is greater than the remaining project balance.\n\nProject Value: ${money(proj.confirmedValue)}\nTotal Paid (with this edit): ${money(newTotal)}\n\nSave anyway?`)) return;
       }
 
-      const oldAmount = payment.amount;
-      updatePaymentEntry(payment.id, { amount:newAmount, date:newDate, method:newMethod, type:newType, reference:newReference, note:newNote });
+      // Track every field that actually changed for the audit trail (spec
+      // §5: "changed fields, old value, new value"), not just amount.
+      const changes = [];
+      if(newNumber !== (payment.paymentNumber||'')) changes.push({ field:'Payment Number', from: payment.paymentNumber||'—', to: newNumber });
+      if(newType !== payment.type) changes.push({ field:'Type', from: payment.type||'—', to: newType });
+      if(newAmount !== payment.amount) changes.push({ field:'Amount', from: money(payment.amount), to: money(newAmount) });
+      if(newDate !== (payment.date||'')) changes.push({ field:'Payment Date', from: fmtDate(payment.date)||'—', to: fmtDate(newDate) });
+      if(newMethod !== (payment.method||'')) changes.push({ field:'Method', from: payment.method||'—', to: newMethod });
+      if(newReference !== (payment.reference||'')) changes.push({ field:'Reference', from: payment.reference||'—', to: newReference||'—' });
+      if(newNote !== (payment.note||'')) changes.push({ field:'Note', from: payment.note||'—', to: newNote||'—' });
+
+      if(!changes.length){ toast('No changes to save.', 'success'); closeModal(); return; }
+
+      updatePaymentEntry(payment.id, { paymentNumber:newNumber, amount:newAmount, date:newDate, method:newMethod, type:newType, reference:newReference, note:newNote });
+
+      // Build the audit description in the spec's example format:
+      // "Payment edited for C017 — 1st Payment: amount changed from $41 to $XX"
+      // extended with one clause per additional changed field.
+      const changeClauses = changes.map(c=>`${c.field.toLowerCase()} changed from ${c.from} to ${c.to}`).join('; ');
+      const description = `Payment edited for ${proj.id} — ${newNumber||payment.paymentNumber||payment.id}: ${changeClauses} (by ${CURRENT_USER.name}).`;
+
+      // leadHistoryTab() (js/leads.js) only renders the full `description`
+      // text when fromValue/toValue are BOTH empty — otherwise it shows just
+      // "from → to" and hides the description entirely. So: for the common
+      // single-field edit, keep the compact "$41 → $50"-style display by
+      // setting fromValue/toValue; for a multi-field edit, leave them unset
+      // so the full multi-field description renders instead.
+      const single = changes.length===1 ? changes[0] : null;
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: proj.id, refLabel:`${proj.id} — ${proj.businessName}`,
-        type:'Payment Updated', description:`${payment.paymentNumber||payment.id} updated from ${money(oldAmount)} to ${money(newAmount)} by ${CURRENT_USER.name}.`,
-        fromValue: String(oldAmount), toValue: String(newAmount) });
+        type:'Payment Updated', description,
+        fromValue: single ? single.from : null, toValue: single ? single.to : null });
+
       toast('Payment updated.', 'success');
       closeModal();
       if(onDone) onDone();

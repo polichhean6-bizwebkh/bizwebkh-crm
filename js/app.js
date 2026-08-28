@@ -229,6 +229,8 @@ const ICONS = {
   search:'<circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/>',
   menu:'<path d="M3 12h18M3 6h18M3 18h18"/>',
   quote:'<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M9 13h6M9 17h6"/>',
+  edit:'<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
+  x:'<path d="M18 6L6 18M6 6l12 12"/>',
 };
 // IMPORTANT: width/height="18" here are a SAFE DEFAULT ONLY — plain HTML
 // sizing attributes are the lowest-priority box-sizing source in CSS, so
