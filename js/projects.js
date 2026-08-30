@@ -296,7 +296,7 @@ function paymentHistoryTableHtml(ledger){
   // eighth column. Edit is a small ghost-button link, not a large CTA.
   return `
     <div class="table-wrap scroll-x">
-      <table class="data-table">
+      <table class="data-table payment-history-table">
         <thead>
           <tr><th>Payment #</th><th>Type</th><th>Amount</th><th>Payment Date</th><th>Method</th><th>Reference</th><th>Action</th></tr>
         </thead>

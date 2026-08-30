@@ -175,6 +175,29 @@ img{max-width:100%;display:block}
 /* ---------- Tables ---------- */
 .table-wrap{background:#fff;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;box-shadow:0 4px 14px rgba(21,62,121,.05)}
 table.data-table{width:100%;border-collapse:collapse;font-size:13px;min-width:1100px}
+/* Payment History (Project View > Payment History) renders inside the
+   .modal-lg panel (max-width:820px, ~776px usable after padding) — the
+   shared 1100px min-width above (tuned for full-width page tables like
+   Projects/Leads) forced ~300-450px of this 7-column table off-screen to
+   the right, which is exactly where Reference and Action/Edit live. That
+   silently hid Edit behind an easy-to-miss horizontal scroll inside a
+   small modal section — not a caching, role, or data issue. Fixing the
+   floor to something these 7 narrow columns actually need keeps it fully
+   visible without scrolling on any normal window width, while .scroll-x
+   above still provides a fallback on genuinely narrow (phone) screens. */
+table.data-table.payment-history-table{min-width:0}
+/* Belt-and-suspenders for the very narrow (phone) fallback where .scroll-x
+   still kicks in: pin the Action column so Edit/Void stay reachable
+   without hunting through a horizontal scroll. Explicit (not `inherit`)
+   background — a td's own background is transparent by default, and
+   `inherit` would pull it from <tr>, which has none, letting scrolled
+   content show through the sticky cell. */
+table.data-table.payment-history-table th:last-child,
+table.data-table.payment-history-table td:last-child{
+  position:sticky;right:0;background:#fff;
+}
+table.data-table.payment-history-table thead th:last-child{background:#f7faff}
+table.data-table.payment-history-table tbody tr:hover td:last-child{background:#f9fbff}
 table.data-table th{
   text-align:left;padding:11px 14px;background:#f7faff;color:var(--muted);font-size:11px;
   text-transform:uppercase;letter-spacing:.4px;font-weight:800;border-bottom:1px solid var(--line);white-space:nowrap;
