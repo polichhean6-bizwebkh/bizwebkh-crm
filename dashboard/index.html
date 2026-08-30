@@ -5,17 +5,28 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BizWeb KH — Internal CRM</title>
 <link rel="icon" href="../assets/img/favicon.png">
-<link rel="stylesheet" href="../css/styles.css">
+<link rel="stylesheet" href="../css/styles.css?v=2026082901">
 </head>
 <body>
 
 <div id="app"><div class="empty-state">Loading…</div></div>
 
+<!-- Cache-busting (spec: "Cache / Versioning"): every local JS/CSS asset is
+     loaded with a ?v= query string tied to ASSET_VERSION below, so a
+     production deploy is guaranteed to load fresh files on the very next
+     page load instead of a browser's cached copy of the old script — this
+     is what let a shipped fix (e.g. Edit Payment) stay invisible to an
+     already-open browser tab / warm disk cache. Bump ASSET_VERSION (and the
+     matching ?v= on the 3 static <script> tags just below, and on the CSS
+     <link> above) on every future deploy that changes JS/CSS. This never
+     changes any file path, only adds a query string, so it cannot break
+     bookmarks, relative links, or the custom domain. -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<script src="../js/supabase-config.js"></script>
-<script src="../js/data.js"></script>
-<script src="../js/auth.js"></script>
+<script src="../js/supabase-config.js?v=2026082901"></script>
+<script src="../js/data.js?v=2026082901"></script>
+<script src="../js/auth.js?v=2026082901"></script>
 <script>
+  const ASSET_VERSION = '2026082901';
   // Session-first + data-first bootstrap: app.js and every other feature
   // module assume (a) Auth.currentUser() already resolves synchronously to
   // the signed-in user, and (b) DB.all()/DB.find() already read live data
@@ -54,7 +65,7 @@
     for(const src of scripts){
       await new Promise((resolve, reject)=>{
         const s = document.createElement('script');
-        s.src = src;
+        s.src = `${src}?v=${ASSET_VERSION}`;
         s.onload = resolve;
         s.onerror = reject;
         document.body.appendChild(s);
