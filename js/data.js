@@ -689,14 +689,23 @@ function totalPaidForProject(projectId){
 // deliberately never influenced by Project Status (a separate axis, see
 // PROJECT_STAGES): "In Development" + "Partially Paid" is a valid, common
 // combination.
+// Payments are floats (e.g. 40.98 + 69.00), and summing them in JS can land
+// a hair off the exact cent value (109.97999999999999 instead of 109.98) —
+// invisible once money() rounds it for display ("$110"/"$0"), but a raw
+// `remaining > 0` / `totalPaid >= confirmedValue` comparison against that
+// un-rounded float saw the leftover ~1e-14 and never called it Fully Paid.
+// Half a cent is far smaller than any real partial payment, so absorbing it
+// here can't misclassify a genuine underpayment as Fully Paid.
+const PAYMENT_STATUS_EPSILON = 0.005;
 function paymentSummaryFor(projectId){
   const proj = DB.find('projects', projectId);
   const confirmedValue = proj ? (Number(proj.confirmedValue)||0) : 0;
   const totalPaid = totalPaidForProject(projectId);
-  const remaining = Math.max(0, confirmedValue - totalPaid);
+  const remaining = Math.max(0, Math.round((confirmedValue - totalPaid) * 100) / 100);
   let status = 'Not Paid';
-  if(totalPaid>0 && remaining>0) status = 'Partially Paid';
-  else if(totalPaid>0 && totalPaid>=confirmedValue) status = 'Fully Paid';
+  if(totalPaid <= PAYMENT_STATUS_EPSILON) status = 'Not Paid';
+  else if(totalPaid < confirmedValue - PAYMENT_STATUS_EPSILON) status = 'Partially Paid';
+  else status = 'Fully Paid'; // totalPaid >= confirmedValue - EPSILON, i.e. fully covers the project value (or overpays it)
   const lastPayment = paymentsForProject(projectId).slice(-1)[0] || null;
   return { confirmedValue, totalPaid, remaining, status, lastPayment };
 }
