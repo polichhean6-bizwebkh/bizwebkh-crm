@@ -6,6 +6,13 @@
 
 let LEADS_FILTER_STATE = { search:'', status:'', sales:'', industry:'', service:'', source:'', followup:'', dateRange:'all', archiveView:'active' };
 
+// Lead Date column sort direction — 'desc' (newest first) is the required
+// default on every page load; clicking the Lead Date header toggles it.
+// Deliberately its own piece of state, not part of LEADS_FILTER_STATE,
+// since it's a sort order, not a filter, and changing it must not reset
+// LEADS_PAGE the way an actual filter change does (spec §2/§6).
+let LEADS_SORT_DIR = 'desc';
+
 // Leads not currently archived — the default view everywhere except the
 // Lead Records page's own Active/Archived/All filter (spec §15): Pipeline
 // and Follow-ups always use this, since an archived lead should never
@@ -195,7 +202,23 @@ function filteredLeads(){
       if(f.followup==='week' && !['today','tomorrow','week'].includes(u)) return false;
     }
     return true;
-  }).sort((a,b)=> new Date(b.updatedAt)-new Date(a.updatedAt));
+  }).sort(leadSortComparator());
+}
+
+// Default/required sort is Lead Date (created_at) newest-first — sorted
+// here, on the FULL filtered set, before renderLeadsTable() ever slices it
+// into a page, so pagination, search, and every other filter all still see
+// newest-first order (spec §2/§3). A lead with no createdAt (none exist
+// today — see the audit in the deploy report — but this stays defensive
+// for any future import) sorts as the oldest possible date rather than
+// throwing off the rest of the ordering with an Invalid Date.
+function leadSortComparator(){
+  const dir = LEADS_SORT_DIR==='asc' ? 1 : -1;
+  return (a,b)=>{
+    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return (ta - tb) * dir;
+  };
 }
 
 function renderLeadsTable(){
@@ -212,7 +235,7 @@ function renderLeadsTable(){
       <table class="data-table">
         <thead>
           <tr>
-            <th>Lead ID</th><th>Client</th><th>Business</th><th>Industry</th>
+            <th>Lead ID</th><th id="leadDateHeader" class="th-sortable" title="Click to sort by Lead Date">Lead Date${leadDateSortIndicatorHtml()}</th><th>Client</th><th>Business</th><th>Industry</th>
             <th>Interested Service</th><th>Est. Value</th>
             <th>Sales</th><th>Status</th><th>Next Follow-up</th><th>Action</th>
           </tr>
@@ -221,6 +244,7 @@ function renderLeadsTable(){
           ${pageLeads.length ? pageLeads.map(l=>`
             <tr>
               <td class="cell-link" data-open="${l.id}">${l.id}</td>
+              <td class="cell-nowrap">${fmtDate(l.createdAt)}</td>
               <td class="cell-strong">${escapeHtml(l.clientName)}</td>
               <td>${escapeHtml(l.businessName)}${l.projectCode ? `<div class="cell-sub">Project ${l.projectCode}${DB.find('projects',l.projectCode) ? ' · '+escapeHtml(DB.find('projects',l.projectCode).stage) : ''}</div>`:''}</td>
               <td>${escapeHtml(industryLabel(l.industry))}</td>
@@ -230,7 +254,7 @@ function renderLeadsTable(){
               <td>${statusBadge(l.status)}${l.archived ? `<div class="cell-sub" style="color:var(--muted)">Archived</div>` : ''}</td>
               <td>${urgencyChip(l.nextFollowup)}</td>
               <td><button class="btn btn-secondary btn-sm" data-open="${l.id}">View</button></td>
-            </tr>`).join('') : `<tr><td colspan="10"><div class="empty-row">No leads match your filters.</div></td></tr>`}
+            </tr>`).join('') : `<tr><td colspan="11"><div class="empty-row">No leads match your filters.</div></td></tr>`}
         </tbody>
       </table>
     </div>
@@ -244,6 +268,22 @@ function renderLeadsTable(){
     else LEADS_PAGE = Number(p);
     renderLeadsTable();
   });
+  // Optional small improvement (spec §6): click Lead Date to flip
+  // newest<->oldest. Toggling sort direction is deliberately NOT a filter
+  // change — it doesn't reset LEADS_PAGE, since the same underlying rows
+  // are still shown, just reordered.
+  const leadDateHeader = document.getElementById('leadDateHeader');
+  if(leadDateHeader) leadDateHeader.onclick = ()=>{
+    LEADS_SORT_DIR = LEADS_SORT_DIR==='desc' ? 'asc' : 'desc';
+    renderLeadsTable();
+  };
+}
+
+// Small arrow indicator on the Lead Date header showing current sort
+// direction: newest-first (desc, the default) shows ↓, oldest-first (asc)
+// shows ↑.
+function leadDateSortIndicatorHtml(){
+  return ` <span class="sort-indicator">${LEADS_SORT_DIR==='desc' ? '↓' : '↑'}</span>`;
 }
 
 function renderLeadsPagination(totalCount, totalPages){
