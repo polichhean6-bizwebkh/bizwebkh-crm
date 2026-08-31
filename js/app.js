@@ -231,6 +231,8 @@ const ICONS = {
   quote:'<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M9 13h6M9 17h6"/>',
   edit:'<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
   x:'<path d="M18 6L6 18M6 6l12 12"/>',
+  moon:'<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
+  sun:'<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>',
 };
 // IMPORTANT: width/height="18" here are a SAFE DEFAULT ONLY — plain HTML
 // sizing attributes are the lowest-priority box-sizing source in CSS, so
@@ -279,10 +281,7 @@ function renderShell(){
             <div class="page-sub" id="pageSub"></div>
           </div>
           <div class="topbar-spacer"></div>
-          <div class="lang-toggle">
-            <button class="active" id="langEn">EN</button>
-            <button id="langKm">ខ្មែរ</button>
-          </div>
+          <button class="theme-toggle-btn" id="themeToggle" title="Switch theme" aria-label="Switch between light and dark theme"></button>
         </div>
         <div class="content" id="pageContent"></div>
       </div>
@@ -303,7 +302,7 @@ function renderShell(){
     window.location.hash = '#' + item.dataset.route;
     document.getElementById('sidebar').classList.remove('open');
   });
-  document.getElementById('langKm').onclick = ()=> toast('Khmer language pack coming soon in a future update.');
+  wireThemeToggle(document.getElementById('themeToggle'));
 }
 
 const ROUTES = {

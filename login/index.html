@@ -3,6 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Applies the saved theme synchronously, before anything paints — see
+     dashboard/index.html for the full rationale (same reasoning as this
+     page's own recovery-mode detection script just below: must run before
+     first paint, so it can't wait for the externally-fetched theme.js). -->
+<script>
+  (function(){
+    try{
+      if(localStorage.getItem('crm-theme')==='dark') document.documentElement.setAttribute('data-theme','dark');
+    }catch(e){}
+  })();
+</script>
 <!-- See dashboard/index.html for why: GitHub Pages caches this document
      itself (max-age=600), so these hints force revalidation of the shell
      on every load, and the ?v= below then guarantees a genuinely fresh
@@ -12,7 +23,7 @@
 <meta http-equiv="Expires" content="0">
 <title>Sign In — BizWeb KH Internal CRM</title>
 <link rel="icon" href="../assets/img/favicon.png">
-<link rel="stylesheet" href="../css/styles.css?v=2026083001">
+<link rel="stylesheet" href="../css/styles.css?v=2026083101">
 <script>
   // Runs synchronously, before the page paints, so a visitor arriving from
   // a Supabase password-recovery email never sees a flash of the normal
@@ -120,9 +131,9 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<script src="../js/supabase-config.js?v=2026083001"></script>
-<script src="../js/data.js?v=2026083001"></script>
-<script src="../js/auth.js?v=2026083001"></script>
+<script src="../js/supabase-config.js?v=2026083101"></script>
+<script src="../js/data.js?v=2026083101"></script>
+<script src="../js/auth.js?v=2026083101"></script>
 <script>
   /* ------------------------------------------------------------------ */
   /* Shared helpers                                                      */

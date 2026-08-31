@@ -3,6 +3,23 @@
    Design system: reuses BizWeb KH brand tokens (navy / blue / cyan / orange)
    ========================================================================== */
 
+/* ---------- Theme tokens ---------- */
+/* Brand colors (--navy/--blue/--cyan/--orange/--green/--red/--amber/
+   --purple and their *-soft pill variants) are UNCHANGED between themes —
+   they're BizWeb KH's actual brand palette, and status-badge pills already
+   carry their own opaque background+text pair, so they stay readable
+   sitting on either a light or dark page without any changes (spec: keep
+   existing blue branding; preserve status-color meanings).
+
+   What DOES need to flip between themes are the generic UI-surface tokens
+   below: --soft (page bg), --surface (cards/panels/modals/inputs by
+   default), --surface-2 (table headers, subtle alt panels), --line
+   (borders), --muted (secondary text), --text (primary text), --input-bg,
+   --gray-soft (subtle hover/pill backgrounds). --line, --muted and
+   --gray-soft were ALREADY used via var() everywhere borders/secondary
+   text/subtle fills appear in this file, so overriding just those three
+   tokens under [data-theme="dark"] retroactively themes dozens of rules
+   with no per-rule edits needed. */
 :root{
   --navy:#071c3d;
   --ink:#12284d;
@@ -31,6 +48,34 @@
   --purple:#7c5cff;
   --purple-soft:#f1edff;
   --gray-soft:#eef2f7;
+
+  --surface:#fff;
+  --surface-2:#f7faff;
+  --surface-hover:#f9fbff;
+  --input-bg:#fff;
+  --text:var(--navy);
+  --scrollbar-thumb:#c6d7ee;
+}
+
+/* Professional dark navy theme (not a color inversion) — page background
+   #0F172A, card/panel surfaces #1E293B, a slightly deeper #111827 for
+   table headers and other subtle alt panels, primary text #F8FAFC,
+   secondary text #94A3B8, per the requested visual direction. Applied via
+   [data-theme="dark"] on <html>, toggled by theme.js and persisted to
+   localStorage — see js/theme.js for the toggle + early-apply logic. */
+[data-theme="dark"]{
+  --soft:#0F172A;
+  --surface:#1E293B;
+  --surface-2:#111827;
+  --surface-hover:#243449;
+  --line:#2b3b52;
+  --muted:#94A3B8;
+  --text:#F8FAFC;
+  --input-bg:#16233a;
+  --gray-soft:#223349;
+  --scrollbar-thumb:#3a4a63;
+  --shadow:0 12px 32px rgba(0,0,0,.35);
+  --shadow-lg:0 18px 50px rgba(0,0,0,.45);
 }
 
 *{box-sizing:border-box}
@@ -38,10 +83,11 @@ html,body{height:100%}
 body{
   margin:0;
   background:var(--soft);
-  color:var(--navy);
+  color:var(--text);
   font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;
   line-height:1.5;
   -webkit-font-smoothing:antialiased;
+  transition:background .15s ease,color .15s ease;
 }
 a{color:inherit;text-decoration:none}
 button{font:inherit}
@@ -51,7 +97,7 @@ input,select,textarea{font:inherit;color:inherit}
 img{max-width:100%;display:block}
 
 ::-webkit-scrollbar{width:9px;height:9px}
-::-webkit-scrollbar-thumb{background:#c6d7ee;border-radius:99px}
+::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);border-radius:99px}
 ::-webkit-scrollbar-track{background:transparent}
 
 .scroll-x{overflow-x:auto}
@@ -65,18 +111,18 @@ img{max-width:100%;display:block}
 .btn svg{width:15px;height:15px}
 .btn-primary{color:#fff;background:linear-gradient(135deg,var(--blue),var(--blue-dark));box-shadow:0 8px 18px rgba(29,123,255,.25)}
 .btn-primary:hover{transform:translateY(-1px);box-shadow:0 12px 22px rgba(29,123,255,.32)}
-.btn-secondary{color:var(--navy);background:#fff;border:1px solid var(--line)}
+.btn-secondary{color:var(--text);background:var(--surface);border:1px solid var(--line)}
 .btn-secondary:hover{border-color:var(--blue);color:var(--blue)}
-.btn-outline{color:var(--blue);border:1px solid #b9d5fb;background:#fff}
+.btn-outline{color:var(--blue);border:1px solid #b9d5fb;background:var(--surface)}
 .btn-outline:hover{background:#eef6ff}
 .btn-danger{color:#fff;background:var(--red)}
 .btn-danger:hover{filter:brightness(1.06)}
 .btn-ghost{background:transparent;color:var(--muted)}
-.btn-ghost:hover{background:var(--gray-soft);color:var(--navy)}
+.btn-ghost:hover{background:var(--gray-soft);color:var(--text)}
 .btn-sm{min-height:31px;padding:6px 11px;font-size:12.5px;border-radius:7px}
 .btn-block{width:100%}
 .btn:disabled{opacity:.5;cursor:not-allowed;transform:none!important}
-.icon-btn{width:32px;height:32px;border-radius:8px;border:1px solid var(--line);background:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:var(--muted)}
+.icon-btn{width:32px;height:32px;border-radius:8px;border:1px solid var(--line);background:var(--surface);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:var(--muted)}
 .icon-btn:hover{border-color:var(--blue);color:var(--blue)}
 .icon-btn svg{width:15px;height:15px}
 
@@ -119,16 +165,23 @@ img{max-width:100%;display:block}
 
 .topbar{
   height:var(--topbar-h);flex:0 0 var(--topbar-h);display:flex;align-items:center;gap:14px;
-  padding:0 22px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:30;
+  padding:0 22px;background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:30;
 }
-.topbar .page-title{font-size:17px;font-weight:800;color:var(--navy)}
+.topbar .page-title{font-size:17px;font-weight:800;color:var(--text)}
 .topbar .page-sub{font-size:12px;color:var(--muted);margin-top:1px}
 .topbar-spacer{flex:1}
-.menu-toggle-btn{display:none;background:none;border:0;color:var(--navy);cursor:pointer;padding:6px}
+.menu-toggle-btn{display:none;background:none;border:0;color:var(--text);cursor:pointer;padding:6px}
 .menu-toggle-btn svg{width:22px;height:22px}
-.lang-toggle{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
-.lang-toggle button{border:0;background:#fff;padding:6px 10px;font-size:12px;font-weight:700;color:var(--muted);cursor:pointer}
-.lang-toggle button.active{background:var(--blue);color:#fff}
+/* .lang-toggle (EN/Khmer switch) removed along with its markup — the CRM
+   is English-only now (spec §3/§4). */
+/* ---------- Theme toggle (spec §2) ---------- */
+.theme-toggle-btn{
+  background:none;border:1px solid var(--line);border-radius:8px;
+  width:34px;height:34px;display:flex;align-items:center;justify-content:center;
+  color:var(--muted);cursor:pointer;flex:0 0 34px;
+}
+.theme-toggle-btn:hover{border-color:var(--blue);color:var(--blue)}
+.theme-toggle-btn svg{width:17px;height:17px}
 
 .content{padding:22px;flex:1}
 
@@ -144,17 +197,17 @@ img{max-width:100%;display:block}
 .kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}
 .kpi-grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;max-width:calc(50% - 7px)}
 .kpi-card{
-  background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;
   box-shadow:0 4px 14px rgba(21,62,121,.05);
 }
 .kpi-card .kpi-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
 .kpi-card .kpi-icon{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center}
 .kpi-card .kpi-icon svg{width:17px;height:17px}
-.kpi-card .kpi-value{font-size:24px;font-weight:850;color:var(--navy);line-height:1}
+.kpi-card .kpi-value{font-size:24px;font-weight:850;color:var(--text);line-height:1}
 .kpi-card .kpi-label{font-size:12px;color:var(--muted);margin-top:6px;font-weight:600}
 .kpi-card .kpi-trend{font-size:11px;font-weight:700;margin-top:8px}
 
-.panel{background:#fff;border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 4px 14px rgba(21,62,121,.05)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 4px 14px rgba(21,62,121,.05)}
 .panel-head{display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid var(--line)}
 .panel-head h3{font-size:14.5px;font-weight:800}
 .panel-head .see-all{font-size:12px;font-weight:700;color:var(--blue);cursor:pointer}
@@ -167,13 +220,13 @@ img{max-width:100%;display:block}
 .mini-row{display:flex;align-items:center;justify-content:space-between;padding:10px 18px;border-bottom:1px solid #f0f4fa;gap:10px}
 .mini-row:last-child{border-bottom:0}
 .mini-row .mini-main{min-width:0}
-.mini-row .mini-title{font-size:13px;font-weight:700;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini-row .mini-title{font-size:13px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mini-row .mini-sub{font-size:11.5px;color:var(--muted);margin-top:2px}
 .mini-row .mini-right{text-align:right;flex:0 0 auto;font-size:11.5px;color:var(--muted)}
 .empty-row{padding:22px 18px;text-align:center;color:var(--muted);font-size:13px}
 
 /* ---------- Tables ---------- */
-.table-wrap{background:#fff;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;box-shadow:0 4px 14px rgba(21,62,121,.05)}
+.table-wrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;box-shadow:0 4px 14px rgba(21,62,121,.05)}
 table.data-table{width:100%;border-collapse:collapse;font-size:13px;min-width:1100px}
 /* Payment History (Project View > Payment History) renders inside the
    .modal-lg panel (max-width:820px, ~776px usable after padding) — the
@@ -194,23 +247,23 @@ table.data-table.payment-history-table{min-width:0}
    content show through the sticky cell. */
 table.data-table.payment-history-table th:last-child,
 table.data-table.payment-history-table td:last-child{
-  position:sticky;right:0;background:#fff;
+  position:sticky;right:0;background:var(--surface);
 }
-table.data-table.payment-history-table thead th:last-child{background:#f7faff}
-table.data-table.payment-history-table tbody tr:hover td:last-child{background:#f9fbff}
+table.data-table.payment-history-table thead th:last-child{background:var(--surface-2)}
+table.data-table.payment-history-table tbody tr:hover td:last-child{background:var(--surface-hover)}
 table.data-table th{
-  text-align:left;padding:11px 14px;background:#f7faff;color:var(--muted);font-size:11px;
+  text-align:left;padding:11px 14px;background:var(--surface-2);color:var(--muted);font-size:11px;
   text-transform:uppercase;letter-spacing:.4px;font-weight:800;border-bottom:1px solid var(--line);white-space:nowrap;
 }
 table.data-table td{padding:11px 14px;border-bottom:1px solid #eef2f8;vertical-align:middle}
-table.data-table tbody tr:hover{background:#f9fbff}
+table.data-table tbody tr:hover{background:var(--surface-hover)}
 table.data-table tbody tr:last-child td{border-bottom:0}
-.cell-strong{font-weight:700;color:var(--navy)}
+.cell-strong{font-weight:700;color:var(--text)}
 .cell-sub{font-size:11.5px;color:var(--muted);margin-top:2px}
 .cell-nowrap{white-space:nowrap}
 /* Lead Records > Lead Date header (spec §6: optional sortable column) */
 .th-sortable{cursor:pointer;user-select:none}
-.th-sortable:hover{color:var(--navy)}
+.th-sortable:hover{color:var(--text)}
 .sort-indicator{font-size:10px}
 .cell-link{color:var(--blue);font-weight:700;cursor:pointer}
 .cell-link:hover{text-decoration:underline}
@@ -220,12 +273,12 @@ table.data-table tbody tr:last-child td{border-bottom:0}
 /* This scoping gap was the root cause of the oversized search-icon bug.)  */
 /* ---------- */
 .search-box{position:relative;flex:1;min-width:220px}
-.search-box input{width:100%;padding:9px 12px 9px 34px;border:1px solid var(--line);border-radius:9px;background:#fff;font-size:13px;box-sizing:border-box}
+.search-box input{width:100%;padding:9px 12px 9px 34px;border:1px solid var(--line);border-radius:9px;background:var(--input-bg);font-size:13px;box-sizing:border-box}
 .search-box svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);width:15px!important;height:15px!important;min-width:0;color:var(--muted);pointer-events:none}
 
 /* ---------- Filters bar ---------- */
 .filters-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px}
-.filters-bar select, .filters-bar .sel{padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;font-size:12.5px;color:var(--navy);min-width:120px}
+.filters-bar select, .filters-bar .sel{padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:var(--input-bg);font-size:12.5px;color:var(--text);min-width:120px}
 .filters-bar .spacer{flex:1}
 
 /* Global safety net: an <svg> icon dropped anywhere with no more specific
@@ -242,7 +295,7 @@ svg{width:18px;height:18px}
 .st-contacted{background:#e6f2ff;color:#1d6fe0}
 .st-qualified{background:#e3f7ff;color:#0aa1c9}
 .st-demo-sent{background:var(--purple-soft);color:var(--purple)}
-.st-quotation-sent{background:#fff2e0;color:#c9760a}
+.st-quotation-sent{background:var(--surface)2e0;color:#c9760a}
 .st-follow-up{background:var(--amber-soft);color:var(--amber)}
 .st-negotiation{background:#ffe9e0;color:#d9540e}
 .st-confirmed{background:var(--green-soft);color:var(--green)}
@@ -292,27 +345,27 @@ svg{width:18px;height:18px}
 .pipeline-board{display:flex;gap:12px;overflow-x:auto;padding-bottom:10px;align-items:flex-start}
 .pipeline-col{flex:0 0 250px;background:#eef3fb;border-radius:12px;padding:10px;min-height:200px}
 .pipeline-col-head{display:flex;align-items:center;justify-content:space-between;padding:4px 6px 10px}
-.pipeline-col-head .col-title{font-size:12px;font-weight:800;color:var(--ink)}
-.pipeline-col-head .col-count{font-size:11px;font-weight:800;color:var(--muted);background:#fff;border-radius:999px;padding:1px 8px}
+.pipeline-col-head .col-title{font-size:12px;font-weight:800;color:var(--text)}
+.pipeline-col-head .col-count{font-size:11px;font-weight:800;color:var(--muted);background:var(--surface);border-radius:999px;padding:1px 8px}
 .pipeline-cards{display:flex;flex-direction:column;gap:9px;min-height:60px}
-.pcard{background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 12px;cursor:grab;box-shadow:0 2px 6px rgba(21,62,121,.06)}
+.pcard{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:11px 12px;cursor:grab;box-shadow:0 2px 6px rgba(21,62,121,.06)}
 .pcard:active{cursor:grabbing}
 .pcard.dragging{opacity:.4}
-.pcard .pcard-biz{font-size:13px;font-weight:800;color:var(--navy);margin-bottom:2px}
+.pcard .pcard-biz{font-size:13px;font-weight:800;color:var(--text);margin-bottom:2px}
 .pcard .pcard-client{font-size:11.5px;color:var(--muted);margin-bottom:8px}
 .pcard .pcard-svc{font-size:11px;color:var(--blue);font-weight:700;background:#eef6ff;display:inline-block;padding:2px 7px;border-radius:6px;margin-bottom:8px}
 .pcard .pcard-row{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--muted)}
-.pcard .pcard-value{font-weight:800;color:var(--navy)}
+.pcard .pcard-value{font-weight:800;color:var(--text)}
 .pipeline-col.drag-over{background:#dfeaff}
 
 /* ---------- Modal ---------- */
 .modal-overlay{position:fixed;inset:0;background:rgba(7,20,45,.5);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px}
-.modal-box{background:#fff;border-radius:16px;max-width:560px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 30px 70px rgba(7,20,45,.35)}
+.modal-box{background:var(--surface);border-radius:16px;max-width:560px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 30px 70px rgba(7,20,45,.35)}
 .modal-box.modal-lg{max-width:820px}
 .modal-head{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--line)}
 .modal-head h3{font-size:16px;font-weight:800}
 .modal-close{background:none;border:0;cursor:pointer;color:var(--muted);width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center}
-.modal-close:hover{background:var(--gray-soft);color:var(--navy)}
+.modal-close:hover{background:var(--gray-soft);color:var(--text)}
 .modal-body{padding:20px 22px}
 .modal-foot{display:flex;justify-content:flex-end;gap:10px;padding:16px 22px;border-top:1px solid var(--line)}
 
@@ -326,7 +379,7 @@ svg{width:18px;height:18px}
 .form-field.full{grid-column:1/-1}
 .form-field label{font-size:12px;font-weight:700;color:var(--muted)}
 .form-field input,.form-field select,.form-field textarea{
-  border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:13.5px;background:#fff;color:var(--navy);width:100%;
+  border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:13.5px;background:var(--input-bg);color:var(--text);width:100%;
 }
 .form-field input:focus,.form-field select:focus,.form-field textarea:focus{outline:2px solid #bcd6ff;border-color:var(--blue)}
 .form-field textarea{resize:vertical;min-height:70px}
@@ -345,10 +398,10 @@ svg{width:18px;height:18px}
 .tl-item:before{content:"";position:absolute;left:5px;top:16px;bottom:0;width:1px;background:var(--line)}
 .tl-item:last-child:before{display:none}
 .tl-dot{width:11px;height:11px;border-radius:50%;background:var(--blue);flex:0 0 11px;margin-top:3px;box-shadow:0 0 0 3px #e5f0ff}
-.tl-body .tl-title{font-size:13px;font-weight:700;color:var(--navy)}
+.tl-body .tl-title{font-size:13px;font-weight:700;color:var(--text)}
 .tl-body .tl-title b{font-weight:800}
 .tl-body .tl-meta{font-size:11.5px;color:var(--muted);margin-top:2px}
-.tl-body .tl-remark{font-size:12.5px;color:var(--ink);margin-top:5px;background:#f7faff;border-radius:8px;padding:8px 10px}
+.tl-body .tl-remark{font-size:12.5px;color:var(--text);margin-top:5px;background:var(--surface-2);border-radius:8px;padding:8px 10px}
 
 /* ---------- Follow-up groups ---------- */
 .fu-group-head{display:flex;align-items:center;gap:8px;margin:20px 0 10px}
@@ -358,10 +411,10 @@ svg{width:18px;height:18px}
 
 /* ---------- Login page ---------- */
 .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 75% 13%,rgba(255,138,61,.14),transparent 30%),radial-gradient(circle at 20% 22%,rgba(24,200,255,.16),transparent 32%),linear-gradient(135deg,#071c3d,#0d2d5d 60%,#12386f);padding:20px}
-.login-card{background:#fff;border-radius:20px;width:100%;max-width:400px;padding:34px 32px;box-shadow:0 30px 80px rgba(0,0,0,.35)}
+.login-card{background:var(--surface);border-radius:20px;width:100%;max-width:400px;padding:34px 32px;box-shadow:0 30px 80px rgba(0,0,0,.35)}
 .login-logo{display:flex;align-items:center;gap:10px;margin-bottom:22px}
 .login-logo .logo-mark{width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,var(--blue),var(--cyan));display:flex;align-items:center;justify-content:center;font-weight:900;color:#fff;font-size:17px}
-.login-logo strong{display:block;font-size:16px;font-weight:800;color:var(--navy)}
+.login-logo strong{display:block;font-size:16px;font-weight:800;color:var(--text)}
 .login-logo span{display:block;font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px}
 .login-card h2{font-size:19px;margin-bottom:22px}
 .login-card .lead-sub{font-size:13px;color:var(--muted);margin-bottom:22px}
@@ -371,7 +424,7 @@ svg{width:18px;height:18px}
 .password-field{position:relative;display:flex;align-items:center}
 .password-field input{padding-right:38px}
 .password-toggle{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:28px;height:28px;border:none;background:transparent;color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:6px}
-.password-toggle:hover{color:var(--navy);background:var(--gray-soft)}
+.password-toggle:hover{color:var(--text);background:var(--gray-soft)}
 .login-forgot{font-size:12px;font-weight:700;color:var(--blue);text-decoration:none}
 .login-forgot:hover{text-decoration:underline}
 .login-error{background:var(--red-soft);color:var(--red);font-size:12.5px;padding:9px 12px;border-radius:9px;margin-bottom:14px}
@@ -405,10 +458,10 @@ svg{width:18px;height:18px}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 
 /* ---------- Project View v2: compact key-info block + collapsible sections ---------- */
-.pd-keyinfo{display:grid;grid-template-columns:1fr 1fr;gap:16px;background:#f7faff;border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:18px}
+.pd-keyinfo{display:grid;grid-template-columns:1fr 1fr;gap:16px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:18px}
 .pd-sections{display:flex;flex-direction:column;gap:10px}
-.pd-section{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff}
-.pd-section-summary{list-style:none;display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer;font-size:13.5px;font-weight:700;color:var(--navy);user-select:none}
+.pd-section{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+.pd-section-summary{list-style:none;display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer;font-size:13.5px;font-weight:700;color:var(--text);user-select:none}
 .pd-section-summary::-webkit-details-marker{display:none}
 .pd-section-summary::marker{content:''}
 .pd-section-caret{display:inline-flex;font-size:10px;color:var(--muted);transition:transform .15s ease}
@@ -422,15 +475,15 @@ svg{width:18px;height:18px}
 /* ---------- Industry ranked bar charts (Dashboard) ---------- */
 .industry-bars-head{display:flex;align-items:baseline;justify-content:flex-end;gap:6px;margin:-6px 0 14px;text-align:right}
 .industry-bars-head .total-label{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.3px}
-.industry-bars-head .total-value{font-size:18px;color:var(--navy);font-weight:800}
+.industry-bars-head .total-value{font-size:18px;color:var(--text);font-weight:800}
 .industry-bars-list{display:flex;flex-direction:column;justify-content:center;min-height:100%}
 .industry-bar-row{display:flex;align-items:center;gap:12px;margin-bottom:14px}
 .industry-bar-row:last-child{margin-bottom:0}
-.industry-bar-label{width:150px;flex:0 0 150px;font-size:12.5px;font-weight:700;color:var(--navy);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.industry-bar-label{width:150px;flex:0 0 150px;font-size:12.5px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .industry-bar-track{flex:1;height:10px;background:var(--gray-soft);border-radius:99px;overflow:hidden}
 .industry-bar-fill{height:100%;border-radius:99px;min-width:3px}
 .industry-bar-meta{flex:0 0 auto;width:100px;display:flex;justify-content:flex-end;gap:10px;font-size:12px}
-.industry-bar-amount{font-weight:800;color:var(--navy);white-space:nowrap}
+.industry-bar-amount{font-weight:800;color:var(--text);white-space:nowrap}
 .industry-bar-pct{font-weight:700;color:var(--muted);white-space:nowrap;width:32px;text-align:right}
 
 .summary-cards-5{grid-template-columns:repeat(5,1fr);margin-bottom:14px}
@@ -463,8 +516,31 @@ svg{width:18px;height:18px}
   .industry-bar-meta{width:84px;gap:6px}
 }
 
+/* ---------- Dark-mode overrides for the handful of elements that use a
+   literal color instead of a theme token (mostly large tinted panels/pills
+   that would look too bright/washed-out against a dark page if left as
+   their light-mode literal) ---------- */
+[data-theme="dark"] .pipeline-col{background:#182338}
+[data-theme="dark"] .pipeline-col.drag-over{background:#20304a}
+[data-theme="dark"] .pcard .pcard-svc{background:#16233a}
+[data-theme="dark"] .btn-outline{border-color:#2a4a75}
+[data-theme="dark"] .btn-outline:hover{background:#16233a}
+[data-theme="dark"] .empty-state svg{color:#3a4a63}
+[data-theme="dark"] .form-field input:focus,
+[data-theme="dark"] .form-field select:focus,
+[data-theme="dark"] .form-field textarea:focus{outline-color:#2a4a75}
+
 /* ---------- Quotation document (preview + print/PDF) ---------- */
-.quote-doc{background:#fff;border-radius:10px;max-width:760px;margin:0 auto;padding:32px 36px;box-shadow:0 10px 30px rgba(7,20,45,.12);color:var(--navy)}
+/* Deliberately NOT themed — this is a client-facing document meant to be
+   sent/printed, so it always renders as a clean light document regardless
+   of the CRM's own theme (same reasoning a print stylesheet always forces
+   light output). Re-declaring --line/--muted/--navy locally means every
+   var() reference inside .quote-doc keeps its light-mode value even when
+   an ancestor has [data-theme="dark"] set, without needing !important or
+   duplicating every rule below with hardcoded colors. */
+.quote-doc{
+  --line:#dce8f7; --muted:#526584; --navy:#071c3d;
+  background:#fff;border-radius:10px;max-width:760px;margin:0 auto;padding:32px 36px;box-shadow:0 10px 30px rgba(7,20,45,.12);color:var(--navy)}
 .quote-doc-head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid var(--blue);padding-bottom:16px;margin-bottom:16px}
 .quote-doc-brand{display:flex;align-items:center;gap:12px}
 .quote-doc-meta{text-align:right;font-size:12px;line-height:1.7}
