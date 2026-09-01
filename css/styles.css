@@ -306,6 +306,14 @@ svg{width:18px;height:18px}
 .st-demo-sent{background:var(--purple-soft);color:var(--purple)}
 .st-quotation-sent{background:var(--surface)2e0;color:#c9760a}
 .st-follow-up{background:var(--amber-soft);color:var(--amber)}
+/* On Hold / Future Follow-up (CRM feature): deliberately NOT red — red stays
+   reserved for Lost/rejected/critical. Muted purple, distinct from both the
+   amber used a few lines up for Follow-up and the brighter --purple used for
+   Demo Sent below, so three different lead stages never read as "the same
+   color" at a glance. Like every other badge here this is a self-contained
+   opaque bg+text pair, so it stays readable on both the light AND dark page
+   background without any [data-theme="dark"] override needed. */
+.st-on-hold-future-follow-up{background:#efe7fb;color:#6d4aae}
 .st-negotiation{background:#ffe9e0;color:#d9540e}
 .st-confirmed{background:var(--green-soft);color:var(--green)}
 .st-deposit-paid{background:#e2f9ee;color:#0f9d63}
@@ -366,6 +374,14 @@ svg{width:18px;height:18px}
 .pcard .pcard-row{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--muted)}
 .pcard .pcard-value{font-weight:800;color:var(--text)}
 .pipeline-col.drag-over{background:#dfeaff}
+/* On Hold / Future Follow-up card accent (spec §2/§6) — same muted purple as
+   the status badge, applied as a left stripe rather than recoloring the
+   whole card, so the board's existing uniform column styling isn't
+   redesigned. The note/reason line reuses the same purple for its left
+   border, kept visually quiet (small, italic, muted text) since it's
+   supplementary context, not the card's headline. */
+.pcard.pcard-onhold{border-left:3px solid #6d4aae}
+.pcard-note{margin-top:6px;padding-top:6px;border-top:1px dashed var(--line);font-size:11px;font-style:italic;color:var(--muted);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 
 /* ---------- Modal ---------- */
 .modal-overlay{position:fixed;inset:0;background:rgba(7,20,45,.5);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px}

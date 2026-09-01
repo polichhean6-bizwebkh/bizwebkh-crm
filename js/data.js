@@ -25,6 +25,16 @@ const BZ_SESSION_KEY = 'bizwebkh_crm_session_v1';
 /* Reference / lookup data                                                */
 /* ---------------------------------------------------------------------- */
 
+// Dedicated constant for the "On Hold / Future Follow-up" pipeline stage
+// (CRM feature request) — a valid, still-open opportunity that a client
+// asked to revisit later (next month, after budget approval, etc.). It is
+// deliberately NOT Lost (the opportunity is still real) and NOT Confirmed.
+// Referenced from here instead of repeating the literal string everywhere,
+// so every place that needs to special-case it (the status-change modal's
+// Next Follow-up Date requirement, the Pipeline card's nearest-date sort,
+// the badge color) stays in sync with one source of truth.
+const ON_HOLD_STATUS = 'On Hold / Future Follow-up';
+
 // LEAD / SALES STATUS ONLY — this is the sales pipeline stage of the lead
 // itself and NEVER includes delivery/workflow statuses (those live only on
 // the linked Project's `stage`, see PROJECT_STAGES below). Once a lead
@@ -34,23 +44,26 @@ const BZ_SESSION_KEY = 'bizwebkh_crm_session_v1';
 // in projects.js, which deliberately does NOT write back to lead.status.
 const LEAD_STATUSES = [
   'New Lead', 'Contacted', 'Qualified', 'Demo Sent', 'Quotation Sent',
-  'Follow-up', 'Negotiation', 'Confirmed', 'Lost'
+  'Follow-up', ON_HOLD_STATUS, 'Negotiation', 'Confirmed', 'Lost'
 ];
 
 // Statuses that still belong on the Kanban pipeline board
 const PIPELINE_STATUSES = [
   'New Lead', 'Contacted', 'Qualified', 'Demo Sent', 'Quotation Sent',
-  'Follow-up', 'Negotiation', 'Confirmed'
+  'Follow-up', ON_HOLD_STATUS, 'Negotiation', 'Confirmed'
 ];
 
 // TRUE open opportunities — used for Pipeline Value everywhere (dashboard
 // KPI + Pipeline Value by Industry chart + Sales Performance). Deliberately
 // excludes Confirmed (it becomes a Project and is counted in Closed Sales
 // instead) and Lost — so a lead is never counted in both Pipeline Value and
-// Closed Sales at once.
+// Closed Sales at once. On Hold / Future Follow-up stays IN this list — it's
+// still a real, active, open opportunity (just temporarily paused), so it
+// must keep counting toward Pipeline Value / Open Leads everywhere that
+// reads this list, exactly like every other open stage.
 const OPEN_PIPELINE_STATUSES = [
   'New Lead', 'Contacted', 'Qualified', 'Demo Sent', 'Quotation Sent',
-  'Follow-up', 'Negotiation'
+  'Follow-up', ON_HOLD_STATUS, 'Negotiation'
 ];
 
 // PROJECT / DELIVERY STATUS ONLY — completely separate axis from lead
@@ -348,7 +361,7 @@ function rowToLead(row){
     expectedCloseDate: row.expected_close_date,
     quotationStatus: row.quotation_status, quotationAmount: row.quotation_amount,
     quotationRef: row.quotation_ref || '', demoLink: row.demo_link || '',
-    notes: row.notes || '', lostReason: row.lost_reason, projectCode: row.project_id,
+    notes: row.notes || '', lostReason: row.lost_reason, holdReason: row.hold_reason, projectCode: row.project_id,
     createdAt: row.created_at, updatedAt: row.updated_at,
     sourceFiles: [], sourceType: '', sourceDate: '', confidence: '',
     needsManualReview: false, historicalListConflict: false,
@@ -376,6 +389,7 @@ function leadToRow(lead){
     demo_link: lead.demoLink || null,
     notes: lead.notes || null,
     lost_reason: lead.lostReason || null,
+    hold_reason: lead.holdReason || null,
     archived: !!lead.archived, archived_at: lead.archivedAt || null,
     archived_by: userNameToId(lead.archivedBy), archive_reason: lead.archiveReason || null,
     follow_up_created_by: userNameToId(lead.followUpCreatedBy),

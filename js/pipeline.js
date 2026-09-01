@@ -88,7 +88,22 @@ function renderPipelinePage(){
 
     <div class="pipeline-board" id="pipelineBoard">
       ${PIPELINE_STATUSES.map(st=>{
-        const cards = boardLeads.filter(l=>l.status===st);
+        let cards = boardLeads.filter(l=>l.status===st);
+        // On Hold / Future Follow-up sorts nearest follow-up date first
+        // (spec §6) — a lead with no date at all (shouldn't normally
+        // happen, the status-change modal requires one) sorts to the end
+        // rather than crashing on an invalid Date comparison. Every other
+        // column keeps its normal (unsorted / natural DB) order — this is
+        // the one column where "what needs attention soonest" is the whole
+        // point of the view.
+        if(st===ON_HOLD_STATUS){
+          cards = [...cards].sort((a,b)=>{
+            if(!a.nextFollowup && !b.nextFollowup) return 0;
+            if(!a.nextFollowup) return 1;
+            if(!b.nextFollowup) return -1;
+            return new Date(a.nextFollowup) - new Date(b.nextFollowup);
+          });
+        }
         const total = cards.reduce((s,l)=>s+(l.estimatedValue||0),0);
         return `
         <div class="pipeline-col" data-status="${st}">
@@ -144,8 +159,14 @@ function renderPipelinePage(){
 }
 
 function pipelineCardHtml(l){
+  // On Hold / Future Follow-up gets a small purple accent stripe (spec §2:
+  // a distinct non-red amber/purple accent) plus its note/reason shown
+  // right on the card, since that's the one column where "why is this
+  // paused and when do we revisit it" is the point of glancing at the
+  // board (spec §6).
+  const isOnHold = l.status === ON_HOLD_STATUS;
   return `
-    <div class="pcard" draggable="true" data-lead-id="${l.id}">
+    <div class="pcard ${isOnHold?'pcard-onhold':''}" draggable="true" data-lead-id="${l.id}">
       <div class="pcard-biz">${escapeHtml(l.businessName)}</div>
       <div class="pcard-client">${escapeHtml(l.clientName)}</div>
       <span class="pcard-svc">${escapeHtml(l.interestedService)}</span>
@@ -157,6 +178,7 @@ function pipelineCardHtml(l){
         <span class="text-muted">Next:</span>
         ${l.nextFollowup ? urgencyChip(l.nextFollowup) : '<span class="text-muted">—</span>'}
       </div>
+      ${isOnHold && l.holdReason ? `<div class="pcard-note">${escapeHtml(l.holdReason)}</div>` : ''}
     </div>
   `;
 }

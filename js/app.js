@@ -146,8 +146,16 @@ document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeModal(); }
 /* Status-change confirmation modal (leads + projects share this)         */
 /* ---------------------------------------------------------------------- */
 
-function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus, onConfirm }){
+function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus, currentFollowup, onConfirm }){
   const needsLostReason = toStatus === 'Lost';
+  // On Hold / Future Follow-up (CRM feature): moving a LEAD into this stage
+  // requires a Next Follow-up Date, same treatment as Lost Reason above —
+  // this is what a lead in this stage actually needs to be useful later
+  // (Pipeline sorts this column by it, and it's what makes the lead
+  // reappear in Follow-up Due automatically once it arrives/overdue). Only
+  // applies to leads — projects.js reuses this same modal for its own
+  // stage changes and has no such field.
+  const needsHoldFollowup = refType==='lead' && toStatus === ON_HOLD_STATUS;
   const html = `
     <div class="modal-head">
       <h3>Change Status</h3>
@@ -172,9 +180,15 @@ function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus,
           ${LOST_REASONS.map(r=>`<option value="${r}">${r}</option>`).join('')}
         </select>
       </div>` : ''}
+      ${needsHoldFollowup ? `
+      <div class="form-field" style="margin-bottom:12px">
+        <label class="required">Next Follow-up Date</label>
+        <input type="date" id="scmHoldFollowup" value="${currentFollowup||''}">
+        <span class="form-hint">When should Sales come back to this lead? (e.g. "continue in December" → 01 Dec 2026)</span>
+      </div>` : ''}
       <div class="form-field">
-        <label>Remark ${needsLostReason?'':'(optional)'}</label>
-        <textarea id="scmRemark" placeholder="Add a short note about this change…"></textarea>
+        <label>${needsHoldFollowup ? 'Reason / Note' : 'Remark'} ${needsLostReason?'':(needsHoldFollowup?'(recommended)':'(optional)')}</label>
+        <textarea id="scmRemark" placeholder="${needsHoldFollowup ? 'e.g. Client requested to continue project in December.' : 'Add a short note about this change…'}"></textarea>
       </div>
     </div>
     <div class="modal-foot">
@@ -193,8 +207,18 @@ function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus,
         if(!reason){ reasonSel.style.borderColor='var(--red)'; toast('Please select a lost reason.', 'error'); return; }
         remark = `Lost reason: ${reason}` + (remark ? ` — ${remark}` : '');
       }
+      let nextFollowup = null;
+      if(needsHoldFollowup){
+        const dateInput = overlay.querySelector('#scmHoldFollowup');
+        nextFollowup = dateInput.value || '';
+        if(!nextFollowup){ dateInput.style.borderColor='var(--red)'; toast('Please set a Next Follow-up Date.', 'error'); return; }
+      }
       closeModal();
-      onConfirm({ remark, lostReason: needsLostReason ? overlay.querySelector('#scmLostReason').value : null });
+      onConfirm({
+        remark,
+        lostReason: needsLostReason ? overlay.querySelector('#scmLostReason').value : null,
+        nextFollowup: needsHoldFollowup ? nextFollowup : undefined,
+      });
     };
   }});
 }

@@ -357,6 +357,16 @@ function openLeadFormModal(leadId){
       const val = id => overlay.querySelector(id).value.trim();
       const clientName = val('#lf_clientName'), businessName = val('#lf_businessName'), phone = val('#lf_phone');
       if(!clientName || !businessName || !phone){ toast('Please fill in Client Name, Business Name and Phone.', 'error'); return; }
+      // On Hold / Future Follow-up (CRM feature, spec §3): the status
+      // dropdown here is only ever editable while CREATING a brand-new lead
+      // (it's disabled once editing — see the field above) — but a new lead
+      // could still be created directly with this status, bypassing the
+      // status-change modal's own Next Follow-up Date requirement. Close
+      // that gap here too, so the requirement is never skippable.
+      if(!editing && val('#lf_status')===ON_HOLD_STATUS && !val('#lf_followup')){
+        toast('Please set a Next Follow-up Date for an On Hold / Future Follow-up lead.', 'error');
+        return;
+      }
       const now = new Date().toISOString();
 
       if(editing){
@@ -454,7 +464,7 @@ function renderLeadDetail(leadId){
         <button class="btn btn-outline btn-sm" id="ldRestore">Restore Lead</button>
       </div>` : ''}
       <div class="flex-row" style="justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-        <div class="flex-row">${statusBadge(lead.status)}${lead.lostReason?`<span class="text-muted" style="font-size:12px">Reason: ${escapeHtml(lead.lostReason)}</span>`:''}</div>
+        <div class="flex-row">${statusBadge(lead.status)}${lead.lostReason?`<span class="text-muted" style="font-size:12px">Reason: ${escapeHtml(lead.lostReason)}</span>`:''}${lead.status===ON_HOLD_STATUS && lead.holdReason?`<span class="text-muted" style="font-size:12px">Note: ${escapeHtml(lead.holdReason)}</span>`:''}</div>
         <div class="flex-row" style="flex-wrap:wrap;gap:8px">
           <button class="btn btn-secondary btn-sm" id="ldEdit">Edit</button>
           ${!['Lost','Confirmed'].includes(lead.status) ? `<button class="btn btn-outline btn-sm" id="ldChangeStatus">Change Status</button>`:''}
@@ -641,12 +651,26 @@ function applyLeadStatusChange(lead, newStatus){
   }
   openStatusChangeModal({
     refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
-    fromStatus: lead.status, toStatus: newStatus,
-    onConfirm: ({ remark, lostReason })=>{
+    fromStatus: lead.status, toStatus: newStatus, currentFollowup: lead.nextFollowup,
+    onConfirm: ({ remark, lostReason, nextFollowup })=>{
       const prevStatus = lead.status;
       lead.status = newStatus;
       lead.updatedAt = new Date().toISOString();
       if(newStatus==='Lost') lead.lostReason = lostReason;
+      // On Hold / Future Follow-up (CRM feature): the modal already required
+      // a Next Follow-up Date before letting this callback fire, so
+      // nextFollowup is always set here — write it to the SAME field
+      // Pipeline/Follow-up Due/Set Follow-up all read (spec §3/§4), and
+      // store the note as a dedicated hold reason (mirrors lostReason) so
+      // the Pipeline card and Lead Detail can show it without hunting
+      // through the Activity Log. A lead leaving this stage keeps its old
+      // holdReason as history — it's simply not shown once status changes.
+      if(newStatus===ON_HOLD_STATUS){
+        lead.nextFollowup = nextFollowup;
+        lead.holdReason = remark || null;
+        lead.followUpCreatedBy = lead.followUpCreatedBy || CURRENT_USER.name;
+        lead.followUpUpdatedAt = lead.updatedAt;
+      }
       if(newStatus==='Quotation Sent' && lead.quotationStatus==='Not Sent'){ lead.quotationStatus='Sent'; lead.quotationAmount = lead.estimatedValue; lead.quotationRef = `Q-${lead.id}.pdf`; }
       if(newStatus==='Demo Sent' && !lead.demoLink){ lead.demoLink = `https://demo.bizwebkh.com/${slug(lead.businessName)}`; }
       DB.upsert('leads', lead);
