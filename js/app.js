@@ -494,7 +494,7 @@ function settingsGeneralTab(){
             <strong style="font-size:13.5px">Sales Discount Authority</strong>
             <div class="text-muted" style="font-size:12px">Max discount % Sales can apply before Founder review is required.</div>
           </div>
-          ${isFounder() ? `<input type="number" id="discountLimitInput" value="${limit}" style="width:70px;text-align:right" min="0" max="100">` : `<span class="cell-strong">${limit}%</span>`}
+          ${isFounder() ? `<input type="number" id="discountLimitInput" class="sel" style="width:70px;text-align:right" min="0" max="100" value="${limit}">` : `<span class="cell-strong">${limit}%</span>`}
         </div>
         <div class="divider"></div>
         <div class="flex-row" style="justify-content:space-between;margin-bottom:10px">

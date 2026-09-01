@@ -255,7 +255,7 @@ table.data-table th{
   text-align:left;padding:11px 14px;background:var(--surface-2);color:var(--muted);font-size:11px;
   text-transform:uppercase;letter-spacing:.4px;font-weight:800;border-bottom:1px solid var(--line);white-space:nowrap;
 }
-table.data-table td{padding:11px 14px;border-bottom:1px solid #eef2f8;vertical-align:middle}
+table.data-table td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:middle}
 table.data-table tbody tr:hover{background:var(--surface-hover)}
 table.data-table tbody tr:last-child td{border-bottom:0}
 .cell-strong{font-weight:700;color:var(--text)}
@@ -278,7 +278,16 @@ table.data-table tbody tr:last-child td{border-bottom:0}
 
 /* ---------- Filters bar ---------- */
 .filters-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px}
-.filters-bar select, .filters-bar .sel{padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:var(--input-bg);font-size:12.5px;color:var(--text);min-width:120px}
+/* .sel is also used OUTSIDE .filters-bar (Service Price List table inputs,
+   the Project View module function-status dropdown, etc.) — matching it
+   unscoped as well (not just ".filters-bar .sel") means every .sel-tagged
+   field gets the same dark-input styling wherever it's dropped, instead of
+   silently falling back to the browser's default white input/select.
+   min-width:120px stays scoped to .filters-bar's own selects only — the
+   narrower .sel usages elsewhere already set their own explicit width
+   inline and shouldn't be forced wider. */
+.filters-bar select, .filters-bar .sel{min-width:120px}
+.filters-bar select, .filters-bar .sel, .sel{padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:var(--input-bg);font-size:12.5px;color:var(--text)}
 .filters-bar .spacer{flex:1}
 
 /* Global safety net: an <svg> icon dropped anywhere with no more specific
@@ -529,6 +538,16 @@ svg{width:18px;height:18px}
 [data-theme="dark"] .form-field input:focus,
 [data-theme="dark"] .form-field select:focus,
 [data-theme="dark"] .form-field textarea:focus{outline-color:#2a4a75}
+
+/* Quotations "Coming Soon" empty state (spec: Settings/Quotations dark-mode
+   fix). Same light-mode literal values as before (10% blue / 10% amber
+   tints), moved from inline styles to classes so a dark-mode variant with
+   more opaque, higher-contrast tints can be layered on top without
+   touching the light theme. */
+.coming-soon-icon{background:#1d7bff1a;color:#1d7bff}
+.coming-soon-badge{background:#d98a121a;color:#d98a12}
+[data-theme="dark"] .coming-soon-icon{background:#1d7bff33;color:#5fa8ff}
+[data-theme="dark"] .coming-soon-badge{background:#d98a1233;color:#f0a83e}
 
 /* ---------- Quotation document (preview + print/PDF) ---------- */
 /* Deliberately NOT themed — this is a client-facing document meant to be

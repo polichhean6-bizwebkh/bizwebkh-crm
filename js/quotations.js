@@ -41,9 +41,9 @@ function renderQuotationsComingSoon(){
   el.innerHTML = `
     <div class="panel" style="min-height:60vh;display:flex;align-items:center;justify-content:center">
       <div style="text-align:center;max-width:440px;padding:40px 20px">
-        <div style="width:56px;height:56px;border-radius:16px;background:#1d7bff1a;color:#1d7bff;display:flex;align-items:center;justify-content:center;margin:0 auto 18px">${icon('list')}</div>
-        <h2 style="margin:0 0 8px;font-size:20px;color:var(--navy)">Quotation Management</h2>
-        <div style="display:inline-block;margin-bottom:14px;padding:3px 10px;border-radius:999px;background:#d98a121a;color:#d98a12;font-size:11.5px;font-weight:700;letter-spacing:.3px;text-transform:uppercase">Coming Soon</div>
+        <div class="coming-soon-icon" style="width:56px;height:56px;border-radius:16px;display:flex;align-items:center;justify-content:center;margin:0 auto 18px">${icon('list')}</div>
+        <h2 style="margin:0 0 8px;font-size:20px;color:var(--text)">Quotation Management</h2>
+        <div class="coming-soon-badge" style="display:inline-block;margin-bottom:14px;padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:700;letter-spacing:.3px;text-transform:uppercase">Coming Soon</div>
         <p style="color:var(--muted);font-size:13.5px;line-height:1.6;margin:0">
           The quotation module is currently being prepared. For now, quotations continue to be created using the existing BizWeb KH quotation process.
         </p>
