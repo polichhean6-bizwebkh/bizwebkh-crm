@@ -100,6 +100,20 @@ function leadMatchesFollowupFilter(lead, filter){
 function renderPipelinePage(){
   const el = document.getElementById('pageContent');
 
+  // Preserve the user's current Pipeline viewport across this re-render —
+  // most importantly after a drag-and-drop status change, which used to
+  // rebuild the whole board and snap back to scrollLeft/scrollTop 0. This
+  // is captured from whatever is on screen RIGHT NOW (not some earlier
+  // "before the drag started" snapshot), so it naturally preserves
+  // wherever the drag auto-scroll left the viewport, and applies equally
+  // to a filter/counter-chip re-render (no reason those should jump the
+  // view back to the start either). Only fires when the Pipeline board is
+  // already on screen — a fresh navigation into Pipeline has nothing to
+  // preserve and just renders normally.
+  const prevBoard = document.getElementById('pipelineBoard');
+  const prevScrollLeft = prevBoard ? prevBoard.scrollLeft : 0;
+  const prevScrollTop = prevBoard ? window.scrollY : 0;
+
   // Board columns respect Sales / Industry / Follow-up filters together —
   // Confirmed leads normally have no outstanding follow-up (spec §12), so a
   // Follow-up filter naturally shows few/no Confirmed cards, which is
@@ -238,6 +252,23 @@ function renderPipelinePage(){
       applyLeadStatusChange(lead, targetStatus);
     });
   });
+
+  // Restore the viewport captured above. Setting it right away covers the
+  // normal case (layout from the innerHTML assignment above is already
+  // committed by the time synchronous script resumes); the rAF pass is a
+  // second application as a safeguard against any layout that only
+  // settles on the next frame, so the restore always sticks rather than
+  // being silently overridden by the browser's own scroll handling.
+  if(prevBoard){
+    const newBoard = document.getElementById('pipelineBoard');
+    if(newBoard) newBoard.scrollLeft = prevScrollLeft;
+    window.scrollTo(0, prevScrollTop);
+    requestAnimationFrame(()=>{
+      const boardAgain = document.getElementById('pipelineBoard');
+      if(boardAgain) boardAgain.scrollLeft = prevScrollLeft;
+      window.scrollTo(0, prevScrollTop);
+    });
+  }
 }
 
 function pipelineCardHtml(l){
