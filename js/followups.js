@@ -28,7 +28,7 @@ function followupPresetChipsHtml(idPrefix, currentValue){
       <button type="button" class="btn btn-outline btn-sm" data-fu-preset="${idPrefix}:3days">In 3 Days</button>
       <button type="button" class="btn btn-outline btn-sm" data-fu-preset="${idPrefix}:nextweek">Next Week</button>
     </div>
-    <div class="form-field"><label>Custom Date</label><input type="date" id="${idPrefix}_date" value="${currentValue||''}"></div>
+    <div class="form-field"><label>Custom Date</label><input type="date" id="${idPrefix}_date" min="${todayLocalISO()}" value="${currentValue||''}"></div>
   `;
 }
 
@@ -119,8 +119,10 @@ function openSetFollowupModal(leadId, onDone){
     }
 
     overlay.querySelector('#sfSave').onclick = ()=>{
-      const newDate = overlay.querySelector('#sf_date').value;
+      const dateInput = overlay.querySelector('#sf_date');
+      const newDate = dateInput.value;
       if(!newDate){ toast('Please choose a date, or use "No Follow-up".', 'error'); return; }
+      if(isPastLocalDate(newDate)){ dateInput.style.borderColor='var(--red)'; toast('Follow-up date cannot be in the past.', 'error'); return; }
       commit(newDate);
     };
     overlay.querySelector('#sfNoFollowup').onclick = ()=> commit(null);
@@ -222,8 +224,10 @@ function openScheduleNextFollowupModal(leadId, onDone){
     }
 
     overlay.querySelector('#snSave').onclick = ()=>{
-      const newDate = overlay.querySelector('#sn_date').value;
+      const dateInput = overlay.querySelector('#sn_date');
+      const newDate = dateInput.value;
       if(!newDate){ toast('Please choose a date, or use "No Further Follow-up".', 'error'); return; }
+      if(isPastLocalDate(newDate)){ dateInput.style.borderColor='var(--red)'; toast('Follow-up date cannot be in the past.', 'error'); return; }
       commit(newDate);
     };
     overlay.querySelector('#snNone').onclick = ()=> commit(null);

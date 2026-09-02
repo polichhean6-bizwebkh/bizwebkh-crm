@@ -11,6 +11,80 @@
 
 let PIPELINE_FILTER_STATE = { sales:'', industry:'', followup:'' };
 
+/* ---------------------------------------------------------------------- */
+/* Drag auto-scroll — native HTML5 drag-and-drop never auto-scrolls a      */
+/* custom scroll container (or the page) on its own, so a card near the    */
+/* bottom of a tall column, or a target stage several columns away, was    */
+/* unreachable while still holding the drag. This drives scrolling         */
+/* manually off the pointer position reported by 'dragover' events, via a  */
+/* requestAnimationFrame loop that only runs while a pcard drag is in      */
+/* progress. It does NOT touch overflow/CSS, lock scrolling, or change     */
+/* pipeline data — purely a drag-time scroll assist.                       */
+/* ---------------------------------------------------------------------- */
+const PIPELINE_DRAG_SCROLL = { active:false, x:0, y:0, raf:null };
+const DRAG_SCROLL_EDGE = 80;       // px from an edge that starts auto-scroll
+const DRAG_SCROLL_MAX_SPEED = 22;  // px per animation frame, right at the edge
+
+function pipelineDragScrollTick(){
+  if(!PIPELINE_DRAG_SCROLL.active){ PIPELINE_DRAG_SCROLL.raf = null; return; }
+  const board = document.getElementById('pipelineBoard');
+  const { x, y } = PIPELINE_DRAG_SCROLL;
+
+  // Horizontal — scroll the pipeline board itself so distant stages
+  // (far left/right) can be reached without releasing the card.
+  if(board){
+    const rect = board.getBoundingClientRect();
+    if(x < rect.left + DRAG_SCROLL_EDGE){
+      const strength = Math.min(1, (rect.left + DRAG_SCROLL_EDGE - x) / DRAG_SCROLL_EDGE);
+      board.scrollLeft -= DRAG_SCROLL_MAX_SPEED * strength;
+    } else if(x > rect.right - DRAG_SCROLL_EDGE){
+      const strength = Math.min(1, (x - (rect.right - DRAG_SCROLL_EDGE)) / DRAG_SCROLL_EDGE);
+      board.scrollLeft += DRAG_SCROLL_MAX_SPEED * strength;
+    }
+  }
+
+  // Vertical — the page itself scrolls (no dedicated vertical scroll
+  // container wraps the board), so this scrolls the window/viewport.
+  const vh = window.innerHeight;
+  if(y < DRAG_SCROLL_EDGE){
+    const strength = Math.min(1, (DRAG_SCROLL_EDGE - y) / DRAG_SCROLL_EDGE);
+    window.scrollBy(0, -DRAG_SCROLL_MAX_SPEED * strength);
+  } else if(y > vh - DRAG_SCROLL_EDGE){
+    const strength = Math.min(1, (y - (vh - DRAG_SCROLL_EDGE)) / DRAG_SCROLL_EDGE);
+    window.scrollBy(0, DRAG_SCROLL_MAX_SPEED * strength);
+  }
+
+  PIPELINE_DRAG_SCROLL.raf = requestAnimationFrame(pipelineDragScrollTick);
+}
+
+function startPipelineDragScroll(clientX, clientY){
+  PIPELINE_DRAG_SCROLL.x = clientX;
+  PIPELINE_DRAG_SCROLL.y = clientY;
+  if(PIPELINE_DRAG_SCROLL.active) return;
+  PIPELINE_DRAG_SCROLL.active = true;
+  if(!PIPELINE_DRAG_SCROLL.raf) PIPELINE_DRAG_SCROLL.raf = requestAnimationFrame(pipelineDragScrollTick);
+}
+
+function stopPipelineDragScroll(){
+  PIPELINE_DRAG_SCROLL.active = false;
+  if(PIPELINE_DRAG_SCROLL.raf){ cancelAnimationFrame(PIPELINE_DRAG_SCROLL.raf); PIPELINE_DRAG_SCROLL.raf = null; }
+}
+
+// One document-level 'dragover' listener tracks the live pointer position
+// while ANY pipeline card drag is in progress. Wired once (guarded by the
+// flag below) rather than inside renderPipelinePage(), so repeated
+// re-renders of the Pipeline page never stack up duplicate listeners. It
+// only records position — it never calls preventDefault(), so it can't
+// interfere with the existing per-column dragover/drop handling below.
+if(!window.__pipelineDragScrollWired){
+  window.__pipelineDragScrollWired = true;
+  document.addEventListener('dragover', (e)=>{
+    if(!PIPELINE_DRAG_SCROLL.active) return;
+    PIPELINE_DRAG_SCROLL.x = e.clientX;
+    PIPELINE_DRAG_SCROLL.y = e.clientY;
+  });
+}
+
 // Follow-up filter predicate. 'due' mirrors the Dashboard's "Follow-ups
 // Due" KPI exactly (overdue-or-today) — it exists as its own option so
 // clicking that KPI card opens Pipeline pre-filtered to precisely what it
@@ -138,8 +212,16 @@ function renderPipelinePage(){
     card.addEventListener('dragstart', (e)=>{
       card.classList.add('dragging');
       e.dataTransfer.setData('text/plain', card.dataset.leadId);
+      startPipelineDragScroll(e.clientX, e.clientY);
     });
-    card.addEventListener('dragend', ()=> card.classList.remove('dragging'));
+    // dragend always fires after a drop (successful or not) and after a
+    // cancelled drag (Escape, dropped outside a valid target) alike, so
+    // this is the single place that reliably stops auto-scroll — no
+    // stuck/frozen scroll state is left behind either way (spec §7 TEST E).
+    card.addEventListener('dragend', ()=>{
+      card.classList.remove('dragging');
+      stopPipelineDragScroll();
+    });
     card.addEventListener('click', ()=> openLeadDetailModal(card.dataset.leadId));
   });
 

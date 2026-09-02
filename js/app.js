@@ -31,6 +31,32 @@ function fmtDateTime(d){
   return dt.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }) + ', ' +
          dt.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' });
 }
+// Formats a Date object as a LOCAL calendar date (YYYY-MM-DD) using its own
+// getFullYear/getMonth/getDate — never .toISOString(), which formats in UTC
+// and can silently shift to the previous day during early-morning hours in
+// a timezone ahead of UTC (e.g. Cambodia, ICT = UTC+7: at 02:00 local on
+// 2 Sep it's still 19:00 UTC on 1 Sep, so .toISOString() would report
+// "yesterday"). Every "what is today's date" computation below goes through
+// this, per spec: use the CRM user's own local date, not UTC.
+function localDateToISO(d){
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+// Today, as a local YYYY-MM-DD string — used as the `min` on every "pick a
+// future/today Next Follow-up Date" input, and as the comparison baseline
+// for isPastLocalDate() below.
+function todayLocalISO(){ return localDateToISO(new Date()); }
+// A plain string comparison ("2026-09-01" < "2026-09-02") is enough here —
+// both sides are already zero-padded YYYY-MM-DD, so this deliberately never
+// constructs `new Date(dateStr)` for the comparison (a date-only ISO string
+// parses as UTC midnight in JS, which reintroduces exactly the timezone bug
+// this whole helper exists to avoid). Empty/falsy input is never "past".
+function isPastLocalDate(dateStr){
+  if(!dateStr) return false;
+  return dateStr < todayLocalISO();
+}
 function daysUntil(dateStr){
   if(!dateStr) return null;
   const today = new Date(); today.setHours(0,0,0,0);
@@ -38,17 +64,22 @@ function daysUntil(dateStr){
   return Math.round((d-today)/86400000);
 }
 // Returns an ISO date (YYYY-MM-DD) `days` from today — used to prefill
-// Expected Delivery / quotation Valid Until fields. PRE-EXISTING BUG FIX:
-// this was called from projects.js (Create Direct Project, Confirm Project,
-// createProjectRecord) and quotations.js, but was never defined anywhere in
-// the app — every one of those flows threw a ReferenceError and silently
-// failed for every role, not just Sales. This is almost certainly the root
-// cause behind spec §5's "the existing + Create New Project button
+// Expected Delivery / quotation Valid Until fields, and the Follow-up
+// preset chips (Today / Tomorrow / In 3 Days / Next Week). PRE-EXISTING BUG
+// FIX: this was called from projects.js (Create Direct Project, Confirm
+// Project, createProjectRecord) and quotations.js, but was never defined
+// anywhere in the app — every one of those flows threw a ReferenceError and
+// silently failed for every role, not just Sales. This is almost certainly
+// the root cause behind spec §5's "the existing + Create New Project button
 // currently does not work properly for Sales" — it didn't work for anyone.
+// Uses localDateToISO (not .toISOString()) for the same timezone-safety
+// reason as todayLocalISO() above — the old .toISOString() version could
+// have handed the Follow-up preset chips a UTC date one day off from the
+// user's actual local "today"/"tomorrow"/etc.
 function daysFromNow(days){
   const d = new Date();
   d.setDate(d.getDate() + (Number(days) || 0));
-  return d.toISOString().slice(0,10);
+  return localDateToISO(d);
 }
 function initialsOf(name){
   return String(name||'?').split(' ').filter(Boolean).slice(0,2).map(s=>s[0]).join('').toUpperCase();
@@ -149,12 +180,13 @@ document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeModal(); }
 function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus, currentFollowup, onConfirm }){
   const needsLostReason = toStatus === 'Lost';
   // On Hold / Future Follow-up (CRM feature): moving a LEAD into this stage
-  // requires a Next Follow-up Date, same treatment as Lost Reason above —
-  // this is what a lead in this stage actually needs to be useful later
-  // (Pipeline sorts this column by it, and it's what makes the lead
-  // reappear in Follow-up Due automatically once it arrives/overdue). Only
-  // applies to leads — projects.js reuses this same modal for its own
-  // stage changes and has no such field.
+  // shows a Next Follow-up Date field, but it is OPTIONAL — a lead can be
+  // put on hold even when the client hasn't committed to a specific date
+  // yet ("continue later, no date confirmed"). When a date IS given it
+  // must be today or later (min attribute below + the JS check in the
+  // Confirm handler, per spec §2/§3) — past dates are rejected outright,
+  // they're never silently accepted. Only applies to leads — projects.js
+  // reuses this same modal for its own stage changes and has no such field.
   const needsHoldFollowup = refType==='lead' && toStatus === ON_HOLD_STATUS;
   const html = `
     <div class="modal-head">
@@ -182,13 +214,13 @@ function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus,
       </div>` : ''}
       ${needsHoldFollowup ? `
       <div class="form-field" style="margin-bottom:12px">
-        <label class="required">Next Follow-up Date</label>
-        <input type="date" id="scmHoldFollowup" value="${currentFollowup||''}">
-        <span class="form-hint">When should Sales come back to this lead? (e.g. "continue in December" → 01 Dec 2026)</span>
+        <label>Next Follow-up Date (optional)</label>
+        <input type="date" id="scmHoldFollowup" min="${todayLocalISO()}" value="${currentFollowup||''}">
+        <span class="form-hint">When should Sales come back to this lead? (e.g. "continue in December" → 01 Dec 2026). Leave blank if no date has been confirmed yet — today or later only.</span>
       </div>` : ''}
       <div class="form-field">
-        <label>${needsHoldFollowup ? 'Reason / Note' : 'Remark'} ${needsLostReason?'':(needsHoldFollowup?'(recommended)':'(optional)')}</label>
-        <textarea id="scmRemark" placeholder="${needsHoldFollowup ? 'e.g. Client requested to continue project in December.' : 'Add a short note about this change…'}"></textarea>
+        <label>${needsHoldFollowup ? 'Reason / Note' : 'Remark'} ${needsLostReason?'':'(optional)'}</label>
+        <textarea id="scmRemark" placeholder="${needsHoldFollowup ? 'e.g. Client wants to continue later but has not confirmed a specific date.' : 'Add a short note about this change…'}"></textarea>
       </div>
     </div>
     <div class="modal-foot">
@@ -210,8 +242,18 @@ function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus,
       let nextFollowup = null;
       if(needsHoldFollowup){
         const dateInput = overlay.querySelector('#scmHoldFollowup');
-        nextFollowup = dateInput.value || '';
-        if(!nextFollowup){ dateInput.style.borderColor='var(--red)'; toast('Please set a Next Follow-up Date.', 'error'); return; }
+        nextFollowup = dateInput.value || null;
+        // Optional (spec §1) — a blank date is fine and simply means "no
+        // date confirmed yet". When a date IS entered it must be today or
+        // later (spec §2/§3); the `min` attribute on the input already
+        // stops a normal date-picker click from reaching a past date, but
+        // this is the second safeguard for a typed/pasted/autofilled value.
+        if(nextFollowup && isPastLocalDate(nextFollowup)){
+          dateInput.style.borderColor='var(--red)';
+          toast('Follow-up date cannot be in the past.', 'error');
+          return;
+        }
+        dateInput.style.borderColor='';
       }
       closeModal();
       onConfirm({

@@ -341,7 +341,7 @@ function openLeadFormModal(leadId){
           <select id="lf_status" ${editing?'disabled':''}>${LEAD_STATUSES.map(s=>`<option ${(lead?.status||'New Lead')===s?'selected':''}>${s}</option>`).join('')}</select>
           ${editing?'<span class="form-hint">Use the status button on the lead detail page to change status (it will be logged).</span>':''}
         </div>
-        <div class="form-field"><label>Next Follow-up Date</label><input type="date" id="lf_followup" value="${lead?.nextFollowup||''}"></div>
+        <div class="form-field"><label>Next Follow-up Date</label><input type="date" id="lf_followup" min="${todayLocalISO()}" value="${lead?.nextFollowup||''}"></div>
         <div class="form-field full"><label>Notes</label><textarea id="lf_notes">${escapeHtml(lead?.notes||'')}</textarea></div>
       </div>
     </div>
@@ -357,16 +357,21 @@ function openLeadFormModal(leadId){
       const val = id => overlay.querySelector(id).value.trim();
       const clientName = val('#lf_clientName'), businessName = val('#lf_businessName'), phone = val('#lf_phone');
       if(!clientName || !businessName || !phone){ toast('Please fill in Client Name, Business Name and Phone.', 'error'); return; }
-      // On Hold / Future Follow-up (CRM feature, spec §3): the status
-      // dropdown here is only ever editable while CREATING a brand-new lead
-      // (it's disabled once editing — see the field above) — but a new lead
-      // could still be created directly with this status, bypassing the
-      // status-change modal's own Next Follow-up Date requirement. Close
-      // that gap here too, so the requirement is never skippable.
-      if(!editing && val('#lf_status')===ON_HOLD_STATUS && !val('#lf_followup')){
-        toast('Please set a Next Follow-up Date for an On Hold / Future Follow-up lead.', 'error');
+      // Next Follow-up Date is optional everywhere (spec §1) — a lead (On
+      // Hold or otherwise) can be saved with no follow-up date at all. When
+      // a date IS entered it must be today or later (spec §2/§3). Only
+      // validated when it's actually a NEW value being entered here: when
+      // editing, an already-stored historical/past date that the user
+      // hasn't touched is left alone (spec §7) rather than being force-
+      // invalidated just because the page happened to re-render.
+      const followupVal = val('#lf_followup') || null;
+      const followupIsNew = !editing || followupVal !== (lead?.nextFollowup || null);
+      if(followupIsNew && isPastLocalDate(followupVal)){
+        overlay.querySelector('#lf_followup').style.borderColor = 'var(--red)';
+        toast('Follow-up date cannot be in the past.', 'error');
         return;
       }
+      overlay.querySelector('#lf_followup').style.borderColor = '';
       const now = new Date().toISOString();
 
       if(editing){
@@ -657,18 +662,24 @@ function applyLeadStatusChange(lead, newStatus){
       lead.status = newStatus;
       lead.updatedAt = new Date().toISOString();
       if(newStatus==='Lost') lead.lostReason = lostReason;
-      // On Hold / Future Follow-up (CRM feature): the modal already required
-      // a Next Follow-up Date before letting this callback fire, so
-      // nextFollowup is always set here — write it to the SAME field
-      // Pipeline/Follow-up Due/Set Follow-up all read (spec §3/§4), and
-      // store the note as a dedicated hold reason (mirrors lostReason) so
-      // the Pipeline card and Lead Detail can show it without hunting
-      // through the Activity Log. A lead leaving this stage keeps its old
-      // holdReason as history — it's simply not shown once status changes.
+      // On Hold / Future Follow-up (CRM feature): Next Follow-up Date is
+      // OPTIONAL here (spec §1) — the modal already validated it's today-
+      // or-later when one WAS entered (spec §2/§3), but nextFollowup can
+      // legitimately be null ("client hasn't confirmed a date yet"). Write
+      // it to the SAME field Pipeline/Follow-up Due/Set Follow-up all read
+      // (no new field, no duplicate follow-up record), and store the note
+      // as a dedicated hold reason (mirrors lostReason) so the Pipeline
+      // card and Lead Detail can show it without hunting through the
+      // Activity Log. followUpCreatedBy is only stamped when a date was
+      // actually given — same convention openSetFollowupModal's commit()
+      // uses — so a note-only, no-date hold never gets a ghost "created
+      // by" on a follow-up that doesn't exist. A lead leaving this stage
+      // keeps its old holdReason as history — it's simply not shown once
+      // status changes.
       if(newStatus===ON_HOLD_STATUS){
-        lead.nextFollowup = nextFollowup;
+        lead.nextFollowup = nextFollowup || null;
         lead.holdReason = remark || null;
-        lead.followUpCreatedBy = lead.followUpCreatedBy || CURRENT_USER.name;
+        lead.followUpCreatedBy = lead.followUpCreatedBy || (nextFollowup ? CURRENT_USER.name : lead.followUpCreatedBy);
         lead.followUpUpdatedAt = lead.updatedAt;
       }
       if(newStatus==='Quotation Sent' && lead.quotationStatus==='Not Sent'){ lead.quotationStatus='Sent'; lead.quotationAmount = lead.estimatedValue; lead.quotationRef = `Q-${lead.id}.pdf`; }
