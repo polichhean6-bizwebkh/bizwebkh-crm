@@ -77,9 +77,10 @@ function renderActivityTable(){
 
 const ACTIVITY_TYPE_COLORS = {
   'Lead Created':'#1d7bff','Status Changed':'#7c5cff','Follow-up Added':'#18c8ff',
-  'Follow-up Rescheduled':'#d98a12','Quotation Sent':'#c9760a','Demo Sent':'#7c5cff',
+  'Follow-up Rescheduled':'#d98a12','Quotation Sent':'#c9760a',
   'Assigned Sales Changed':'#526584','Deposit Recorded':'#12a775','Payment Recorded':'#12a775',
-  'Project Stage Changed':'#155fcc','Project Created':'#1d7bff','Note Added':'#526584','Lead Lost':'#e0473c'
+  'Project Stage Changed':'#155fcc','Project Created':'#1d7bff','Note Added':'#526584','Lead Lost':'#e0473c',
+  'Project Code Assigned':'#12a775','Project Code Changed':'#d98a12'
 };
 function activityTypeBadge(type){
   const c = ACTIVITY_TYPE_COLORS[type] || '#526584';

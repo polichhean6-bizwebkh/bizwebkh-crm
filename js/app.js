@@ -177,8 +177,18 @@ document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeModal(); }
 /* Status-change confirmation modal (leads + projects share this)         */
 /* ---------------------------------------------------------------------- */
 
-function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus, currentFollowup, onConfirm }){
+function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus, currentFollowup, currentProjectCode, onConfirm }){
   const needsLostReason = toStatus === 'Lost';
+  // Project Code becomes REQUIRED the first time a lead reaches Quote and
+  // Demo Sent or any stage after it (spec §5) — but only when it doesn't
+  // already have one. A lead that already carries a code (assigned
+  // earlier, or moving backward then forward again) never gets asked
+  // again (spec §8/§11): the field simply doesn't render, and the
+  // existing code travels with the lead untouched. Confirmed never
+  // reaches this modal at all — applyLeadStatusChange (leads.js)
+  // redirects it to the dedicated openConfirmProjectModal flow instead,
+  // which is where an already-assigned code gets reused (spec §9).
+  const needsProjectCode = refType==='lead' && !currentProjectCode && leadStatusRequiresProjectCode(toStatus);
   // On Hold / Future Follow-up (CRM feature): moving a LEAD into this stage
   // shows a Next Follow-up Date field, but it is OPTIONAL — a lead can be
   // put on hold even when the client hasn't committed to a specific date
@@ -212,6 +222,12 @@ function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus,
           ${LOST_REASONS.map(r=>`<option value="${r}">${r}</option>`).join('')}
         </select>
       </div>` : ''}
+      ${needsProjectCode ? `
+      <div class="form-field" style="margin-bottom:12px">
+        <label class="required">Project Code</label>
+        <input type="text" id="scmProjectCode" placeholder="e.g. C046" value="${escapeHtml(suggestNextProjectCode())}" style="text-transform:uppercase">
+        <span class="form-hint">Required from "${escapeHtml(toStatus)}" onward — must be unique (not case-sensitive).</span>
+      </div>` : ''}
       ${needsHoldFollowup ? `
       <div class="form-field" style="margin-bottom:12px">
         <label>Next Follow-up Date (optional)</label>
@@ -239,6 +255,28 @@ function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus,
         if(!reason){ reasonSel.style.borderColor='var(--red)'; toast('Please select a lost reason.', 'error'); return; }
         remark = `Lost reason: ${reason}` + (remark ? ` — ${remark}` : '');
       }
+      let projectCode;
+      if(needsProjectCode){
+        const codeInput = overlay.querySelector('#scmProjectCode');
+        const normalized = normalizeProjectCode(codeInput.value);
+        // A. cannot be empty
+        if(!normalized){
+          codeInput.style.borderColor='var(--red)';
+          toast(`Project Code is required to move to "${toStatus}".`, 'error');
+          return;
+        }
+        // B. cannot duplicate an existing code (case-insensitive, checked
+        // against both other leads' reserved codes AND every project id).
+        if(isProjectCodeTaken(normalized, { excludeLeadId: refId })){
+          codeInput.style.borderColor='var(--red)';
+          toast(`Project Code ${normalized} already exists. Please use a unique Project Code.`, 'error');
+          return;
+        }
+        codeInput.style.borderColor='';
+        // C/D. trim + normalize capitalization — already done by
+        // normalizeProjectCode() above.
+        projectCode = normalized;
+      }
       let nextFollowup = null;
       if(needsHoldFollowup){
         const dateInput = overlay.querySelector('#scmHoldFollowup');
@@ -260,6 +298,7 @@ function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus,
         remark,
         lostReason: needsLostReason ? overlay.querySelector('#scmLostReason').value : null,
         nextFollowup: needsHoldFollowup ? nextFollowup : undefined,
+        projectCode: needsProjectCode ? projectCode : undefined,
       });
     };
   }});

@@ -657,11 +657,25 @@ function applyLeadStatusChange(lead, newStatus){
   openStatusChangeModal({
     refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
     fromStatus: lead.status, toStatus: newStatus, currentFollowup: lead.nextFollowup,
-    onConfirm: ({ remark, lostReason, nextFollowup })=>{
+    currentProjectCode: lead.projectCode,
+    onConfirm: ({ remark, lostReason, nextFollowup, projectCode })=>{
       const prevStatus = lead.status;
       lead.status = newStatus;
       lead.updatedAt = new Date().toISOString();
       if(newStatus==='Lost') lead.lostReason = lostReason;
+      // Project Code (spec §5/§6): the modal already validated it's
+      // non-empty and unique (case-insensitively, across both leads and
+      // projects) when one was actually required and collected here. A
+      // lead that already had a code never has `projectCode` passed in at
+      // all (needsProjectCode was false in the modal) — its existing code
+      // is left completely untouched (spec §8: moving backward then
+      // forward reuses it, never asks again). Logged as its own distinct
+      // activity, separate from the "Status Changed" entry below, since
+      // it's a genuinely separate fact worth its own audit trail line
+      // (spec §14) — never logged when no new code was actually assigned.
+      if(projectCode){
+        lead.projectCode = projectCode;
+      }
       // On Hold / Future Follow-up (CRM feature): Next Follow-up Date is
       // OPTIONAL here (spec §1) — the modal already validated it's today-
       // or-later when one WAS entered (spec §2/§3), but nextFollowup can
@@ -682,9 +696,21 @@ function applyLeadStatusChange(lead, newStatus){
         lead.followUpCreatedBy = lead.followUpCreatedBy || (nextFollowup ? CURRENT_USER.name : lead.followUpCreatedBy);
         lead.followUpUpdatedAt = lead.updatedAt;
       }
-      if(newStatus==='Quotation Sent' && lead.quotationStatus==='Not Sent'){ lead.quotationStatus='Sent'; lead.quotationAmount = lead.estimatedValue; lead.quotationRef = `Q-${lead.id}.pdf`; }
-      if(newStatus==='Demo Sent' && !lead.demoLink){ lead.demoLink = `https://demo.bizwebkh.com/${slug(lead.businessName)}`; }
+      // Demo Sent + Quotation Sent are now ONE merged stage — both of the
+      // old stage-entry side effects fire together on entering it, exactly
+      // as each used to fire on entering its own old separate stage.
+      if(newStatus===QUOTE_AND_DEMO_SENT_STATUS){
+        if(lead.quotationStatus==='Not Sent'){ lead.quotationStatus='Sent'; lead.quotationAmount = lead.estimatedValue; lead.quotationRef = `Q-${lead.id}.pdf`; }
+        if(!lead.demoLink){ lead.demoLink = `https://demo.bizwebkh.com/${slug(lead.businessName)}`; }
+      }
       DB.upsert('leads', lead);
+      if(projectCode){
+        logActivity({
+          userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
+          type:'Project Code Assigned', description:`${CURRENT_USER.name} assigned Project Code: ${projectCode}`,
+          toValue: projectCode
+        });
+      }
       logActivity({
         userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
         type: newStatus==='Lost' ? 'Lead Lost' : 'Status Changed',

@@ -755,8 +755,13 @@ function applyQuotationOntoProject(q, proj){
 }
 
 function createProjectFromQuotation(q){
-  const code = DB.nextId('C', 'projects');
   const lead = q.leadId ? DB.find('leads', q.leadId) : null;
+  // Reuse the lead's already-reserved Project Code (spec §9: one Project
+  // Code per project, never a newly-generated one when a code already
+  // exists) — this path used to always mint a fresh code via
+  // DB.nextId('C','projects'), which would have silently orphaned a code
+  // already assigned back at Qualified -> Quote and Demo Sent.
+  const code = (lead && lead.projectCode) ? lead.projectCode : suggestNextProjectCode();
 
   const proj = createProjectRecord({
     code, lead, confirmedValue: q.finalPrice || q.basePrice || 0, depositPct:50,

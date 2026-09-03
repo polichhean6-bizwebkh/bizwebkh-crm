@@ -303,16 +303,20 @@ svg{width:18px;height:18px}
 .st-new-lead{background:#eef2f7;color:#4a5b78}
 .st-contacted{background:#e6f2ff;color:#1d6fe0}
 .st-qualified{background:#e3f7ff;color:#0aa1c9}
-.st-demo-sent{background:var(--purple-soft);color:var(--purple)}
-.st-quotation-sent{background:var(--surface)2e0;color:#c9760a}
+/* Demo Sent + Quotation Sent were merged into one stage, "Quote and Demo
+   Sent" — this replaces both old .st-demo-sent / .st-quotation-sent rules
+   (the latter had a stray invalid background value, fixed as part of this
+   consolidation) with one, reusing the old Demo Sent purple treatment. */
+.st-quote-and-demo-sent{background:var(--purple-soft);color:var(--purple)}
 .st-follow-up{background:var(--amber-soft);color:var(--amber)}
 /* On Hold / Future Follow-up (CRM feature): deliberately NOT red — red stays
    reserved for Lost/rejected/critical. Muted purple, distinct from both the
    amber used a few lines up for Follow-up and the brighter --purple used for
-   Demo Sent below, so three different lead stages never read as "the same
-   color" at a glance. Like every other badge here this is a self-contained
-   opaque bg+text pair, so it stays readable on both the light AND dark page
-   background without any [data-theme="dark"] override needed. */
+   Quote and Demo Sent above, so three different lead stages never read as
+   "the same color" at a glance. Like every other badge here this is a
+   self-contained opaque bg+text pair, so it stays readable on both the
+   light AND dark page background without any [data-theme="dark"] override
+   needed. */
 .st-on-hold-future-follow-up{background:#efe7fb;color:#6d4aae}
 .st-negotiation{background:#ffe9e0;color:#d9540e}
 .st-confirmed{background:var(--green-soft);color:var(--green)}

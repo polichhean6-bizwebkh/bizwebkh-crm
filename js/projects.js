@@ -102,7 +102,7 @@ function createProjectFromLead(leadId, onDone){
     <div class="modal-body">
       <p class="text-muted" style="margin-top:0;font-size:13px">This creates a new Project record linked to lead ${lead.id}. The lead's history stays intact — nothing is overwritten.</p>
       <div class="form-grid">
-        <div class="form-field"><label class="required">Project Code</label><input id="cp_code" value="${DB.nextId('C','projects')}"></div>
+        <div class="form-field"><label class="required">Project Code</label><input id="cp_code" value="${escapeHtml(suggestNextProjectCode())}" style="text-transform:uppercase"></div>
         <div class="form-field"><label class="required">Confirmed Value ($)</label><input type="number" id="cp_value" value="${lead.estimatedValue||0}"></div>
         <div class="form-field"><label class="required">Deposit %</label><input type="number" id="cp_depositPct" value="50"></div>
         <div class="form-field"><label>Start Date</label><input type="date" id="cp_start" value="${new Date().toISOString().slice(0,10)}"></div>
@@ -118,8 +118,15 @@ function createProjectFromLead(leadId, onDone){
     overlay.querySelector('#cpClose').onclick = closeModal;
     overlay.querySelector('#cpCancel').onclick = closeModal;
     overlay.querySelector('#cpSave').onclick = ()=>{
-      const code = overlay.querySelector('#cp_code').value.trim();
-      if(!code || DB.find('projects', code)){ toast('Please provide a unique project code.', 'error'); return; }
+      const codeInput = overlay.querySelector('#cp_code');
+      const code = normalizeProjectCode(codeInput.value);
+      if(!code){ codeInput.style.borderColor='var(--red)'; toast('Project Code is required.', 'error'); return; }
+      if(isProjectCodeTaken(code, { excludeLeadId: lead.id })){
+        codeInput.style.borderColor='var(--red)';
+        toast(`Project Code ${code} already exists. Please use a unique Project Code.`, 'error');
+        return;
+      }
+      codeInput.style.borderColor='';
       const confirmedValue = Number(overlay.querySelector('#cp_value').value)||0;
       const depositPct = Number(overlay.querySelector('#cp_depositPct').value)||0;
       const startDate = overlay.querySelector('#cp_start').value;
@@ -854,10 +861,16 @@ function applyProjectStageChange(proj, newStage){
 
 function openConfirmProjectModal(lead){
   const prevStatus = lead.status;
+  // A lead can carry a Project Code that was reserved earlier (spec §5/§9
+  // — assigned back at Qualified -> Quote and Demo Sent) with NO Project
+  // row yet; that's the normal case now, not a duplicate. Only an actual
+  // matching Project row means "already converted" (the genuine duplicate-
+  // protection case below).
+  const existingProject = lead.projectCode ? DB.find('projects', lead.projectCode) : null;
 
   // ----- duplicate protection: this lead already converted to a project -----
-  if(lead.projectCode){
-    const proj = DB.find('projects', lead.projectCode);
+  if(existingProject){
+    const proj = existingProject;
     const html = `
       <div class="modal-head"><h3>Project Already Created</h3><button class="modal-close" id="dupClose">&times;</button></div>
       <div class="modal-body">
@@ -898,7 +911,15 @@ function openConfirmProjectModal(lead){
   }
 
   // ----- normal path: collect confirmed value + dates, then auto-create -----
-  const suggestedCode = DB.nextId('C','projects');
+  // Under the current flow a lead reaching Confirmed almost always already
+  // has a Project Code (assigned back at Qualified -> Quote and Demo Sent)
+  // — spec §9: use it as-is, never generate a new one. The editable
+  // suggested-code fallback only still applies to a legacy lead that
+  // somehow reached this point without ever getting one (pre-dates this
+  // feature, or jumped straight from an early stage) — the Founder/Admin
+  // enters it here, same as before, never auto-invented silently.
+  const hasExistingCode = !!lead.projectCode;
+  const suggestedCode = hasExistingCode ? lead.projectCode : suggestNextProjectCode();
   const html = `
     <div class="modal-head"><h3>Confirm Project</h3><button class="modal-close" id="cfClose">&times;</button></div>
     <div class="modal-body">
@@ -918,7 +939,7 @@ function openConfirmProjectModal(lead){
       <div class="divider"></div>
       <div class="form-grid">
         <div class="form-field"><label class="required">Confirmed Project Value ($)</label><input type="number" id="cf_value" value="${lead.estimatedValue||0}"></div>
-        <div class="form-field"><label class="required">Project Code</label><input id="cf_code" value="${suggestedCode}"></div>
+        <div class="form-field"><label class="required">Project Code</label><input id="cf_code" value="${escapeHtml(suggestedCode)}" ${hasExistingCode?'disabled':''} style="text-transform:uppercase">${hasExistingCode?`<span class="form-hint">Already assigned to this lead — reused as-is.</span>`:''}</div>
         <div class="form-field"><label>Deposit %</label><input type="number" id="cf_depositPct" value="50"></div>
         <div class="form-field"><label>Start Date</label><input type="date" id="cf_start" value="${new Date().toISOString().slice(0,10)}"></div>
         <div class="form-field full"><label>Expected Delivery</label><input type="date" id="cf_delivery" value="${daysFromNow(21)}"></div>
@@ -934,8 +955,18 @@ function openConfirmProjectModal(lead){
     overlay.querySelector('#cfClose').onclick = closeModal;
     overlay.querySelector('#cfCancel').onclick = closeModal;
     overlay.querySelector('#cfConfirm').onclick = ()=>{
-      const code = overlay.querySelector('#cf_code').value.trim();
-      if(!code || DB.find('projects', code)){ toast('Please provide a unique project code.', 'error'); return; }
+      const codeInput = overlay.querySelector('#cf_code');
+      const code = normalizeProjectCode(codeInput.value);
+      if(!code){ codeInput.style.borderColor='var(--red)'; toast('Project Code is required.', 'error'); return; }
+      // A code this lead already carries is never a "duplicate" of itself
+      // (excludeLeadId) — this only actually blocks a genuinely different
+      // code that collides with some other lead/project.
+      if(isProjectCodeTaken(code, { excludeLeadId: lead.id })){
+        codeInput.style.borderColor='var(--red)';
+        toast(`Project Code ${code} already exists. Please use a unique Project Code.`, 'error');
+        return;
+      }
+      codeInput.style.borderColor='';
       const confirmedValue = Number(overlay.querySelector('#cf_value').value)||0;
       if(confirmedValue<=0){ toast('Please enter a Confirmed Project Value greater than $0.', 'error'); return; }
       const depositPct = Number(overlay.querySelector('#cf_depositPct').value)||0;
@@ -1029,7 +1060,7 @@ function openCreateProjectManualModal(){
       </div>
 
       <div class="form-grid">
-        <div class="form-field"><label class="required">Project Code</label><input id="mp_code" value="${DB.nextId('C','projects')}"></div>
+        <div class="form-field"><label class="required">Project Code</label><input id="mp_code" value="${escapeHtml(suggestNextProjectCode())}" style="text-transform:uppercase"></div>
         <div class="form-field"><label class="required">Client Name</label><input id="mp_clientName"></div>
         <div class="form-field"><label class="required">Business Name</label><input id="mp_businessName"></div>
         <div class="form-field"><label>Phone</label><input id="mp_phone"></div>
@@ -1076,17 +1107,30 @@ function openCreateProjectManualModal(){
       resultsEl.innerHTML = '';
       resultsEl.style.display = 'none';
       overlay.querySelector('#mpLeadSearch').value = '';
-      if(lead.projectCode){
-        const existing = DB.find('projects', lead.projectCode);
-        selectedEl.innerHTML = `<div class="login-error" style="margin:0">This lead already has project <b>${lead.projectCode}</b>${existing?' — '+escapeHtml(existing.businessName):''}. Creating a new project here would duplicate it. <span class="cell-link" id="mpOpenExisting">Open existing project</span> or unlink first.</div>`;
+      // A truthy lead.projectCode alone no longer means "already has a
+      // project" — under the current flow it may just be a code reserved
+      // earlier (Qualified -> Quote and Demo Sent) with NO Project row
+      // yet. Only an actual matching Project row is a genuine duplicate.
+      const existing = lead.projectCode ? DB.find('projects', lead.projectCode) : null;
+      if(existing){
+        selectedEl.innerHTML = `<div class="login-error" style="margin:0">This lead already has project <b>${lead.projectCode}</b> — ${escapeHtml(existing.businessName)}. Creating a new project here would duplicate it. <span class="cell-link" id="mpOpenExisting">Open existing project</span> or unlink first.</div>`;
         overlay.querySelector('#mpOpenExisting').onclick = ()=>{ closeModal(); openProjectDetailModal(lead.projectCode); };
         overlay.querySelector('#mpSave').disabled = true;
       } else {
+        // Reuse the lead's already-reserved code as-is (spec §9) rather
+        // than the generic suggested one, and lock it — the same rule
+        // Confirm Project applies.
+        const codeInput = overlay.querySelector('#mp_code');
+        if(lead.projectCode){ codeInput.value = lead.projectCode; codeInput.disabled = true; }
+        else { codeInput.disabled = false; }
         selectedEl.innerHTML = `<div class="flex-row" style="justify-content:space-between;background:#f7faff;border:1px solid var(--line);border-radius:9px;padding:9px 12px">
           <span class="cell-strong" style="font-size:13px">Linked: ${escapeHtml(lead.id)} — ${escapeHtml(lead.clientName)} (${escapeHtml(lead.businessName)})</span>
           <span class="cell-link" id="mpUnlink" style="font-size:12px">Unlink</span>
         </div>`;
-        overlay.querySelector('#mpUnlink').onclick = ()=>{ linkedLead = null; selectedEl.innerHTML=''; overlay.querySelector('#mpSave').disabled = false; };
+        overlay.querySelector('#mpUnlink').onclick = ()=>{
+          linkedLead = null; selectedEl.innerHTML=''; overlay.querySelector('#mpSave').disabled = false;
+          codeInput.disabled = false;
+        };
         overlay.querySelector('#mpSave').disabled = false;
       }
     }
@@ -1120,12 +1164,27 @@ function openCreateProjectManualModal(){
     });
 
     overlay.querySelector('#mpSave').onclick = ()=>{
-      const code = overlay.querySelector('#mp_code').value.trim();
-      if(!code || DB.find('projects', code)){ toast('Please provide a unique project code.', 'error'); return; }
+      const codeInput = overlay.querySelector('#mp_code');
+      const code = normalizeProjectCode(codeInput.value);
+      if(!code){ codeInput.style.borderColor='var(--red)'; toast('Project Code is required.', 'error'); return; }
+      // A code the linked lead already reserved for itself is never a
+      // "duplicate" of itself (excludeLeadId) — only a genuinely different
+      // collision (another lead/project) is blocked.
+      if(isProjectCodeTaken(code, { excludeLeadId: linkedLead ? linkedLead.id : null })){
+        codeInput.style.borderColor='var(--red)';
+        toast(`Project Code ${code} already exists. Please use a unique Project Code.`, 'error');
+        return;
+      }
+      codeInput.style.borderColor='';
       const clientName = overlay.querySelector('#mp_clientName').value.trim();
       const businessName = overlay.querySelector('#mp_businessName').value.trim();
       if(!clientName || !businessName){ toast('Please fill in Client Name and Business Name.', 'error'); return; }
-      if(linkedLead && linkedLead.projectCode){ toast('This lead already has a project — cannot create a duplicate.', 'error'); return; }
+      // An ACTUAL existing project (not just a reserved code) is still a
+      // hard block — fillFromLead() already disables Save for that case,
+      // this is defense-in-depth against a tampered/disabled-input bypass.
+      if(linkedLead && linkedLead.projectCode && DB.find('projects', linkedLead.projectCode)){
+        toast('This lead already has a project — cannot create a duplicate.', 'error'); return;
+      }
 
       const confirmedValue = Number(overlay.querySelector('#mp_value').value)||0;
       if(confirmedValue<=0){ toast('Please enter a Confirmed Value greater than $0.', 'error'); return; }

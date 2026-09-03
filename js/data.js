@@ -42,14 +42,21 @@ const ON_HOLD_STATUS = 'On Hold / Future Follow-up';
 // (Deposit Paid, In Development, ...) is tracked on the Project record,
 // never by mutating the lead's own status again. See applyProjectStageChange
 // in projects.js, which deliberately does NOT write back to lead.status.
+// "Demo Sent" (its own standalone stage) and "Quotation Sent" have been
+// merged into ONE stage, "Quote and Demo Sent" — every existing lead that
+// was on either of the old stages was migrated to this one in Supabase
+// (see migration migrate_demo_quotation_sent_and_project_code_rules), and
+// neither old wording appears anywhere in the app any more.
+const QUOTE_AND_DEMO_SENT_STATUS = 'Quote and Demo Sent';
+
 const LEAD_STATUSES = [
-  'New Lead', 'Contacted', 'Qualified', 'Demo Sent', 'Quotation Sent',
+  'New Lead', 'Contacted', 'Qualified', QUOTE_AND_DEMO_SENT_STATUS,
   'Follow-up', ON_HOLD_STATUS, 'Negotiation', 'Confirmed', 'Lost'
 ];
 
 // Statuses that still belong on the Kanban pipeline board
 const PIPELINE_STATUSES = [
-  'New Lead', 'Contacted', 'Qualified', 'Demo Sent', 'Quotation Sent',
+  'New Lead', 'Contacted', 'Qualified', QUOTE_AND_DEMO_SENT_STATUS,
   'Follow-up', ON_HOLD_STATUS, 'Negotiation', 'Confirmed'
 ];
 
@@ -62,9 +69,24 @@ const PIPELINE_STATUSES = [
 // must keep counting toward Pipeline Value / Open Leads everywhere that
 // reads this list, exactly like every other open stage.
 const OPEN_PIPELINE_STATUSES = [
-  'New Lead', 'Contacted', 'Qualified', 'Demo Sent', 'Quotation Sent',
+  'New Lead', 'Contacted', 'Qualified', QUOTE_AND_DEMO_SENT_STATUS,
   'Follow-up', ON_HOLD_STATUS, 'Negotiation'
 ];
+
+// Project Code business rule: NOT required for New Lead / Contacted /
+// Qualified, becomes REQUIRED the first time a lead reaches Quote and Demo
+// Sent (or any stage after it) and doesn't already have one. Confirmed is
+// deliberately excluded here — it never reaches the generic status-change
+// modal (see applyLeadStatusChange in leads.js, which redirects Confirmed
+// to the dedicated openConfirmProjectModal flow instead), and Lost is
+// excluded because abandoning a lead should never be blocked on a Project
+// Code it may never have needed.
+function leadStatusRequiresProjectCode(status){
+  if(status==='Lost' || status==='Confirmed') return false;
+  const gateIdx = LEAD_STATUSES.indexOf(QUOTE_AND_DEMO_SENT_STATUS);
+  const idx = LEAD_STATUSES.indexOf(status);
+  return idx>=0 && idx>=gateIdx;
+}
 
 // PROJECT / DELIVERY STATUS ONLY — completely separate axis from lead
 // status. A project always starts at Confirmed and can move forward through
@@ -135,16 +157,28 @@ const FUNCTION_MODULE_TEMPLATES = {
   'Mobile App': ['iOS App', 'Android App', 'Push Notifications'],
 };
 
+// 'Quotation Sent' here describes a DIFFERENT thing from the "Quote and
+// Demo Sent" LEAD STATUS above — it's logged by the Quotations module
+// (quotations.js markAsSent()) when an actual quotation DOCUMENT is
+// marked sent to the client, an event on the Quotation's own quotationStatus
+// axis ('Draft' -> ... -> 'Sent to Client'), independent of the lead's
+// pipeline stage. It is intentionally left as-is: renaming it to "Quote and
+// Demo Sent" would misdescribe every one of these historical (and future)
+// activity records as if a demo had been sent too, which this event never
+// claims. 'Demo Sent' (the old activity type, distinct from the old LEAD
+// STATUS of the same name) is removed below — it was never actually logged
+// anywhere in the app (dead/unused), so nothing is lost.
 const ACTIVITY_TYPES = [
   'Lead Created', 'Lead Edited', 'Status Changed', 'Follow-up Added', 'Follow-up Completed',
-  'Follow-up Rescheduled', 'Quotation Sent', 'Demo Sent', 'Assigned Sales Changed', 'Deposit Recorded',
+  'Follow-up Rescheduled', 'Quotation Sent', 'Assigned Sales Changed', 'Deposit Recorded',
   'Payment Recorded', 'Project Stage Changed', 'Project Created', 'Note Added',
   'Lead Lost', 'Function Added', 'Function Changed', 'Function Removed',
   'Quotation Created', 'Quotation Edited', 'Submitted for Review',
   'Founder Approved', 'Founder Rejected', 'Quotation Accepted', 'Quotation Expired',
   'Data Imported', 'Lead Archived', 'Lead Restored', 'Lead Deleted',
   'Payment Updated', 'Payment Voided', 'Project Value Changed',
-  'Follow-up Scheduled', 'Follow-up Cancelled'
+  'Follow-up Scheduled', 'Follow-up Cancelled',
+  'Project Code Assigned', 'Project Code Changed'
 ];
 
 /* ---------------------------------------------------------------------- */
@@ -654,6 +688,57 @@ const DB = {
     return prefix + String(max+1).padStart(pad,'0');
   }
 };
+
+/* ---------------------------------------------------------------------- */
+/* Project Code — shared uniqueness/normalization rules, used by every    */
+/* place a code can be entered or changed: the Qualified -> Quote and     */
+/* Demo Sent status-change gate (app.js openStatusChangeModal), Create    */
+/* Direct Project and Confirm Project (projects.js). A code lives in ONE  */
+/* shared pool across two places — a lead's own `projectCode` (reserved   */
+/* before any Project row exists) and a Project's own `id` (its primary   */
+/* key, from the moment it's created) — so every check here always looks  */
+/* at leads AND projects together, never just one collection.             */
+/* ---------------------------------------------------------------------- */
+
+// "C046" / "c046" / "  c046  " must all collide as the exact same code
+// (spec: case-insensitive comparison), and the CRM's existing convention
+// (DB.nextId('C','projects'), every historical project id) is uppercase —
+// so entered codes are normalized to trimmed-and-uppercase, consistently,
+// everywhere one is accepted.
+function normalizeProjectCode(raw){
+  return String(raw==null ? '' : raw).trim().toUpperCase();
+}
+
+// True if `code` (case-insensitively) is already in use by a DIFFERENT
+// lead's reserved projectCode or a DIFFERENT project's id. Pass
+// excludeLeadId/excludeProjectId to allow a lead/project to keep its own
+// already-assigned code (editing/re-saving something that already holds
+// this exact code is never a "duplicate" of itself).
+function isProjectCodeTaken(code, { excludeLeadId=null, excludeProjectId=null } = {}){
+  const norm = normalizeProjectCode(code);
+  if(!norm) return false;
+  const inProjects = DB.all('projects').some(p=> p.id && normalizeProjectCode(p.id)===norm && p.id!==excludeProjectId);
+  if(inProjects) return true;
+  const inLeads = DB.all('leads').some(l=> l.projectCode && normalizeProjectCode(l.projectCode)===norm && l.id!==excludeLeadId);
+  return inLeads;
+}
+
+// A convenience PREFILL only (never auto-assigned without the user seeing
+// and being able to change it) — reuses the CRM's existing "C" + zero-
+// padded number convention (the same one DB.nextId('C','projects') already
+// applies), scanning BOTH leads' reserved codes and projects' ids so the
+// suggestion can never collide with a code that's only reserved on a lead
+// and has no Project row yet.
+function suggestNextProjectCode(){
+  let max = 0;
+  const scan = codes => codes.forEach(code=>{
+    const m = normalizeProjectCode(code).match(/^C(\d+)$/);
+    if(m) max = Math.max(max, parseInt(m[1],10));
+  });
+  scan(DB.all('projects').map(p=>p.id));
+  scan(DB.all('leads').map(l=>l.projectCode));
+  return 'C' + String(max+1).padStart(3,'0');
+}
 
 /* ---------------------------------------------------------------------- */
 /* Activity logging — the single source of truth for "who changed what"   */
