@@ -524,6 +524,8 @@ function renderLeadDetail(leadId){
       if(setFuBtn) setFuBtn.onclick = ()=> openSetFollowupModal(lead.id, ()=> renderLeadDetail(lead.id));
       const completeFuBtn = overlay.querySelector('#ldCompleteFollowup');
       if(completeFuBtn) completeFuBtn.onclick = ()=> openCompleteFollowupModal(lead.id, ()=> renderLeadDetail(lead.id));
+      const editCodeBtn = overlay.querySelector('#ldEditCode');
+      if(editCodeBtn) editCodeBtn.onclick = ()=> openEditProjectCodeModal(lead, ()=> renderLeadDetail(lead.id));
     }
   }});
 }
@@ -548,6 +550,14 @@ function leadOverviewTab(lead){
         ${infoRow('Assigned Sales', lead.assignedSales)}
         ${infoRow('Expected Close Date', fmtDate(lead.expectedCloseDate))}
         ${infoRow('Current Status', lead.status)}
+        ${(leadStatusRequiresProjectCode(lead.status) || lead.projectCode) ? `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;font-size:13px;border-bottom:1px solid #f2f5fa">
+          <span class="text-muted">Project Code</span>
+          <span class="flex-row" style="gap:6px;justify-content:flex-end">
+            <span class="cell-strong ${lead.projectCode?'':'text-muted'}">${lead.projectCode ? escapeHtml(lead.projectCode) : 'Not Set'}</span>
+            ${isFounder() ? `<button type="button" class="icon-btn-sm" id="ldEditCode" title="Edit Project Code" style="border:none;background:none;cursor:pointer;color:var(--muted);padding:2px;display:inline-flex">${icon('edit','width="14" height="14"')}</button>` : ''}
+          </span>
+        </div>` : ''}
       </div>
     </div>
     <div class="divider"></div>
@@ -725,6 +735,78 @@ function applyLeadStatusChange(lead, newStatus){
       // if a lead-detail modal happens to still be relevant elsewhere, caller re-renders it
     }
   });
+}
+
+/* ---------------------------------------------------------------------- */
+/* Edit Project Code — Founder/Admin only. Reached from the Pipeline card's */
+/* edit icon and from the Lead Detail Overview tab (spec: "Project Code is */
+/* visible on the card, editing happens through the existing lead          */
+/* detail/edit modal"). Reuses the exact same normalizeProjectCode /       */
+/* isProjectCodeTaken helpers as every other Project Code entry point      */
+/* (status-change modal, Create Direct Project, Confirm Project), so       */
+/* validation and duplicate-blocking always match exactly.                 */
+/* ---------------------------------------------------------------------- */
+function openEditProjectCodeModal(lead, onDone){
+  if(!isFounder()){ toast('Only Founder/Admin can edit Project Code.', 'error'); return; }
+  const required = leadStatusRequiresProjectCode(lead.status);
+  const html = `
+    <div class="modal-head"><h3>Edit Project Code</h3><button class="modal-close" id="epcClose">&times;</button></div>
+    <div class="modal-body">
+      <p class="text-muted" style="margin-top:0;font-size:13px">${escapeHtml(lead.clientName)} — ${escapeHtml(lead.businessName)}</p>
+      <div class="form-field">
+        <label ${required ? 'class="required"' : ''}>Project Code</label>
+        <input id="epcCode" value="${escapeHtml(lead.projectCode||'')}" placeholder="e.g. C046" style="text-transform:uppercase">
+        <span class="form-hint">Must be unique across all leads and projects (not case-sensitive).${required ? ' Required at this stage.' : ''}</span>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-secondary" id="epcCancel">Cancel</button>
+      <button class="btn btn-primary" id="epcSave">Save</button>
+    </div>
+  `;
+  openModal(html, { onMount:(overlay)=>{
+    overlay.querySelector('#epcClose').onclick = closeModal;
+    overlay.querySelector('#epcCancel').onclick = closeModal;
+    overlay.querySelector('#epcSave').onclick = ()=>{
+      const codeInput = overlay.querySelector('#epcCode');
+      const normalized = normalizeProjectCode(codeInput.value);
+      const oldCode = lead.projectCode || null;
+
+      if(!normalized && required){
+        codeInput.style.borderColor='var(--red)';
+        toast(`Project Code is required for a lead at "${lead.status}".`, 'error');
+        return;
+      }
+      if(normalized && isProjectCodeTaken(normalized, { excludeLeadId: lead.id })){
+        codeInput.style.borderColor='var(--red)';
+        toast(`Project Code ${normalized} is already in use.`, 'error');
+        return;
+      }
+      codeInput.style.borderColor='';
+
+      const newCode = normalized || null;
+      if(newCode === oldCode){ closeModal(); if(onDone) onDone(); return; }
+
+      lead.projectCode = newCode;
+      DB.upsert('leads', lead);
+
+      // Exactly one Activity Log entry per save — "Assigned" the first time
+      // a code is set from blank, "Changed" for any actual old -> new edit
+      // (never both, never a duplicate entry).
+      if(!oldCode && newCode){
+        logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
+          type:'Project Code Assigned', description:`${CURRENT_USER.name} assigned Project Code: ${newCode}`, toValue: newCode });
+      } else {
+        logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
+          type:'Project Code Changed', description:`${CURRENT_USER.name} changed Project Code: ${oldCode||'—'} → ${newCode||'—'}`,
+          fromValue: oldCode, toValue: newCode });
+      }
+
+      toast('Project Code updated.', 'success');
+      closeModal();
+      if(onDone) onDone();
+    };
+  }});
 }
 
 /* ---------------------------------------------------------------------- */

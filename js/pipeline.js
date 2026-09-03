@@ -239,6 +239,22 @@ function renderPipelinePage(){
     card.addEventListener('click', ()=> openLeadDetailModal(card.dataset.leadId));
   });
 
+  // Project Code edit icon (Founder/Admin only, see isFounder() gate in
+  // pipelineCardHtml) — must stop propagation so clicking it opens the
+  // small Edit Project Code modal instead of the card's own click handler
+  // opening the full Lead Detail modal underneath it.
+  el.querySelectorAll('[data-edit-code]').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const lead = DB.find('leads', btn.dataset.editCode);
+      if(lead) openEditProjectCodeModal(lead, ()=> renderPipelinePage());
+    });
+    // A draggable ancestor card intercepts mousedown for drag-start
+    // detection — without this, a click on the little edit icon can be
+    // swallowed as an aborted drag instead of registering as a click.
+    btn.addEventListener('mousedown', (e)=> e.stopPropagation());
+  });
+
   el.querySelectorAll('.pipeline-col').forEach(col=>{
     col.addEventListener('dragover', (e)=>{ e.preventDefault(); col.classList.add('drag-over'); });
     col.addEventListener('dragleave', ()=> col.classList.remove('drag-over'));
@@ -278,10 +294,27 @@ function pipelineCardHtml(l){
   // paused and when do we revisit it" is the point of glancing at the
   // board (spec §6).
   const isOnHold = l.status === ON_HOLD_STATUS;
+  // Project Code becomes required from Quote and Demo Sent onward — the
+  // card shows it from that same point forward on the board, so it never
+  // disappears again once a lead moves past Quote and Demo Sent into
+  // Follow-up / On Hold / Negotiation / Confirmed. Deliberately NOT using
+  // leadStatusRequiresProjectCode() here: that function returns false for
+  // Confirmed (it has its own dedicated Confirm-Project flow, so it's
+  // excluded from the generic status-change gate), but a Confirmed card on
+  // the board should still visibly show the code it already has. Missing
+  // codes are shown, never hidden, so a Founder/Admin scanning the board
+  // can spot an old historical lead that still needs one.
+  const codeGateIdx = PIPELINE_STATUSES.indexOf(QUOTE_AND_DEMO_SENT_STATUS);
+  const showCode = PIPELINE_STATUSES.indexOf(l.status) >= codeGateIdx;
   return `
     <div class="pcard ${isOnHold?'pcard-onhold':''}" draggable="true" data-lead-id="${l.id}">
       <div class="pcard-biz">${escapeHtml(l.businessName)}</div>
       <div class="pcard-client">${escapeHtml(l.clientName)}</div>
+      ${showCode ? `
+      <div class="pcard-code-row">
+        <span class="pcard-code ${l.projectCode?'':'pcard-code-unset'}">Code: ${l.projectCode ? escapeHtml(l.projectCode) : 'Not Set'}</span>
+        ${isFounder() ? `<button type="button" class="pcard-code-edit" data-edit-code="${l.id}" title="Edit Project Code">${icon('edit','width="12" height="12"')}</button>` : ''}
+      </div>` : ''}
       <span class="pcard-svc">${escapeHtml(l.interestedService)}</span>
       <div class="pcard-row">
         <span class="pcard-value">${money(l.estimatedValue)}</span>

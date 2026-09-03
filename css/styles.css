@@ -379,6 +379,16 @@ svg{width:18px;height:18px}
 .pcard .pcard-svc{font-size:11px;color:var(--blue);font-weight:700;background:#eef6ff;display:inline-block;padding:2px 7px;border-radius:6px;margin-bottom:8px}
 .pcard .pcard-row{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--muted)}
 .pcard .pcard-value{font-weight:800;color:var(--text)}
+/* Project Code row on Quote and Demo Sent+ pipeline cards — a compact,
+   subtly-styled badge (reuses the same --gray-soft/--red-soft/--muted
+   tokens the rest of the app already themes for dark mode, so this needs
+   no separate [data-theme="dark"] override) placed right under the client
+   name per spec, never hidden when a code is missing. */
+.pcard .pcard-code-row{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:8px}
+.pcard .pcard-code{font-size:10.5px;font-weight:700;color:var(--muted);background:var(--gray-soft);padding:2px 7px;border-radius:6px;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pcard .pcard-code.pcard-code-unset{color:var(--red);background:var(--red-soft);font-weight:600;font-style:italic}
+.pcard .pcard-code-edit{border:none;background:none;cursor:pointer;color:var(--muted);padding:2px;display:inline-flex;align-items:center;border-radius:4px;flex:none}
+.pcard .pcard-code-edit:hover{color:var(--blue)}
 .pipeline-col.drag-over{background:#dfeaff}
 /* On Hold / Future Follow-up card accent (spec §2/§6) — same muted purple as
    the status badge, applied as a left stripe rather than recoloring the
