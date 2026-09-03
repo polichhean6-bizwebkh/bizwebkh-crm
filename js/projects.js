@@ -195,18 +195,39 @@ function createProjectRecord({ code, lead, confirmedValue, depositPct=50, startD
 
 // Simple obvious-duplicate check for Direct Project creation (spec §5) —
 // same business name (case-insensitive) or same phone number already on
-// an existing project. Deliberately loose/fast rather than a fuzzy match;
-// it only needs to catch the obvious "someone already entered this client"
+// an existing project, OR on an existing LEAD that isn't yet tied to any
+// project. Deliberately loose/fast rather than a fuzzy match; it only
+// needs to catch the obvious "someone already entered this client"
 // case, not every possible near-duplicate.
+//
+// The lead half of this check was added after the C017/ODOM Prestige
+// incident (see the reconciliation activity log on lead L017): a Direct
+// Project was created for a business that already had an open lead, but
+// the only duplicate check at the time compared against other PROJECTS,
+// never against LEADS — so nothing caught it and the two records stayed
+// disconnected until manually reconciled. This does not retroactively
+// detect that specific case (the lead's business/client name and the
+// project's business/client name were genuinely different text — see the
+// final report), but it now catches the much more common case of staff
+// re-entering the same business/phone as an existing, still-open lead.
 function findLikelyDuplicateProjects({ businessName, phone }){
   const bn = (businessName||'').trim().toLowerCase();
   const ph = (phone||'').trim();
   if(!bn && !ph) return [];
-  return DB.all('projects').filter(p=>{
+  const projectMatches = DB.all('projects').filter(p=>{
     const sameBiz = bn && p.businessName && p.businessName.trim().toLowerCase()===bn;
     const samePhone = ph && p.phone && p.phone.trim()===ph;
     return sameBiz || samePhone;
-  });
+  }).map(p=> ({ id:p.id, businessName:p.businessName, kind:'project' }));
+  const leadMatches = DB.all('leads').filter(l=>{
+    // Skip leads that already have their own actual project row — that's
+    // not a disconnected-duplicate risk, just a normal converted lead.
+    if(l.projectCode && DB.find('projects', l.projectCode)) return false;
+    const sameBiz = bn && l.businessName && l.businessName.trim().toLowerCase()===bn;
+    const samePhone = ph && l.phone && l.phone.trim()===ph;
+    return sameBiz || samePhone;
+  }).map(l=> ({ id:l.id, businessName:l.businessName, kind:'lead' }));
+  return [...projectMatches, ...leadMatches];
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1193,13 +1214,21 @@ function openCreateProjectManualModal(){
       const phone = overlay.querySelector('#mp_phone').value.trim();
 
       // Obvious-duplicate check (spec §5): same business name or same
-      // phone already on an existing project. Warns rather than blocks
-      // outright, in case it's genuinely a second, unrelated project for a
-      // repeat client.
+      // phone already on an existing project OR an existing, still-open
+      // lead. Warns rather than blocks outright, in case it's genuinely a
+      // second, unrelated project for a repeat client (e.g. the same
+      // person commissioning a different business).
       const dupes = findLikelyDuplicateProjects({ businessName, phone });
       if(dupes.length){
-        const list = dupes.map(p=>`${p.id} — ${p.businessName}`).join('\n');
-        if(!confirm(`A project with a similar business name or phone number already exists:\n\n${list}\n\nCreate this Direct Project anyway?`)) return;
+        const list = dupes.map(d=> d.kind==='lead'
+          ? `${d.id} — ${d.businessName} (existing Lead, not yet linked to a project)`
+          : `${d.id} — ${d.businessName}`
+        ).join('\n');
+        const hasUnlinkedLead = dupes.some(d=>d.kind==='lead') && !linkedLead;
+        const suggestion = hasUnlinkedLead
+          ? '\n\nConsider choosing "Link to Existing Lead" above and searching for one of these leads instead, so this project stays connected to its lead history.'
+          : '';
+        if(!confirm(`A project or lead with a similar business name or phone number already exists:\n\n${list}${suggestion}\n\nCreate this Direct Project anyway?`)) return;
       }
 
       // Sales always creates a Direct Project assigned to themselves — no
