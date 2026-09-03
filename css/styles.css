@@ -308,7 +308,9 @@ svg{width:18px;height:18px}
    (the latter had a stray invalid background value, fixed as part of this
    consolidation) with one, reusing the old Demo Sent purple treatment. */
 .st-quote-and-demo-sent{background:var(--purple-soft);color:var(--purple)}
-.st-follow-up{background:var(--amber-soft);color:var(--amber)}
+/* "Follow-up" renamed to "Potential Need Follow Up" — wording only, same
+   amber treatment, same stage/position in the pipeline. */
+.st-potential-need-follow-up{background:var(--amber-soft);color:var(--amber)}
 /* On Hold / Future Follow-up (CRM feature): deliberately NOT red — red stays
    reserved for Lost/rejected/critical. Muted purple, distinct from both the
    amber used a few lines up for Follow-up and the brighter --purple used for

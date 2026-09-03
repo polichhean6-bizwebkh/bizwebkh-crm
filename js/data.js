@@ -49,15 +49,23 @@ const ON_HOLD_STATUS = 'On Hold / Future Follow-up';
 // neither old wording appears anywhere in the app any more.
 const QUOTE_AND_DEMO_SENT_STATUS = 'Quote and Demo Sent';
 
+// Wording-only rename of the old "Follow-up" pipeline stage — every lead
+// previously on "Follow-up" was migrated to this exact stage in Supabase
+// (see migration rename_followup_to_potential_need_follow_up); the old
+// wording no longer appears anywhere in the app. The stage itself, its
+// position in the pipeline, and all Next Follow-up Date / overdue / due
+// logic are completely unchanged — only the label changed.
+const POTENTIAL_FOLLOWUP_STATUS = 'Potential Need Follow Up';
+
 const LEAD_STATUSES = [
   'New Lead', 'Contacted', 'Qualified', QUOTE_AND_DEMO_SENT_STATUS,
-  'Follow-up', ON_HOLD_STATUS, 'Negotiation', 'Confirmed', 'Lost'
+  POTENTIAL_FOLLOWUP_STATUS, ON_HOLD_STATUS, 'Negotiation', 'Confirmed', 'Lost'
 ];
 
 // Statuses that still belong on the Kanban pipeline board
 const PIPELINE_STATUSES = [
   'New Lead', 'Contacted', 'Qualified', QUOTE_AND_DEMO_SENT_STATUS,
-  'Follow-up', ON_HOLD_STATUS, 'Negotiation', 'Confirmed'
+  POTENTIAL_FOLLOWUP_STATUS, ON_HOLD_STATUS, 'Negotiation', 'Confirmed'
 ];
 
 // TRUE open opportunities — used for Pipeline Value everywhere (dashboard
@@ -70,7 +78,7 @@ const PIPELINE_STATUSES = [
 // reads this list, exactly like every other open stage.
 const OPEN_PIPELINE_STATUSES = [
   'New Lead', 'Contacted', 'Qualified', QUOTE_AND_DEMO_SENT_STATUS,
-  'Follow-up', ON_HOLD_STATUS, 'Negotiation'
+  POTENTIAL_FOLLOWUP_STATUS, ON_HOLD_STATUS, 'Negotiation'
 ];
 
 // Project Code business rule: NOT required for New Lead / Contacted /
