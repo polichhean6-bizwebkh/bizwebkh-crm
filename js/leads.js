@@ -115,11 +115,14 @@ function salesOwnersList(){
 /* picker, always including "Unassigned".                                 */
 /* ---------------------------------------------------------------------- */
 
-// Temporary/test accounts (e.g. the QA Sales Test account) stay fully
-// functional for QA, but must never appear as a normal assignment choice
-// to anyone except Founder/Admin (spec §3). Not tied to a DB flag (none
-// exists yet) — matched by name so it's trivial to extend/remove later.
-const TEST_ACCOUNT_NAMES = ['QA Sales Test'];
+// Temporary/test accounts (currently the account displayed as "Sales
+// Staff" — a display-name change only, same underlying account/UUID)
+// stay fully functional for QA, but must never appear as a normal
+// assignment choice to anyone except Founder/Admin (spec §3). Not tied to
+// a DB flag (none exists yet) — matched by name so it's trivial to
+// extend/remove later; kept in sync with the account's current display
+// name so this pre-existing visibility rule keeps working unchanged.
+const TEST_ACCOUNT_NAMES = ['Sales Staff'];
 function isTestAccountName(name){ return TEST_ACCOUNT_NAMES.includes(name); }
 
 // Users selectable as "Assigned Sales" for a Founder/Admin (or any other
