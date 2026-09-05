@@ -146,6 +146,7 @@ function renderPipelinePage(){
 
   el.innerHTML = `
     <div class="filters-bar">
+      ${isFounder() ? `<button class="btn btn-outline" id="pArchiveBtn" style="margin-right:4px">${icon('archive','width="15" height="15"')} Archive</button>` : ''}
       <select id="pFltSales" class="sel">
         <option value="">All Sales</option>
         ${salesList.map(s=>`<option value="${escapeHtml(s)}" ${PIPELINE_FILTER_STATE.sales===s?'selected':''}>${escapeHtml(s)}</option>`).join('')}
@@ -163,9 +164,7 @@ function renderPipelinePage(){
         ${industryList.map(s=>`<option value="${escapeHtml(s)}" ${PIPELINE_FILTER_STATE.industry===s?'selected':''}>${escapeHtml(industryLabel(s))}</option>`).join('')}
       </select>
       <div class="spacer"></div>
-      ${isFounder() ? `<button class="btn btn-outline" id="pArchiveBtn">${icon('archive','width="15" height="15"')} Archive</button>` : ''}
-      ${isFounder() ? `<button class="btn btn-outline" id="pAddToPipelineBtn">+ Add to Pipeline</button>` : ''}
-      <button class="btn btn-primary" id="pAddLeadBtn">+ Add Lead</button>
+      ${isFounder() ? `<button class="btn btn-primary" id="pAddToPipelineBtn">+ Add to Pipeline</button>` : ''}
     </div>
 
     <div class="flex-row followup-counters" style="gap:8px;flex-wrap:wrap;margin-bottom:14px">
@@ -212,7 +211,9 @@ function renderPipelinePage(){
     </div>
   `;
 
-  document.getElementById('pAddLeadBtn').onclick = ()=> openLeadFormModal(null);
+  // Pipeline deliberately has no "+ Add Lead" button (spec §6/§9) — new
+  // leads are created in Lead Records only; Pipeline's own primary action
+  // is "+ Add to Pipeline", which selects an EXISTING lead.
   const addToPipelineBtn = document.getElementById('pAddToPipelineBtn');
   if(addToPipelineBtn) addToPipelineBtn.onclick = ()=> openAddToPipelineModal();
   const archiveBtn = document.getElementById('pArchiveBtn');
@@ -355,8 +356,23 @@ function openAddToPipelineModal(opts={}){
   // (its status is already Quote and Demo Sent or later), so it is
   // structurally excluded here — satisfying the duplicate-protection rule
   // (spec §9) without any extra bookkeeping.
+  //
+  // IMPORTANT (root-cause fix — see renderResults() below): eligibleLeads()
+  // is used ONLY for the default list shown when the search box is empty,
+  // and for the final Confirm-time re-check. The SEARCH itself must query
+  // every live, non-archived lead (searchableLeads()) — not just the
+  // pre-filtered eligible ones — otherwise a real, existing Lead ID like
+  // L045 that happens to already be past Qualified (e.g. already in
+  // Pipeline, or still Contacted) is invisible to the search entirely and
+  // falls through to the generic "No qualified leads available" message,
+  // which is exactly the reported bug. Searching the full live dataset and
+  // then labelling each match by its actual status gives the user a
+  // truthful answer instead.
   function eligibleLeads(){
-    return DB.all('leads').filter(l=> !l.archived && l.status==='Qualified');
+    return searchableLeads().filter(l=> l.status==='Qualified');
+  }
+  function searchableLeads(){
+    return DB.all('leads').filter(l=> !l.archived);
   }
 
   let selectedLead = preselectedLeadId ? DB.find('leads', preselectedLeadId) : null;
@@ -464,6 +480,29 @@ function openAddToPipelineModal(opts={}){
           ${statusBadge(l.status)}
         </div>`;
     }
+    // A search match that ISN'T eligible is still shown — never silently
+    // dropped — labelled with exactly why it can't be selected right now
+    // (spec §4): already in Pipeline, or a real status but not yet
+    // Qualified. Not clickable (no data-pick), and visually muted so it
+    // reads clearly as "found, but not selectable" rather than a normal
+    // result.
+    function ineligibleRowHtml(l, message){
+      return `
+        <div class="mini-row" style="cursor:default;opacity:.7">
+          <div class="mini-main">
+            <div class="mini-title">${l.id} — ${escapeHtml(l.businessName)}</div>
+            <div class="mini-sub">Client: ${escapeHtml(l.clientName)}</div>
+            <div class="mini-sub" style="color:var(--red);margin-top:2px">${escapeHtml(message)}</div>
+          </div>
+          ${statusBadge(l.status)}
+        </div>`;
+    }
+    function ineligibleMessageFor(l){
+      if(PIPELINE_STATUSES.includes(l.status)){
+        return `This lead is already in the Pipeline (Stage: ${l.status}).`;
+      }
+      return `Lead found, but current status is ${l.status}. Only Qualified leads can be added to Pipeline.`;
+    }
     function wireResultRows(){
       resultsEl.querySelectorAll('[data-pick]').forEach(row=>{
         row.onclick = ()=>{
@@ -476,21 +515,34 @@ function openAddToPipelineModal(opts={}){
       });
     }
     function renderResults(){
-      const all = eligibleLeads();
       resultsEl.style.display = 'block';
-      if(all.length === 0){
-        resultsEl.innerHTML = `<div class="text-muted" style="padding:10px;font-size:12.5px">No qualified leads available to add to Pipeline.</div>`;
+      const nq = normalizeQuery(overlay.querySelector('#atpSearch').value);
+
+      if(!nq){
+        // Empty search box → show a reasonable default list of eligible
+        // (Qualified) leads rather than nothing (spec Part A §4). Only
+        // when there truly are none at all do we show the "none available"
+        // empty state — a query that later fails to match anything gets
+        // its own distinct "no match" message instead (see below).
+        const eligible = eligibleLeads();
+        if(eligible.length === 0){
+          resultsEl.innerHTML = `<div class="text-muted" style="padding:10px;font-size:12.5px">No qualified leads available to add to Pipeline.</div>`;
+          return;
+        }
+        resultsEl.innerHTML = eligible.slice(0,20).map(resultRowHtml).join('');
+        wireResultRows();
         return;
       }
-      const nq = normalizeQuery(overlay.querySelector('#atpSearch').value);
-      // Empty search box → show a reasonable default list of eligible
-      // leads rather than nothing (spec Part A §4).
-      const matches = nq ? all.filter(l=>matchesQuery(l, nq)) : all.slice(0,20);
+
+      // Root-cause fix: search the FULL live lead dataset (not just the
+      // pre-filtered eligible list) so a real lead like L045 is always
+      // found and truthfully labelled, even when it isn't eligible.
+      const matches = searchableLeads().filter(l=>matchesQuery(l, nq)).slice(0,20);
       if(matches.length === 0){
         resultsEl.innerHTML = `<div class="text-muted" style="padding:10px;font-size:12.5px">No matching Lead Record found.</div>`;
         return;
       }
-      resultsEl.innerHTML = matches.slice(0,20).map(resultRowHtml).join('');
+      resultsEl.innerHTML = matches.map(l=> l.status==='Qualified' ? resultRowHtml(l) : ineligibleRowHtml(l, ineligibleMessageFor(l))).join('');
       wireResultRows();
     }
     overlay.querySelector('#atpSearch').oninput = renderResults;

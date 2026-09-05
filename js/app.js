@@ -352,7 +352,7 @@ function icon(name, extra=''){ return `<svg viewBox="0 0 24 24" width="18" heigh
 const PAGE_TITLES = {
   dashboard:['Dashboard','Overview of leads, pipeline and payments'],
   leads:['Lead Records','Track and manage all sales leads'],
-  pipeline:['Pipeline','Kanban view of your sales pipeline'],
+  pipeline:['Pipeline','Track active opportunities from quote to confirmation.'],
   projects:['Projects','Confirmed projects and delivery status'],
   quotations:['Quotations','Create, review, and send client quotations'],
   payments:['Financial Overview','Review payment activity and outstanding balances across all projects'],
