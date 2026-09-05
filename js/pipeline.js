@@ -388,9 +388,9 @@ function openAddToPipelineModal(opts={}){
         <label class="required">Select Lead</label>
         <div class="search-box" style="max-width:100%">
           ${icon('search')}
-          <input type="text" id="atpSearch" placeholder="Search by Lead ID, client, business, phone, or service…">
+          <input type="text" id="atpSearch" autocomplete="off" placeholder="Search by Lead ID, client, business, phone, or service…">
         </div>
-        <div id="atpResults" style="margin-top:8px;max-height:180px;overflow-y:auto;border:1px solid var(--line);border-radius:9px"></div>
+        <div id="atpResults" class="atp-dropdown" style="margin-top:8px;max-height:280px;overflow-y:auto;border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 20px rgba(21,62,121,.08)"></div>
         <div id="atpSelected" style="margin-top:8px"></div>
       </div>
       <div id="atpCodeWrap" style="display:none">
@@ -442,21 +442,20 @@ function openAddToPipelineModal(opts={}){
     }
     renderSelected();
 
-    // Search — queries the SAME lead records shown in Lead Records (no
-    // separate list/database). Case-insensitive, partial-match on Lead ID,
-    // Client Name, Business Name, Interested Service and (if already
-    // assigned) Project Code; phone matching strips all non-digit
-    // characters from both the query and the stored number first, so a
-    // query like "012 587" still matches a phone stored without spaces
-    // (spec Part A §1 — "tolerant of spaces"). Root cause of the original
-    // bug wasn't the matching logic itself (it always matched correctly
-    // against whatever WAS eligible) — it was that the modal showed a
-    // completely blank results panel with no explanation whenever the
-    // search box was empty AND whenever zero Qualified leads existed to
-    // find, which reads exactly like "search is broken" with no way to
-    // tell the difference from actually-broken. Fixed below by always
-    // rendering *something* — a default eligible list, or one of two
-    // explicit empty-state messages (spec Part A §4).
+    // Live autocomplete / typeahead — queries the SAME lead records shown
+    // in Lead Records (searchableLeads(), no separate list/database),
+    // responds on every keystroke (no Enter needed) AND on focus with an
+    // empty box (spec §1/§6), and shows every match regardless of
+    // eligibility (spec §3) rather than hiding non-Qualified leads. Only
+    // an actually-eligible (Qualified) row is clickable/selectable — every
+    // other match is still shown, clearly labelled "Already in Pipeline"
+    // or "Not Qualified Yet" (spec §4), so Founder/Admin can always
+    // confirm a real lead exists even when it can't be added right now.
+    // Case-insensitive, partial-match on Lead ID, Client Name, Business
+    // Name, Interested Service and (if already assigned) Project Code;
+    // phone matching strips all non-digit characters from both the query
+    // and the stored number first, so "012 587" still matches a phone
+    // stored without spaces.
     function normalizeQuery(s){ return (s||'').toLowerCase().trim(); }
     function digitsOnly(s){ return (s||'').replace(/\D/g,''); }
     function matchesQuery(l, nq){
@@ -470,38 +469,23 @@ function openAddToPipelineModal(opts={}){
       if(qDigits && digitsOnly(l.phone).includes(qDigits)) return true;
       return false;
     }
-    function resultRowHtml(l){
+    const RESULT_LIMIT = 10; // spec §5 — "around 8–10 matches", scroll for more
+    function eligibilityPill(l){
+      if(l.status==='Qualified') return `<span class="atp-pill atp-pill-select">Select</span>`;
+      if(PIPELINE_STATUSES.includes(l.status)) return `<span class="atp-pill atp-pill-pipeline">Already in Pipeline</span>`;
+      return `<span class="atp-pill atp-pill-notqualified">Not Qualified Yet</span>`;
+    }
+    function suggestionRowHtml(l){
+      const eligible = l.status === 'Qualified';
       return `
-        <div class="mini-row" style="cursor:pointer" data-pick="${l.id}">
+        <div class="mini-row atp-row${eligible?'':' atp-disabled'}"${eligible?` data-pick="${l.id}"`:''}>
           <div class="mini-main">
             <div class="mini-title">${l.id} — ${escapeHtml(l.businessName)}</div>
-            <div class="mini-sub">Client: ${escapeHtml(l.clientName)} · ${escapeHtml(l.interestedService)} · ${money(l.estimatedValue)}</div>
+            <div class="mini-sub">Client: ${escapeHtml(l.clientName)} · ${escapeHtml(l.interestedService||'—')}</div>
+            <div class="mini-sub" style="margin-top:3px">${statusBadge(l.status)}</div>
           </div>
-          ${statusBadge(l.status)}
+          ${eligibilityPill(l)}
         </div>`;
-    }
-    // A search match that ISN'T eligible is still shown — never silently
-    // dropped — labelled with exactly why it can't be selected right now
-    // (spec §4): already in Pipeline, or a real status but not yet
-    // Qualified. Not clickable (no data-pick), and visually muted so it
-    // reads clearly as "found, but not selectable" rather than a normal
-    // result.
-    function ineligibleRowHtml(l, message){
-      return `
-        <div class="mini-row" style="cursor:default;opacity:.7">
-          <div class="mini-main">
-            <div class="mini-title">${l.id} — ${escapeHtml(l.businessName)}</div>
-            <div class="mini-sub">Client: ${escapeHtml(l.clientName)}</div>
-            <div class="mini-sub" style="color:var(--red);margin-top:2px">${escapeHtml(message)}</div>
-          </div>
-          ${statusBadge(l.status)}
-        </div>`;
-    }
-    function ineligibleMessageFor(l){
-      if(PIPELINE_STATUSES.includes(l.status)){
-        return `This lead is already in the Pipeline (Stage: ${l.status}).`;
-      }
-      return `Lead found, but current status is ${l.status}. Only Qualified leads can be added to Pipeline.`;
     }
     function wireResultRows(){
       resultsEl.querySelectorAll('[data-pick]').forEach(row=>{
@@ -519,35 +503,37 @@ function openAddToPipelineModal(opts={}){
       const nq = normalizeQuery(overlay.querySelector('#atpSearch').value);
 
       if(!nq){
-        // Empty search box → show a reasonable default list of eligible
-        // (Qualified) leads rather than nothing (spec Part A §4). Only
-        // when there truly are none at all do we show the "none available"
-        // empty state — a query that later fails to match anything gets
-        // its own distinct "no match" message instead (see below).
-        const eligible = eligibleLeads();
+        // Clicking/focusing the input with nothing typed → show eligible
+        // Qualified leads, newest first, rather than a blank box (spec §6).
+        const eligible = eligibleLeads().sort((a,b)=> new Date(b.createdAt||0) - new Date(a.createdAt||0));
         if(eligible.length === 0){
           resultsEl.innerHTML = `<div class="text-muted" style="padding:10px;font-size:12.5px">No qualified leads available to add to Pipeline.</div>`;
           return;
         }
-        resultsEl.innerHTML = eligible.slice(0,20).map(resultRowHtml).join('');
+        resultsEl.innerHTML = eligible.slice(0,RESULT_LIMIT).map(suggestionRowHtml).join('');
         wireResultRows();
         return;
       }
 
-      // Root-cause fix: search the FULL live lead dataset (not just the
-      // pre-filtered eligible list) so a real lead like L045 is always
-      // found and truthfully labelled, even when it isn't eligible.
-      const matches = searchableLeads().filter(l=>matchesQuery(l, nq)).slice(0,20);
+      // Root-cause fix (still in effect): search the FULL live lead
+      // dataset (not just the pre-filtered eligible list) so a real lead
+      // like L045 is always found and truthfully labelled, even when it
+      // isn't eligible — this is what makes typing "L0" immediately show
+      // every L0xx lead regardless of status (spec §1/§2/§11).
+      const matches = searchableLeads().filter(l=>matchesQuery(l, nq)).slice(0,RESULT_LIMIT);
       if(matches.length === 0){
         resultsEl.innerHTML = `<div class="text-muted" style="padding:10px;font-size:12.5px">No matching Lead Record found.</div>`;
         return;
       }
-      resultsEl.innerHTML = matches.map(l=> l.status==='Qualified' ? resultRowHtml(l) : ineligibleRowHtml(l, ineligibleMessageFor(l))).join('');
+      resultsEl.innerHTML = matches.map(suggestionRowHtml).join('');
       wireResultRows();
     }
     overlay.querySelector('#atpSearch').oninput = renderResults;
-    // Show the default eligible list (or the right empty state) the moment
-    // the modal opens, instead of waiting for the first keystroke.
+    // Focusing the (possibly still-empty) field also opens the dropdown —
+    // a real typeahead shouldn't require typing first (spec §6).
+    overlay.querySelector('#atpSearch').onfocus = renderResults;
+    // And show it immediately on modal open, instead of waiting for any
+    // interaction at all.
     if(!selectedLead) renderResults();
 
     confirmBtn.onclick = ()=>{
