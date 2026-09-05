@@ -476,8 +476,8 @@ function renderLeadDetail(leadId){
     <div class="modal-body">
       ${lead.archived ? `
       <div class="panel" style="padding:10px 14px;background:var(--gray-soft);border:1px solid var(--line);margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-        <span class="text-muted" style="font-size:12.5px">This lead is archived — hidden from Lead Records and Pipeline (including its follow-up workflow) by default.${lead.archiveReason?` Reason: ${escapeHtml(lead.archiveReason)}.`:''}</span>
-        <button class="btn btn-outline btn-sm" id="ldRestore">Restore Lead</button>
+        <span class="text-muted" style="font-size:12.5px">This opportunity is archived — hidden from the active Pipeline (and Lead Records' default Active view) by default, but all its data is preserved.${lead.archiveReason?` Reason: ${escapeHtml(lead.archiveReason)}.`:''}</span>
+        ${isFounder() ? `<button class="btn btn-outline btn-sm" id="ldRestore">Restore</button>` : ''}
       </div>` : ''}
       <div class="flex-row" style="justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
         <div class="flex-row">${statusBadge(lead.status)}${lead.lostReason?`<span class="text-muted" style="font-size:12px">Reason: ${escapeHtml(lead.lostReason)}</span>`:''}${lead.status===ON_HOLD_STATUS && lead.holdReason?`<span class="text-muted" style="font-size:12px">Note: ${escapeHtml(lead.holdReason)}</span>`:''}</div>
@@ -499,7 +499,7 @@ function renderLeadDetail(leadId){
     </div>
     <div class="modal-foot" style="justify-content:space-between">
       <div class="flex-row" style="gap:8px">
-        ${!lead.archived ? `<button class="btn btn-ghost btn-sm" id="ldArchive" style="color:var(--muted)">Archive Lead</button>` : ''}
+        ${(!lead.archived && isFounder()) ? `<button class="btn btn-ghost btn-sm" id="ldArchive" style="color:var(--muted)">Archive</button>` : ''}
         <button class="btn btn-danger btn-sm" id="ldDelete" style="opacity:.85">Delete Lead</button>
       </div>
       <button class="btn btn-secondary" id="ldClose2">Close</button>
@@ -851,23 +851,30 @@ function openEditProjectCodeModal(lead, onDone){
 }
 
 /* ---------------------------------------------------------------------- */
-/* Archive / Restore — the preferred way to retire an old/unwanted lead.  */
+/* Archive / Restore (Pipeline Archive workflow) — Founder/Admin only.     */
 /* Archiving never deletes anything: the record, its Activity Log and any */
 /* linked Project all stay exactly as they are — it just stops showing up */
-/* in Lead Records (default view), Pipeline and Follow-ups (spec §15).    */
+/* in the active Pipeline and Lead Records' default Active view. It is    */
+/* the SAME underlying archived/archivedAt/archivedBy/archiveReason       */
+/* fields (already present on the leads table) whether it's opened from a */
+/* Lead Detail modal or from the Pipeline Archive view (pipeline.js       */
+/* openArchivedPipelineModal) — reusing this single mechanism rather than */
+/* building a second, parallel one keeps Lead Records and Pipeline always */
+/* looking at exactly the same archive state for a given lead.            */
 /* ---------------------------------------------------------------------- */
 
 function openArchiveLeadModal(lead, onDone){
+  if(!isFounder()){ toast('Only Founder/Admin can archive an opportunity.', 'error'); return; }
   const html = `
-    <div class="modal-head"><h3>Archive Lead</h3><button class="modal-close" id="arClose">&times;</button></div>
+    <div class="modal-head"><h3>Archive</h3><button class="modal-close" id="arClose">&times;</button></div>
     <div class="modal-body">
-      <p style="margin-top:0">Archive <b>${escapeHtml(lead.clientName)} — ${escapeHtml(lead.businessName)}</b>?</p>
-      <p class="text-muted" style="font-size:12.5px">It will no longer appear in Lead Records (default view) or Pipeline — including its follow-up workflow. Nothing is deleted — its Activity Log and any linked Project stay intact, and it can be restored at any time.</p>
-      <div class="form-field"><label>Reason (optional)</label><textarea id="ar_reason" placeholder="e.g. Inactive for 6+ months, no response."></textarea></div>
+      <p style="margin-top:0">Archive this opportunity?</p>
+      <p class="text-muted" style="font-size:12.5px">This will remove <b>${escapeHtml(lead.clientName)} — ${escapeHtml(lead.businessName)}</b> (${lead.id}${lead.projectCode?' · Project '+escapeHtml(lead.projectCode):''}) from the active Pipeline, but all lead information, notes, history and related records will be preserved. Nothing is deleted, and it can be restored at any time.</p>
+      <div class="form-field"><label>Archive Reason (optional)</label><textarea id="ar_reason" placeholder="e.g. Inactive for 6+ months, no response."></textarea></div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-secondary" id="arCancel">Cancel</button>
-      <button class="btn btn-primary" id="arConfirm">Archive Lead</button>
+      <button class="btn btn-primary" id="arConfirm">Archive</button>
     </div>
   `;
   openModal(html, { onMount:(overlay)=>{
@@ -875,6 +882,7 @@ function openArchiveLeadModal(lead, onDone){
     overlay.querySelector('#arCancel').onclick = closeModal;
     overlay.querySelector('#arConfirm').onclick = ()=>{
       const reason = overlay.querySelector('#ar_reason').value.trim();
+      const prevStage = lead.status;
       closeModal();
       lead.archived = true;
       lead.archivedAt = new Date().toISOString();
@@ -883,8 +891,10 @@ function openArchiveLeadModal(lead, onDone){
       lead.updatedAt = lead.archivedAt;
       DB.upsert('leads', lead);
       logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
-        type:'Lead Archived', description:`${CURRENT_USER.name} archived lead ${lead.id}.${reason ? ' Reason: '+reason+'.' : ''}`, remark: reason||null });
-      toast('Lead archived.', 'success');
+        type:'Lead Archived',
+        description:`${CURRENT_USER.name} archived opportunity ${lead.id}${lead.projectCode?` (Project Code: ${lead.projectCode})`:''} — Previous Stage: ${prevStage}.${reason ? ' Reason: '+reason+'.' : ''}`,
+        remark: reason||null });
+      toast('Opportunity archived.', 'success');
       if(currentRoute()==='leads') renderLeadsTable();
       if(currentRoute()==='pipeline') renderPipelinePage();
       if(onDone) onDone();
@@ -892,7 +902,14 @@ function openArchiveLeadModal(lead, onDone){
   }});
 }
 
+// Generic restore — used by Lead Detail's own "Restore" button for ANY
+// archived lead (any status). Deliberately does NOT touch lead.status:
+// restoring here just un-archives the record back to wherever it already
+// was (spec §8 — "do not change the lead's historical business status
+// unnecessarily"). See restoreLeadToPipeline() below for the Pipeline
+// Archive view's stage-fallback variant.
 function restoreLead(lead, onDone){
+  if(!isFounder()){ toast('Only Founder/Admin can restore an opportunity.', 'error'); return; }
   lead.archived = false;
   lead.archivedAt = null;
   lead.archivedBy = null;
@@ -900,8 +917,40 @@ function restoreLead(lead, onDone){
   lead.updatedAt = new Date().toISOString();
   DB.upsert('leads', lead);
   logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
-    type:'Lead Restored', description:`${CURRENT_USER.name} restored lead ${lead.id} from archive.` });
-  toast('Lead restored.', 'success');
+    type:'Lead Restored',
+    description:`${CURRENT_USER.name} restored opportunity ${lead.id}${lead.projectCode?` (Project Code: ${lead.projectCode})`:''} — Restored Stage: ${lead.status}.` });
+  toast('Restored.', 'success');
+  if(currentRoute()==='leads') renderLeadsTable();
+  if(currentRoute()==='pipeline') renderPipelinePage();
+  if(onDone) onDone();
+}
+
+/* ---------------------------------------------------------------------- */
+/* Restore to Pipeline — used only from the Pipeline Archive view         */
+/* (pipeline.js openArchivedPipelineModal). Restores the lead to its last */
+/* Pipeline stage (lead.status, left untouched by archiving); if that     */
+/* stage is no longer one of the current PIPELINE_STATUSES (e.g. a very   */
+/* old archive predating the sales-restructure task, or one archived      */
+/* while Lost), it falls back to Quote and Demo Sent instead (spec §11)   */
+/* rather than reviving a column that no longer exists. Never creates a   */
+/* duplicate card — it's the exact same lead record, just un-archived.    */
+/* ---------------------------------------------------------------------- */
+function restoreLeadToPipeline(lead, onDone){
+  if(!isFounder()){ toast('Only Founder/Admin can restore an opportunity.', 'error'); return; }
+  const fresh = DB.find('leads', lead.id) || lead;
+  const prevStage = fresh.status;
+  const validStage = PIPELINE_STATUSES.includes(fresh.status);
+  fresh.status = validStage ? fresh.status : QUOTE_AND_DEMO_SENT_STATUS;
+  fresh.archived = false;
+  fresh.archivedAt = null;
+  fresh.archivedBy = null;
+  fresh.archiveReason = null;
+  fresh.updatedAt = new Date().toISOString();
+  DB.upsert('leads', fresh);
+  logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: fresh.id, refLabel:`${fresh.clientName} — ${fresh.businessName}`,
+    type:'Lead Restored',
+    description:`${CURRENT_USER.name} restored opportunity ${fresh.id}${fresh.projectCode?` (Project Code: ${fresh.projectCode})`:''} to Pipeline — Restored Stage: ${fresh.status}.${validStage?'':` (${prevStage} no longer exists on the board, fell back to ${QUOTE_AND_DEMO_SENT_STATUS})`}` });
+  toast(`${fresh.id} restored to ${fresh.status}.`, 'success');
   if(currentRoute()==='leads') renderLeadsTable();
   if(currentRoute()==='pipeline') renderPipelinePage();
   if(onDone) onDone();

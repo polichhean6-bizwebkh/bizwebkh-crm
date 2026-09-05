@@ -338,6 +338,7 @@ const ICONS = {
   x:'<path d="M18 6L6 18M6 6l12 12"/>',
   moon:'<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
   sun:'<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>',
+  archive:'<polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>',
 };
 // IMPORTANT: width/height="18" here are a SAFE DEFAULT ONLY — plain HTML
 // sizing attributes are the lowest-priority box-sizing source in CSS, so

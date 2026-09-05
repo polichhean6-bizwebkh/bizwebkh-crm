@@ -163,6 +163,7 @@ function renderPipelinePage(){
         ${industryList.map(s=>`<option value="${escapeHtml(s)}" ${PIPELINE_FILTER_STATE.industry===s?'selected':''}>${escapeHtml(industryLabel(s))}</option>`).join('')}
       </select>
       <div class="spacer"></div>
+      ${isFounder() ? `<button class="btn btn-outline" id="pArchiveBtn">${icon('archive','width="15" height="15"')} Archive</button>` : ''}
       ${isFounder() ? `<button class="btn btn-outline" id="pAddToPipelineBtn">+ Add to Pipeline</button>` : ''}
       <button class="btn btn-primary" id="pAddLeadBtn">+ Add Lead</button>
     </div>
@@ -214,6 +215,8 @@ function renderPipelinePage(){
   document.getElementById('pAddLeadBtn').onclick = ()=> openLeadFormModal(null);
   const addToPipelineBtn = document.getElementById('pAddToPipelineBtn');
   if(addToPipelineBtn) addToPipelineBtn.onclick = ()=> openAddToPipelineModal();
+  const archiveBtn = document.getElementById('pArchiveBtn');
+  if(archiveBtn) archiveBtn.onclick = ()=> openArchivedPipelineModal();
   document.getElementById('pFltSales').onchange = (e)=>{ PIPELINE_FILTER_STATE.sales=e.target.value; renderPipelinePage(); };
   document.getElementById('pFltFollowup').onchange = (e)=>{ PIPELINE_FILTER_STATE.followup=e.target.value; renderPipelinePage(); };
   document.getElementById('pFltIndustry').onchange = (e)=>{ PIPELINE_FILTER_STATE.industry=e.target.value; renderPipelinePage(); };
@@ -416,29 +419,52 @@ function openAddToPipelineModal(opts={}){
             Assigned Sales: ${escapeHtml(selectedLead.assignedSales||'—')} · Current Status: ${statusBadge(selectedLead.status)}
           </div>
         </div>`;
-      overlay.querySelector('#atpUnselect').onclick = ()=>{ selectedLead=null; codeInput.value=''; renderSelected(); };
+      overlay.querySelector('#atpUnselect').onclick = ()=>{ selectedLead=null; codeInput.value=''; renderSelected(); if(typeof renderResults==='function') renderResults(); };
       codeWrap.style.display = 'block';
       if(!codeInput.value) codeInput.value = suggestNextProjectCode();
       confirmBtn.disabled = false;
     }
     renderSelected();
 
-    overlay.querySelector('#atpSearch').oninput = (e)=>{
-      const q = e.target.value.trim().toLowerCase();
-      if(!q){ resultsEl.innerHTML=''; resultsEl.style.display='none'; return; }
-      const matches = eligibleLeads().filter(l=>
-        l.id.toLowerCase().includes(q) || l.clientName.toLowerCase().includes(q) ||
-        l.businessName.toLowerCase().includes(q) || (l.phone||'').includes(q) ||
-        (l.interestedService||'').toLowerCase().includes(q)
-      ).slice(0,8);
-      resultsEl.style.display = 'block';
-      resultsEl.innerHTML = matches.length ? matches.map(l=>`
+    // Search — queries the SAME lead records shown in Lead Records (no
+    // separate list/database). Case-insensitive, partial-match on Lead ID,
+    // Client Name, Business Name, Interested Service and (if already
+    // assigned) Project Code; phone matching strips all non-digit
+    // characters from both the query and the stored number first, so a
+    // query like "012 587" still matches a phone stored without spaces
+    // (spec Part A §1 — "tolerant of spaces"). Root cause of the original
+    // bug wasn't the matching logic itself (it always matched correctly
+    // against whatever WAS eligible) — it was that the modal showed a
+    // completely blank results panel with no explanation whenever the
+    // search box was empty AND whenever zero Qualified leads existed to
+    // find, which reads exactly like "search is broken" with no way to
+    // tell the difference from actually-broken. Fixed below by always
+    // rendering *something* — a default eligible list, or one of two
+    // explicit empty-state messages (spec Part A §4).
+    function normalizeQuery(s){ return (s||'').toLowerCase().trim(); }
+    function digitsOnly(s){ return (s||'').replace(/\D/g,''); }
+    function matchesQuery(l, nq){
+      if(!nq) return true;
+      if(l.id.toLowerCase().includes(nq)) return true;
+      if(l.clientName.toLowerCase().includes(nq)) return true;
+      if(l.businessName.toLowerCase().includes(nq)) return true;
+      if((l.interestedService||'').toLowerCase().includes(nq)) return true;
+      if(l.projectCode && l.projectCode.toLowerCase().includes(nq)) return true;
+      const qDigits = digitsOnly(nq);
+      if(qDigits && digitsOnly(l.phone).includes(qDigits)) return true;
+      return false;
+    }
+    function resultRowHtml(l){
+      return `
         <div class="mini-row" style="cursor:pointer" data-pick="${l.id}">
           <div class="mini-main">
-            <div class="mini-title">${escapeHtml(l.clientName)} — ${escapeHtml(l.businessName)}</div>
-            <div class="mini-sub">${l.id} · ${escapeHtml(l.interestedService)} · ${money(l.estimatedValue)}</div>
+            <div class="mini-title">${l.id} — ${escapeHtml(l.businessName)}</div>
+            <div class="mini-sub">Client: ${escapeHtml(l.clientName)} · ${escapeHtml(l.interestedService)} · ${money(l.estimatedValue)}</div>
           </div>
-        </div>`).join('') : `<div class="text-muted" style="padding:10px;font-size:12.5px">No eligible Qualified leads match.</div>`;
+          ${statusBadge(l.status)}
+        </div>`;
+    }
+    function wireResultRows(){
       resultsEl.querySelectorAll('[data-pick]').forEach(row=>{
         row.onclick = ()=>{
           selectedLead = DB.find('leads', row.dataset.pick);
@@ -448,7 +474,29 @@ function openAddToPipelineModal(opts={}){
           renderSelected();
         };
       });
-    };
+    }
+    function renderResults(){
+      const all = eligibleLeads();
+      resultsEl.style.display = 'block';
+      if(all.length === 0){
+        resultsEl.innerHTML = `<div class="text-muted" style="padding:10px;font-size:12.5px">No qualified leads available to add to Pipeline.</div>`;
+        return;
+      }
+      const nq = normalizeQuery(overlay.querySelector('#atpSearch').value);
+      // Empty search box → show a reasonable default list of eligible
+      // leads rather than nothing (spec Part A §4).
+      const matches = nq ? all.filter(l=>matchesQuery(l, nq)) : all.slice(0,20);
+      if(matches.length === 0){
+        resultsEl.innerHTML = `<div class="text-muted" style="padding:10px;font-size:12.5px">No matching Lead Record found.</div>`;
+        return;
+      }
+      resultsEl.innerHTML = matches.slice(0,20).map(resultRowHtml).join('');
+      wireResultRows();
+    }
+    overlay.querySelector('#atpSearch').oninput = renderResults;
+    // Show the default eligible list (or the right empty state) the moment
+    // the modal opens, instead of waiting for the first keystroke.
+    if(!selectedLead) renderResults();
 
     confirmBtn.onclick = ()=>{
       if(!selectedLead){ toast('Please select a lead.', 'error'); return; }
@@ -478,6 +526,115 @@ function openAddToPipelineModal(opts={}){
       if(currentRoute()==='pipeline') renderPipelinePage();
       if(currentRoute()==='leads') renderLeadsTable();
       if(onDone) onDone();
+    };
+  }});
+}
+
+/* ---------------------------------------------------------------------- */
+/* Pipeline Archive view — Founder/Admin only. Shows archived SALES        */
+/* OPPORTUNITIES (leads that were actually in the Pipeline lifecycle) as   */
+/* a compact table, separate from Lead Records' own Active/Archived/All    */
+/* filter (which still lists every archived lead, early-stage included).   */
+/* Eligibility is deliberately "current status is a Pipeline stage OR a    */
+/* Project Code was ever assigned" rather than PIPELINE_STATUSES alone —   */
+/* the latter would silently miss a lead archived long ago whose status    */
+/* predates the sales-restructure task (e.g. still 'Qualified' from        */
+/* before Project Codes existed at that stage) but that already has a      */
+/* Project Code, i.e. genuinely was a pipeline opportunity. Restoring one   */
+/* of those falls back to Quote and Demo Sent (restoreLeadToPipeline, see  */
+/* leads.js) since its stale stage no longer exists on the board.          */
+/* Archiving a lead here NEVER touches its linked Project (if any) — a     */
+/* Confirmed opportunity's Project stays fully visible/untouched under      */
+/* Projects regardless of whether the Pipeline card itself is archived.    */
+/* ---------------------------------------------------------------------- */
+function archivedPipelineOpportunities(){
+  return DB.all('leads').filter(l=> l.archived && (PIPELINE_STATUSES.includes(l.status) || !!l.projectCode));
+}
+
+function openArchivedPipelineModal(){
+  if(!isFounder()){ toast('Only Founder/Admin can view the Pipeline Archive.', 'error'); return; }
+  const items = archivedPipelineOpportunities().sort((a,b)=> new Date(b.archivedAt||0) - new Date(a.archivedAt||0));
+
+  const html = `
+    <div class="modal-head"><h3>Pipeline Archive</h3><button class="modal-close" id="apClose">&times;</button></div>
+    <div class="modal-body">
+      ${items.length===0 ? `<div class="text-muted" style="padding:24px 4px;text-align:center">No archived opportunities.</div>` : `
+      <div class="table-wrap scroll-x">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Lead ID</th><th>Project Code</th><th>Client</th><th>Business</th>
+              <th>Service</th><th>Est. Value</th><th>Last Pipeline Stage</th>
+              <th>Archived Date</th><th>Archived By</th><th>Archive Reason</th><th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map(l=>`
+              <tr>
+                <td class="cell-link" data-view="${l.id}">${l.id}</td>
+                <td>${l.projectCode ? escapeHtml(l.projectCode) : '—'}</td>
+                <td class="cell-strong">${escapeHtml(l.clientName)}</td>
+                <td>${escapeHtml(l.businessName)}</td>
+                <td>${escapeHtml(l.interestedService||'—')}</td>
+                <td class="cell-strong">${money(l.estimatedValue)}</td>
+                <td>${statusBadge(l.status)}</td>
+                <td class="cell-nowrap">${l.archivedAt ? fmtDate(l.archivedAt) : '—'}</td>
+                <td>${escapeHtml(l.archivedBy||'—')}</td>
+                <td class="text-muted" style="max-width:200px">${l.archiveReason ? escapeHtml(l.archiveReason) : '—'}</td>
+                <td>
+                  <div class="flex-row" style="gap:6px;flex-wrap:wrap">
+                    <button class="btn btn-secondary btn-sm" data-view="${l.id}">View</button>
+                    <button class="btn btn-primary btn-sm" data-restore="${l.id}">Restore</button>
+                  </div>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`}
+    </div>
+    <div class="modal-foot"><button class="btn btn-secondary" id="apClose2">Close</button></div>
+  `;
+
+  openModal(html, { large:true, onMount:(overlay)=>{
+    overlay.querySelector('#apClose').onclick = closeModal;
+    overlay.querySelector('#apClose2').onclick = closeModal;
+    overlay.querySelectorAll('[data-view]').forEach(el=>{
+      el.onclick = ()=>{ closeModal(); openLeadDetailModal(el.dataset.view); };
+    });
+    overlay.querySelectorAll('[data-restore]').forEach(btn=>{
+      btn.onclick = ()=>{
+        const lead = DB.find('leads', btn.dataset.restore);
+        if(!lead) return;
+        openRestoreToPipelineModal(lead, ()=> openArchivedPipelineModal());
+      };
+    });
+  }});
+}
+
+function openRestoreToPipelineModal(lead, onDone){
+  if(!isFounder()){ toast('Only Founder/Admin can restore an opportunity.', 'error'); return; }
+  const fallback = !PIPELINE_STATUSES.includes(lead.status);
+  const targetStage = fallback ? QUOTE_AND_DEMO_SENT_STATUS : lead.status;
+  const html = `
+    <div class="modal-head"><h3>Restore to Pipeline</h3><button class="modal-close" id="rpClose">&times;</button></div>
+    <div class="modal-body">
+      <p style="margin-top:0">Restore this opportunity to Pipeline?</p>
+      <p class="text-muted" style="font-size:12.5px">
+        <b>${escapeHtml(lead.clientName)} — ${escapeHtml(lead.businessName)}</b> (${lead.id}${lead.projectCode?' · Project '+escapeHtml(lead.projectCode):''}) will be restored to its last valid Pipeline stage: ${statusBadge(targetStage)}
+        ${fallback ? `<br><span style="margin-top:4px;display:inline-block">Its previous stage (${escapeHtml(lead.status)}) no longer exists on the board, so it will fall back to ${QUOTE_AND_DEMO_SENT_STATUS}.</span>` : ''}
+      </p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-secondary" id="rpCancel">Cancel</button>
+      <button class="btn btn-primary" id="rpConfirm">Restore</button>
+    </div>
+  `;
+  openModal(html, { onMount:(overlay)=>{
+    overlay.querySelector('#rpClose').onclick = closeModal;
+    overlay.querySelector('#rpCancel').onclick = closeModal;
+    overlay.querySelector('#rpConfirm').onclick = ()=>{
+      closeModal();
+      restoreLeadToPipeline(lead, onDone);
     };
   }});
 }

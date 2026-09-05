@@ -81,7 +81,8 @@ const ACTIVITY_TYPE_COLORS = {
   'Assigned Sales Changed':'#526584','Deposit Recorded':'#12a775','Payment Recorded':'#12a775',
   'Project Stage Changed':'#155fcc','Project Created':'#1d7bff','Note Added':'#526584','Lead Lost':'#e0473c',
   'Project Code Assigned':'#12a775','Project Code Changed':'#d98a12',
-  'Lead Added to Pipeline':'#1d7bff'
+  'Lead Added to Pipeline':'#1d7bff',
+  'Lead Archived':'#8a5cff','Lead Restored':'#0ea88a'
 };
 function activityTypeBadge(type){
   const c = ACTIVITY_TYPE_COLORS[type] || '#526584';
