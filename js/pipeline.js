@@ -322,7 +322,7 @@ function pipelineCardHtml(l){
         <span class="pcard-code ${l.projectCode?'':'pcard-code-unset'}">Code: ${l.projectCode ? escapeHtml(l.projectCode) : 'Not Set'}</span>
         ${isFounder() ? `<button type="button" class="pcard-code-edit" data-edit-code="${l.id}" title="Edit Project Code">${icon('edit','width="12" height="12"')}</button>` : ''}
       </div>` : ''}
-      <span class="pcard-svc">${escapeHtml(l.interestedService)}</span>
+      <span class="pcard-svc">${escapeHtml(serviceShortName(l.interestedService))}</span>
       <div class="pcard-row">
         <span class="pcard-value">${money(l.estimatedValue)}</span>
         <div class="avatar-sm" style="background:${userColor(l.assignedSales)}" title="${escapeHtml(l.assignedSales)}">${userInitials(l.assignedSales)}</div>
@@ -431,7 +431,7 @@ function openAddToPipelineModal(opts={}){
             <span class="cell-link" id="atpUnselect" style="font-size:12px">Change</span>
           </div>
           <div class="text-muted" style="margin-top:6px;font-size:12px">
-            Interested Service: ${escapeHtml(selectedLead.interestedService)} · Est. Value: ${money(selectedLead.estimatedValue)}<br>
+            Interested Service: ${escapeHtml(serviceDisplayName(selectedLead.interestedService))} · Est. Value: ${money(selectedLead.estimatedValue)}<br>
             Assigned Sales: ${escapeHtml(selectedLead.assignedSales||'—')} · Current Status: ${statusBadge(selectedLead.status)}
           </div>
         </div>`;
@@ -464,6 +464,7 @@ function openAddToPipelineModal(opts={}){
       if(l.clientName.toLowerCase().includes(nq)) return true;
       if(l.businessName.toLowerCase().includes(nq)) return true;
       if((l.interestedService||'').toLowerCase().includes(nq)) return true;
+      if(l.interestedService && serviceDisplayName(l.interestedService).toLowerCase().includes(nq)) return true;
       if(l.projectCode && l.projectCode.toLowerCase().includes(nq)) return true;
       const qDigits = digitsOnly(nq);
       if(qDigits && digitsOnly(l.phone).includes(qDigits)) return true;
@@ -481,7 +482,7 @@ function openAddToPipelineModal(opts={}){
         <div class="mini-row atp-row${eligible?'':' atp-disabled'}"${eligible?` data-pick="${l.id}"`:''}>
           <div class="mini-main">
             <div class="mini-title">${l.id} — ${escapeHtml(l.businessName)}</div>
-            <div class="mini-sub">Client: ${escapeHtml(l.clientName)} · ${escapeHtml(l.interestedService||'—')}</div>
+            <div class="mini-sub">Client: ${escapeHtml(l.clientName)} · ${escapeHtml(l.interestedService?serviceDisplayName(l.interestedService):'—')}</div>
             <div class="mini-sub" style="margin-top:3px">${statusBadge(l.status)}</div>
           </div>
           ${eligibilityPill(l)}
@@ -613,7 +614,7 @@ function openArchivedPipelineModal(){
                 <td>${l.projectCode ? escapeHtml(l.projectCode) : '—'}</td>
                 <td class="cell-strong">${escapeHtml(l.clientName)}</td>
                 <td>${escapeHtml(l.businessName)}</td>
-                <td>${escapeHtml(l.interestedService||'—')}</td>
+                <td>${escapeHtml(l.interestedService?serviceDisplayName(l.interestedService):'—')}</td>
                 <td class="cell-strong">${money(l.estimatedValue)}</td>
                 <td>${statusBadge(l.status)}</td>
                 <td class="cell-nowrap">${l.archivedAt ? fmtDate(l.archivedAt) : '—'}</td>

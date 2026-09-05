@@ -16,7 +16,7 @@ function renderProjectsPage(){
       </div>
       <select id="pFltStage" class="sel"><option value="">All Statuses</option>${PROJECT_STAGES.map(s=>`<option ${PROJECTS_FILTER_STATE.stage===s?'selected':''}>${s}</option>`).join('')}</select>
       <select id="pFltIndustry" class="sel"><option value="">All Industries</option>${INDUSTRIES.map(s=>`<option ${PROJECTS_FILTER_STATE.industry===s?'selected':''}>${s}</option>`).join('')}</select>
-      <select id="pFltType" class="sel"><option value="">All Project Types</option>${SERVICE_TYPES.map(s=>`<option ${PROJECTS_FILTER_STATE.type===s?'selected':''}>${s}</option>`).join('')}</select>
+      <select id="pFltType" class="sel"><option value="">All Project Types</option>${SERVICE_TYPES.map(s=>`<option value="${escapeHtml(s)}" ${PROJECTS_FILTER_STATE.type===s?'selected':''}>${escapeHtml(serviceDisplayName(s))}</option>`).join('')}</select>
       <select id="pFltSales" class="sel"><option value="">All Sales</option>${salesOwnersList().map(s=>`<option ${PROJECTS_FILTER_STATE.sales===s?'selected':''}>${s}</option>`).join('')}</select>
       <div class="spacer"></div>
       <button class="btn btn-primary" id="createProjectBtn">${icon('grid')} + Create Direct Project</button>
@@ -69,7 +69,7 @@ function renderProjectsTable(){
             <tr>
               <td class="cell-link" data-open="${p.id}">${p.id}${!p.leadId ? '<div class="cell-sub">Direct</div>':''}</td>
               <td class="cell-strong">${escapeHtml(p.clientName)}<div class="cell-sub">${escapeHtml(p.businessName)}</div></td>
-              <td>${escapeHtml(p.projectType)}</td>
+              <td>${escapeHtml(serviceDisplayName(p.projectType))}</td>
               <td class="cell-strong">${money(s.confirmedValue)}</td>
               <td style="font-weight:700;color:${s.totalPaid>0?'var(--green)':'inherit'}">${money(s.totalPaid)}</td>
               <td style="font-weight:700;color:${s.remaining>0?'#d98a12':'var(--green)'}">${money(s.remaining)}</td>
@@ -268,7 +268,7 @@ function renderProjectDetail(code){
         <h3>${proj.id} — ${escapeHtml(proj.businessName)}</h3>
         <div class="text-muted" style="font-size:12px;margin-top:4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           ${statusBadge(proj.stage)}
-          <span>${escapeHtml(proj.clientName)} · ${escapeHtml(proj.projectType)}</span>
+          <span>${escapeHtml(proj.clientName)} · ${escapeHtml(serviceDisplayName(proj.projectType))}</span>
         </div>
       </div>
       <button class="modal-close" id="pdClose">&times;</button>
@@ -521,7 +521,7 @@ function projectKeyInfoHtml(proj, summary){
         ${infoRow('Payment Status', summary.status)}
       </div>
       <div>
-        ${infoRow('Project Type', proj.projectType)}
+        ${infoRow('Project Type', serviceDisplayName(proj.projectType))}
         ${infoRow('Assigned Sales', proj.assignedSales)}
         ${infoRow('Start Date', fmtDate(proj.startDate))}
         ${infoRow('Expected Delivery', fmtDate(proj.expectedDelivery))}
@@ -772,7 +772,7 @@ function openEditProjectModal(code){
         <div class="form-field"><label class="required">Business Name</label><input id="ep_businessName" value="${escapeHtml(proj.businessName)}"></div>
         <div class="form-field"><label>Phone</label><input id="ep_phone" value="${escapeHtml(proj.phone||'')}"></div>
         <div class="form-field"><label class="required">Industry / SME Type</label><select id="ep_industry">${INDUSTRIES.map(s=>`<option ${proj.industry===s?'selected':''}>${s}</option>`).join('')}</select></div>
-        <div class="form-field"><label class="required">Project Type</label><select id="ep_projectType">${SERVICE_TYPES.map(s=>`<option ${proj.projectType===s?'selected':''}>${s}</option>`).join('')}</select></div>
+        <div class="form-field"><label class="required">Project Type</label><select id="ep_projectType">${SERVICE_TYPES.map(s=>`<option value="${escapeHtml(s)}" ${proj.projectType===s?'selected':''}>${escapeHtml(serviceDisplayName(s))}</option>`).join('')}</select></div>
         <div class="form-field"><label class="required">Confirmed Value ($)</label><input type="number" id="ep_value" value="${proj.confirmedValue}"></div>
         ${assignedSalesFieldHtml({ id:'ep_sales', currentValue: proj.assignedSales })}
         <div class="form-field"><label>Start Date</label><input type="date" id="ep_start" value="${proj.startDate||''}"></div>
@@ -952,7 +952,7 @@ function openConfirmProjectModal(lead){
           ${infoRow('Industry', lead.industry)}
         </div>
         <div>
-          ${infoRow('Project Type', lead.interestedService)}
+          ${infoRow('Project Type', serviceDisplayName(lead.interestedService))}
           ${infoRow('Assigned Sales', lead.assignedSales)}
           ${infoRow('Estimated Value', money(lead.estimatedValue))}
         </div>
@@ -1086,7 +1086,7 @@ function openCreateProjectManualModal(){
         <div class="form-field"><label class="required">Business Name</label><input id="mp_businessName"></div>
         <div class="form-field"><label>Phone</label><input id="mp_phone"></div>
         <div class="form-field"><label class="required">Industry / SME Type</label><select id="mp_industry">${INDUSTRIES.map(s=>`<option>${s}</option>`).join('')}</select></div>
-        <div class="form-field"><label class="required">Project Type</label><select id="mp_projectType">${SERVICE_TYPES.map(s=>`<option>${s}</option>`).join('')}</select></div>
+        <div class="form-field"><label class="required">Project Type</label><select id="mp_projectType">${SERVICE_TYPES.map(s=>`<option value="${escapeHtml(s)}">${escapeHtml(serviceDisplayName(s))}</option>`).join('')}</select></div>
         <div class="form-field"><label class="required">Confirmed Value ($)</label><input type="number" id="mp_value" placeholder="e.g. 599" min="1"></div>
         <div class="form-field"><label>Deposit %</label><input type="number" id="mp_depositPct" value="50"></div>
         ${assignedSalesFieldHtml({ id:'mp_sales', currentValue: CURRENT_USER.name })}

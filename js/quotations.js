@@ -156,7 +156,7 @@ function quotationSearchableLeads(){
 function digitsOnly(s){ return String(s||'').replace(/\D/g,''); }
 function quotationLeadMatches(l, nq){
   if(!nq) return true;
-  const fields = [l.id, l.clientName, l.businessName, l.interestedService, l.projectCode].filter(Boolean).map(v=>String(v).toLowerCase());
+  const fields = [l.id, l.clientName, l.businessName, l.interestedService, l.interestedService?serviceDisplayName(l.interestedService):null, l.projectCode].filter(Boolean).map(v=>String(v).toLowerCase());
   if(fields.some(f=>f.includes(nq))) return true;
   const qDigits = digitsOnly(nq);
   return qDigits.length>=3 && digitsOnly(l.phone).includes(qDigits);
@@ -220,7 +220,7 @@ function selectPackageOnQC(projectType){
   QC_STATE.packageKey = projectType;
   QC_STATE.quotationType = svc ? quotationTypeForProjectType(svc.projectType) : 'website';
   if(!svc){ QC_STATE.items = []; QC_STATE.exclusions = []; return; }
-  const baseItem = { id: fnId(), module: svc.category, name: `${svc.name} (Base Package${svc.priceIsStartingFrom?' — starting from':''})`,
+  const baseItem = { id: fnId(), module: svc.category, name: `${svc.shortName || svc.name} (Base Package${svc.priceIsStartingFrom?' — starting from':''})`,
     price: svc.basePrice, founderReviewRequired: svc.founderReviewRequired, included: true };
   const fnItems = svc.functions.map(f=>({ id:fnId(), module: svc.category, name:f.name,
     price: f.defaultPrice===null ? null : 0, founderReviewRequired: f.founderReviewRequired, included: f.included }));

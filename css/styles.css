@@ -217,6 +217,28 @@ img{max-width:100%;display:block}
 .dash-grid{display:grid;grid-template-columns:1.3fr 1fr;gap:16px}
 .dash-grid .stack{display:flex;flex-direction:column;gap:16px}
 
+/* ---------- Settings -> Quotations: Important Notes accordion/card ---------- */
+/* One card per note (Domain & Hosting Support, Annual Renewal, ...) inside
+   the Website/System Template tabs — clearer than a bare stacked list of
+   labeled textareas, and explicitly theme-aware (var(--surface-2)/var(--line))
+   so dark mode never shows a white card with invisible text. */
+.qs-note-card{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px}
+.qs-note-card:last-child{margin-bottom:0}
+.qs-note-card h4{font-size:13px;font-weight:800;color:var(--text);margin:0 0 8px}
+/* These textareas sit directly inside .panel-body/.qs-note-card rather
+   than a .form-field wrapper, so they need their own explicit
+   border/background/text-color — otherwise they'd fall back to the
+   browser's default textarea styling, which in dark mode renders as a
+   white box with barely-visible text (exactly the "no white input fields
+   with invisible text" failure the spec calls out). */
+.qs-note-card textarea, #qsSubtabBody > .panel textarea{
+  width:100%;min-height:64px;resize:vertical;
+  border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:13.5px;
+  background:var(--input-bg);color:var(--text);
+}
+.qs-note-card textarea:focus, #qsSubtabBody > .panel textarea:focus{outline:2px solid #bcd6ff;border-color:var(--blue)}
+[data-theme="dark"] .qs-note-card textarea:focus, [data-theme="dark"] #qsSubtabBody > .panel textarea:focus{outline-color:#2a4a75}
+
 .mini-row{display:flex;align-items:center;justify-content:space-between;padding:10px 18px;border-bottom:1px solid var(--line);gap:10px}
 .mini-row:last-child{border-bottom:0}
 .mini-row .mini-main{min-width:0}

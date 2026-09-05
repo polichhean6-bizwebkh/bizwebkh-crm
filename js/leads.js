@@ -57,7 +57,7 @@ function renderLeadsPage(){
       </div>
       <select id="fltStatus" class="sel"><option value="">All Statuses</option>${LEAD_STATUSES.map(s=>`<option ${LEADS_FILTER_STATE.status===s?'selected':''}>${s}</option>`).join('')}</select>
       <select id="fltIndustry" class="sel"><option value="">All Industries</option>${INDUSTRIES.map(s=>`<option ${LEADS_FILTER_STATE.industry===s?'selected':''}>${s}</option>`).join('')}</select>
-      <select id="fltService" class="sel"><option value="">All Services</option>${SERVICE_TYPES.map(s=>`<option ${LEADS_FILTER_STATE.service===s?'selected':''}>${s}</option>`).join('')}</select>
+      <select id="fltService" class="sel"><option value="">All Services</option>${SERVICE_TYPES.map(s=>`<option value="${escapeHtml(s)}" ${LEADS_FILTER_STATE.service===s?'selected':''}>${escapeHtml(serviceDisplayName(s))}</option>`).join('')}</select>
       <select id="fltSales" class="sel"><option value="">All Sales</option>${salesOwnersList().map(s=>`<option ${LEADS_FILTER_STATE.sales===s?'selected':''}>${s}</option>`).join('')}</select>
       <select id="fltSource" class="sel"><option value="">All Sources</option>${LEAD_SOURCES.map(s=>`<option ${LEADS_FILTER_STATE.source===s?'selected':''}>${s}</option>`).join('')}</select>
       <select id="fltArchive" class="sel" title="Active/Archived leads">
@@ -251,7 +251,7 @@ function renderLeadsTable(){
               <td class="cell-strong">${escapeHtml(l.clientName)}</td>
               <td>${escapeHtml(l.businessName)}${l.projectCode ? `<div class="cell-sub">Project ${l.projectCode}${DB.find('projects',l.projectCode) ? ' · '+escapeHtml(DB.find('projects',l.projectCode).stage) : ''}</div>`:''}</td>
               <td>${escapeHtml(industryLabel(l.industry))}</td>
-              <td>${escapeHtml(l.interestedService)}</td>
+              <td>${escapeHtml(serviceDisplayName(l.interestedService))}</td>
               <td class="cell-strong">${money(l.estimatedValue)}</td>
               <td><div class="flex-row"><div class="avatar-sm" style="background:${userColor(l.assignedSales)}">${userInitials(l.assignedSales)}</div>${escapeHtml(l.assignedSales)}</div></td>
               <td>${statusBadge(l.status)}${l.archived ? `<div class="cell-sub" style="color:var(--muted)">Archived</div>` : ''}</td>
@@ -346,7 +346,7 @@ function openLeadFormModal(leadId){
         <div class="form-field"><label class="required">Industry / SME Type</label>
           <select id="lf_industry">${INDUSTRIES.map(s=>`<option ${lead?.industry===s?'selected':''}>${s}</option>`).join('')}</select></div>
         <div class="form-field"><label class="required">Interested Service</label>
-          <select id="lf_service">${SERVICE_TYPES.map(s=>`<option ${lead?.interestedService===s?'selected':''}>${s}</option>`).join('')}</select></div>
+          <select id="lf_service">${SERVICE_TYPES.map(s=>`<option value="${escapeHtml(s)}" ${lead?.interestedService===s?'selected':''}>${escapeHtml(serviceDisplayName(s))}</option>`).join('')}</select></div>
         <div class="form-field"><label class="required">Estimated Value ($)</label><input type="number" id="lf_value" value="${lead?.estimatedValue||''}"></div>
         <div class="form-field"><label class="required">Lead Source</label>
           <select id="lf_source">${LEAD_SOURCES.map(s=>`<option ${lead?.leadSource===s?'selected':''}>${s}</option>`).join('')}</select></div>
@@ -562,7 +562,7 @@ function leadOverviewTab(lead){
       </div>
       <div>
         <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Sales Information</div>
-        ${infoRow('Interested Service', lead.interestedService)}
+        ${infoRow('Interested Service', serviceDisplayName(lead.interestedService))}
         ${infoRow('Estimated Value', money(lead.estimatedValue))}
         ${infoRow('Assigned Sales', lead.assignedSales)}
         ${infoRow('Expected Close Date', fmtDate(lead.expectedCloseDate))}

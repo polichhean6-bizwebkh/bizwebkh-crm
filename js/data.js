@@ -146,7 +146,17 @@ const BUSINESS_TYPES = INDUSTRIES;
 // industry value and must stay distinct from "we don't know").
 function industryLabel(industry){ return (industry && String(industry).trim()) ? industry : 'Unspecified'; }
 
-// Standardized Project Type, based on current BizWeb KH service tiers.
+// Standardized Project Type — these are INTERNAL IDs (the literal values
+// stored in Supabase as leads.interested_service / projects.project_type,
+// and matched against SERVICE_PRICE_LIST[].projectType), NOT necessarily
+// what's shown to the user. 'Customer Management System' in particular is
+// kept exactly as-is here on purpose (CRM rename, spec §3/§13): it remains
+// the stored/matched value for every existing lead, project and quotation
+// already linked to that package, so nothing already in Supabase silently
+// disconnects from its package. The current DISPLAY name for any of these
+// IDs comes from serviceDisplayName()/serviceShortName() below, never from
+// this array directly — anywhere this list renders as dropdown options,
+// wrap the label (not the value) in serviceDisplayName().
 const SERVICE_TYPES = [
   'Starter Website', 'Pro Website', 'Pro Max Website', 'Dynamic Website / CMS',
   'Booking System', 'Customer Management System',
@@ -177,6 +187,7 @@ const FUNCTION_MODULE_TEMPLATES = {
   'Booking System': ['Customer Booking Form', 'Date & Time Selection', 'Booking Status', 'Admin Booking Management'],
   'CMS': ['Admin Content Editor', 'Media Library', 'Page Management'],
   'Customer Management': ['Customer Records', 'Status Tracking', 'Reports'],
+  'CRM': ['Customer Records', 'Customer History', 'Customer Type / VIP', 'Package / Balance Management', 'Transactions', 'Staff Incentive / Commission', 'Reports', 'Business Dashboard'],
   'E-Commerce': ['Product Catalog', 'Shopping Cart', 'Checkout', 'Order Management'],
   'Admin Dashboard': ['Booking List', 'Calendar', 'Customer Records', 'Reports'],
   'Mobile App': ['iOS App', 'Android App', 'Push Notifications'],
@@ -272,10 +283,26 @@ const SERVICE_PRICE_LIST = [
     functions:[ svcFn('Website'), svcFn('Booking form'), svcFn('Date/time selection'), svcFn('Customer information'),
                 svcFn('Basic admin dashboard'), svcFn('Booking list'), svcFn('Calendar'), svcFn('Booking status'),
                 svcFn('Year-1 hosting/backend/database') ] },
-  { id:'SVC06', name:'Customer Management System', projectType:'Customer Management System', category:'CMS', basePrice:599, year2Price:179, year3Price:179,
+  /* Renamed from "Customer Management System" to proper CRM terminology
+     (CRM = Customer Relationship Management, a distinct product from CMS =
+     Content Management System — SVC04 above). `name` is the full display
+     name (Service Price List, package dropdown); `shortName` is used only
+     where space is limited (e.g. the auto-generated scope base-item label).
+     `projectType` — the internal ID matched against every existing lead/
+     project/quotation already linked to this package — is deliberately
+     UNCHANGED, so nothing already in Supabase disconnects from its
+     package (spec §3: "Do NOT change existing IDs/database relationships
+     unnecessarily"). `category` changed from 'CMS' to 'CRM' so this
+     package's auto-generated scope items are never grouped/labelled under
+     the same "CMS" module as the actual $399 CMS package (SVC04) — CMS
+     and CRM must remain visually distinct everywhere, including on the
+     quotation's own scope table (spec: "They must remain two different
+     products"). */
+  { id:'SVC06', name:'CRM – Customer Relationship Management', shortName:'CRM System', projectType:'Customer Management System', category:'CRM', basePrice:599, year2Price:179, year3Price:179,
     salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'21 days', status:'Active',
-    functions:[ svcFn('Website'), svcFn('Customer records'), svcFn('Status tracking'), svcFn('Basic admin dashboard'),
-                svcFn('Reports (basic)'), svcFn('Year-1 hosting/backend/database') ] },
+    functions:[ svcFn('Customer records'), svcFn('Customer history'), svcFn('Customer type / VIP management'), svcFn('Package / balance management'),
+                svcFn('Transactions'), svcFn('Staff incentive / commission'), svcFn('Reports'), svcFn('Business dashboard'),
+                svcFn('Year-1 hosting/backend/database') ] },
   { id:'SVC07', name:'E-Commerce Level 1 – Basic Catalog + Admin', projectType:'E-Commerce Level 1', category:'E-Commerce', basePrice:500, year2Price:149, year3Price:149,
     salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'21 days', status:'Active',
     functions:[ svcFn('Website'), svcFn('Product catalog'), svcFn('Chat / manual ordering'), svcFn('Basic admin dashboard'),
@@ -303,6 +330,25 @@ const SERVICE_PRICE_LIST = [
 
 function serviceByProjectType(projectType){
   return SERVICE_PRICE_LIST.find(s=>s.projectType===projectType) || null;
+}
+// The user-facing label for a stored project-type/interested-service ID.
+// Every lead/project/quotation stores the internal projectType ID (see the
+// SERVICE_TYPES comment above) — this is the ONLY place that should ever
+// turn that ID into display text, so a future rename only has to change
+// SERVICE_PRICE_LIST's `.name` once instead of every render site. Falls
+// back to the raw id for legacy/free-form project types not in the price
+// list (e.g. 'Other', or old imported records) so nothing ever renders
+// blank.
+function serviceDisplayName(projectType){
+  const svc = serviceByProjectType(projectType);
+  return svc ? svc.name : (projectType || '');
+}
+// Same idea but prefers a service's short label where UI space is tight
+// (e.g. a Pipeline card badge) — only SVC06 (CRM) currently defines one;
+// every other service falls back to its normal full name.
+function serviceShortName(projectType){
+  const svc = serviceByProjectType(projectType);
+  return svc ? (svc.shortName || svc.name) : (projectType || '');
 }
 
 /* ---------------------------------------------------------------------- */
