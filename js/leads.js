@@ -253,7 +253,12 @@ function renderLeadsTable(){
               <td><div class="flex-row"><div class="avatar-sm" style="background:${userColor(l.assignedSales)}">${userInitials(l.assignedSales)}</div>${escapeHtml(l.assignedSales)}</div></td>
               <td>${statusBadge(l.status)}${l.archived ? `<div class="cell-sub" style="color:var(--muted)">Archived</div>` : ''}</td>
               <td>${urgencyChip(l.nextFollowup)}</td>
-              <td><button class="btn btn-secondary btn-sm" data-open="${l.id}">View</button></td>
+              <td>
+                <div class="flex-row" style="gap:6px;flex-wrap:wrap">
+                  <button class="btn btn-secondary btn-sm" data-open="${l.id}">View</button>
+                  ${(l.status==='Qualified' && isFounder()) ? `<button class="btn btn-primary btn-sm" data-add-to-pipeline="${l.id}">Add to Pipeline</button>` : ''}
+                </div>
+              </td>
             </tr>`).join('') : `<tr><td colspan="11"><div class="empty-row">No leads match your filters.</div></td></tr>`}
         </tbody>
       </table>
@@ -261,6 +266,12 @@ function renderLeadsTable(){
     ${renderLeadsPagination(allFiltered.length, totalPages)}
   `;
   wrap.querySelectorAll('[data-open]').forEach(x=> x.onclick = ()=> openLeadDetailModal(x.dataset.open));
+  // "Add to Pipeline" quick action (spec §12) — opens the same Add to
+  // Pipeline modal used from the Pipeline page's own button, with this
+  // lead already selected, so a Founder/Admin can go straight from
+  // Qualified to Quote and Demo Sent + Project Code without leaving
+  // Lead Records.
+  wrap.querySelectorAll('[data-add-to-pipeline]').forEach(x=> x.onclick = ()=> openAddToPipelineModal({ preselectedLeadId: x.dataset.addToPipeline }));
   wrap.querySelectorAll('[data-page]').forEach(x=> x.onclick = ()=>{
     const p = x.dataset.page;
     if(p==='prev') LEADS_PAGE = Math.max(1, LEADS_PAGE-1);
@@ -473,6 +484,7 @@ function renderLeadDetail(leadId){
         <div class="flex-row" style="flex-wrap:wrap;gap:8px">
           <button class="btn btn-secondary btn-sm" id="ldEdit">Edit</button>
           ${!['Lost','Confirmed'].includes(lead.status) ? `<button class="btn btn-outline btn-sm" id="ldChangeStatus">Change Status</button>`:''}
+          ${lead.status==='Qualified' && isFounder() ? `<button class="btn btn-primary btn-sm" id="ldAddToPipeline">Add to Pipeline</button>` : ''}
           ${['Confirmed','Deposit Paid','In Development','Final Payment Pending','Completed'].includes(lead.status) && !lead.projectCode ? `<button class="btn btn-primary btn-sm" id="ldCreateProject">+ Create Project</button>` : ''}
         </div>
       </div>
@@ -502,6 +514,8 @@ function renderLeadDetail(leadId){
     if(changeBtn) changeBtn.onclick = ()=> openLeadStatusPicker(lead);
     const createProjBtn = overlay.querySelector('#ldCreateProject');
     if(createProjBtn) createProjBtn.onclick = ()=> createProjectFromLead(lead.id, ()=> renderLeadDetail(lead.id));
+    const addToPipelineBtn = overlay.querySelector('#ldAddToPipeline');
+    if(addToPipelineBtn) addToPipelineBtn.onclick = ()=> openAddToPipelineModal({ preselectedLeadId: lead.id, onDone: ()=>{ closeModal(); openLeadDetailModal(lead.id); } });
     const restoreBtn = overlay.querySelector('#ldRestore');
     if(restoreBtn) restoreBtn.onclick = ()=> restoreLead(lead, ()=> renderLeadDetail(lead.id));
     const archiveBtn = overlay.querySelector('#ldArchive');
@@ -734,6 +748,33 @@ function applyLeadStatusChange(lead, newStatus){
       if(document.getElementById('activeModalOverlay')===null){} // no-op, modal already closed
       // if a lead-detail modal happens to still be relevant elsewhere, caller re-renders it
     }
+  });
+}
+
+/* ---------------------------------------------------------------------- */
+/* Add to Pipeline — advances an existing early-stage lead (normally       */
+/* Qualified) straight into Quote and Demo Sent on Pipeline, assigning its */
+/* Project Code in the same step. Mutates the SAME lead record — no new    */
+/* lead is ever created (see openAddToPipelineModal in pipeline.js, the    */
+/* only caller). Mirrors applyLeadStatusChange's Quote and Demo Sent entry */
+/* side effects exactly, so a lead ends up identical whether it arrived    */
+/* via drag-and-drop/Change Status or via Add to Pipeline.                 */
+/* ---------------------------------------------------------------------- */
+function advanceLeadToPipeline(lead, projectCode){
+  const prevStatus = lead.status;
+  lead.status = QUOTE_AND_DEMO_SENT_STATUS;
+  lead.projectCode = projectCode;
+  if(lead.quotationStatus==='Not Sent'){ lead.quotationStatus='Sent'; lead.quotationAmount = lead.estimatedValue; lead.quotationRef = `Q-${lead.id}.pdf`; }
+  if(!lead.demoLink){ lead.demoLink = `https://demo.bizwebkh.com/${slug(lead.businessName)}`; }
+  DB.upsert('leads', lead);
+  // ONE combined Activity Log entry (spec §16: do not create duplicate
+  // activity entries) covering both the status change and the Project
+  // Code assignment together.
+  logActivity({
+    userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
+    type:'Lead Added to Pipeline',
+    description:`${CURRENT_USER.name} added ${lead.id} — ${lead.businessName} to Pipeline: ${prevStatus} → ${QUOTE_AND_DEMO_SENT_STATUS}. Project Code: ${projectCode}.`,
+    fromValue: prevStatus, toValue: QUOTE_AND_DEMO_SENT_STATUS
   });
 }
 

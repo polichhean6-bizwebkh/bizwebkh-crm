@@ -163,6 +163,7 @@ function renderPipelinePage(){
         ${industryList.map(s=>`<option value="${escapeHtml(s)}" ${PIPELINE_FILTER_STATE.industry===s?'selected':''}>${escapeHtml(industryLabel(s))}</option>`).join('')}
       </select>
       <div class="spacer"></div>
+      ${isFounder() ? `<button class="btn btn-outline" id="pAddToPipelineBtn">+ Add to Pipeline</button>` : ''}
       <button class="btn btn-primary" id="pAddLeadBtn">+ Add Lead</button>
     </div>
 
@@ -211,6 +212,8 @@ function renderPipelinePage(){
   `;
 
   document.getElementById('pAddLeadBtn').onclick = ()=> openLeadFormModal(null);
+  const addToPipelineBtn = document.getElementById('pAddToPipelineBtn');
+  if(addToPipelineBtn) addToPipelineBtn.onclick = ()=> openAddToPipelineModal();
   document.getElementById('pFltSales').onchange = (e)=>{ PIPELINE_FILTER_STATE.sales=e.target.value; renderPipelinePage(); };
   document.getElementById('pFltFollowup').onchange = (e)=>{ PIPELINE_FILTER_STATE.followup=e.target.value; renderPipelinePage(); };
   document.getElementById('pFltIndustry').onchange = (e)=>{ PIPELINE_FILTER_STATE.industry=e.target.value; renderPipelinePage(); };
@@ -327,4 +330,154 @@ function pipelineCardHtml(l){
       ${isOnHold && l.holdReason ? `<div class="pcard-note">${escapeHtml(l.holdReason)}</div>` : ''}
     </div>
   `;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Add to Pipeline — Founder/Admin only (sales-restructure task). Pipeline */
+/* now starts at Quote and Demo Sent; New Lead / Contacted / Qualified are */
+/* managed only in Lead Records. This is the one bridge between the two:  */
+/* it selects an EXISTING lead (never creates a new one), requires a      */
+/* unique Project Code, and advances that SAME lead straight to Quote and */
+/* Demo Sent via advanceLeadToPipeline() (leads.js). Reachable from the   */
+/* Pipeline page's own button, from a Qualified lead's row action in Lead */
+/* Records, and from that lead's own Detail modal (spec §12) — all three  */
+/* open this exact same modal.                                            */
+/* ---------------------------------------------------------------------- */
+function openAddToPipelineModal(opts={}){
+  if(!isFounder()){ toast('Only Founder/Admin can add a lead to Pipeline.', 'error'); return; }
+  const { preselectedLeadId=null, onDone=null } = opts;
+
+  // Eligibility (spec §4 default/recommended): Qualified leads only. A
+  // lead that has already been added to Pipeline is no longer Qualified
+  // (its status is already Quote and Demo Sent or later), so it is
+  // structurally excluded here — satisfying the duplicate-protection rule
+  // (spec §9) without any extra bookkeeping.
+  function eligibleLeads(){
+    return DB.all('leads').filter(l=> !l.archived && l.status==='Qualified');
+  }
+
+  let selectedLead = preselectedLeadId ? DB.find('leads', preselectedLeadId) : null;
+  if(selectedLead && selectedLead.status !== 'Qualified'){
+    toast('This lead is already in the Pipeline.', 'error');
+    selectedLead = null;
+  }
+
+  const html = `
+    <div class="modal-head"><h3>Add to Pipeline</h3><button class="modal-close" id="atpClose">&times;</button></div>
+    <div class="modal-body">
+      <div class="form-field full" style="margin-bottom:14px">
+        <label class="required">Select Lead</label>
+        <div class="search-box" style="max-width:100%">
+          ${icon('search')}
+          <input type="text" id="atpSearch" placeholder="Search by Lead ID, client, business, phone, or service…">
+        </div>
+        <div id="atpResults" style="margin-top:8px;max-height:180px;overflow-y:auto;border:1px solid var(--line);border-radius:9px"></div>
+        <div id="atpSelected" style="margin-top:8px"></div>
+      </div>
+      <div id="atpCodeWrap" style="display:none">
+        <div class="form-field">
+          <label class="required">Project Code</label>
+          <input id="atpCode" placeholder="e.g. C046" style="text-transform:uppercase">
+          <span class="form-hint">Must be unique across all leads and projects (not case-sensitive).</span>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-secondary" id="atpCancel">Cancel</button>
+      <button class="btn btn-primary" id="atpConfirm" disabled>Confirm</button>
+    </div>
+  `;
+
+  openModal(html, { large:true, onMount:(overlay)=>{
+    overlay.querySelector('#atpClose').onclick = closeModal;
+    overlay.querySelector('#atpCancel').onclick = closeModal;
+
+    const resultsEl = overlay.querySelector('#atpResults');
+    const selectedEl = overlay.querySelector('#atpSelected');
+    const codeWrap = overlay.querySelector('#atpCodeWrap');
+    const codeInput = overlay.querySelector('#atpCode');
+    const confirmBtn = overlay.querySelector('#atpConfirm');
+
+    function renderSelected(){
+      if(!selectedLead){
+        selectedEl.innerHTML = '';
+        codeWrap.style.display = 'none';
+        confirmBtn.disabled = true;
+        return;
+      }
+      selectedEl.innerHTML = `
+        <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:13px">
+          <div class="flex-row" style="justify-content:space-between">
+            <span class="cell-strong">${escapeHtml(selectedLead.id)} — ${escapeHtml(selectedLead.clientName)} (${escapeHtml(selectedLead.businessName)})</span>
+            <span class="cell-link" id="atpUnselect" style="font-size:12px">Change</span>
+          </div>
+          <div class="text-muted" style="margin-top:6px;font-size:12px">
+            Interested Service: ${escapeHtml(selectedLead.interestedService)} · Est. Value: ${money(selectedLead.estimatedValue)}<br>
+            Assigned Sales: ${escapeHtml(selectedLead.assignedSales||'—')} · Current Status: ${statusBadge(selectedLead.status)}
+          </div>
+        </div>`;
+      overlay.querySelector('#atpUnselect').onclick = ()=>{ selectedLead=null; codeInput.value=''; renderSelected(); };
+      codeWrap.style.display = 'block';
+      if(!codeInput.value) codeInput.value = suggestNextProjectCode();
+      confirmBtn.disabled = false;
+    }
+    renderSelected();
+
+    overlay.querySelector('#atpSearch').oninput = (e)=>{
+      const q = e.target.value.trim().toLowerCase();
+      if(!q){ resultsEl.innerHTML=''; resultsEl.style.display='none'; return; }
+      const matches = eligibleLeads().filter(l=>
+        l.id.toLowerCase().includes(q) || l.clientName.toLowerCase().includes(q) ||
+        l.businessName.toLowerCase().includes(q) || (l.phone||'').includes(q) ||
+        (l.interestedService||'').toLowerCase().includes(q)
+      ).slice(0,8);
+      resultsEl.style.display = 'block';
+      resultsEl.innerHTML = matches.length ? matches.map(l=>`
+        <div class="mini-row" style="cursor:pointer" data-pick="${l.id}">
+          <div class="mini-main">
+            <div class="mini-title">${escapeHtml(l.clientName)} — ${escapeHtml(l.businessName)}</div>
+            <div class="mini-sub">${l.id} · ${escapeHtml(l.interestedService)} · ${money(l.estimatedValue)}</div>
+          </div>
+        </div>`).join('') : `<div class="text-muted" style="padding:10px;font-size:12.5px">No eligible Qualified leads match.</div>`;
+      resultsEl.querySelectorAll('[data-pick]').forEach(row=>{
+        row.onclick = ()=>{
+          selectedLead = DB.find('leads', row.dataset.pick);
+          resultsEl.innerHTML = ''; resultsEl.style.display = 'none';
+          overlay.querySelector('#atpSearch').value = '';
+          codeInput.value = '';
+          renderSelected();
+        };
+      });
+    };
+
+    confirmBtn.onclick = ()=>{
+      if(!selectedLead){ toast('Please select a lead.', 'error'); return; }
+      // Defense in depth against a race — the lead may have been advanced
+      // by someone else between opening this modal and clicking Confirm.
+      const fresh = DB.find('leads', selectedLead.id);
+      if(!fresh || fresh.status !== 'Qualified'){
+        toast('This lead is already in the Pipeline.', 'error');
+        selectedLead = null; renderSelected();
+        return;
+      }
+      const normalized = normalizeProjectCode(codeInput.value);
+      if(!normalized){
+        codeInput.style.borderColor='var(--red)';
+        toast('Project Code is required.', 'error');
+        return;
+      }
+      if(isProjectCodeTaken(normalized, { excludeLeadId: fresh.id })){
+        codeInput.style.borderColor='var(--red)';
+        toast(`Project Code ${normalized} is already in use.`, 'error');
+        return;
+      }
+      codeInput.style.borderColor='';
+      advanceLeadToPipeline(fresh, normalized);
+      toast(`${fresh.id} added to Pipeline as ${normalized}.`, 'success');
+      closeModal();
+      if(currentRoute()==='pipeline') renderPipelinePage();
+      if(currentRoute()==='leads') renderLeadsTable();
+      if(onDone) onDone();
+    };
+  }});
 }

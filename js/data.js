@@ -57,14 +57,29 @@ const QUOTE_AND_DEMO_SENT_STATUS = 'Quote and Demo Sent';
 // logic are completely unchanged — only the label changed.
 const POTENTIAL_FOLLOWUP_STATUS = 'Potential Need Follow Up';
 
+// EARLY-STAGE statuses — managed entirely in Lead Records, never shown as
+// Pipeline columns (see the sales-restructure task). A lead sits here
+// until a Founder/Admin explicitly moves it into Pipeline via
+// "Add to Pipeline" (pipeline.js openAddToPipelineModal), which assigns a
+// Project Code and advances status straight to QUOTE_AND_DEMO_SENT_STATUS
+// on this SAME lead record — no new lead or duplicate is ever created.
+const EARLY_LEAD_STATUSES = ['New Lead', 'Contacted', 'Qualified'];
+
 const LEAD_STATUSES = [
-  'New Lead', 'Contacted', 'Qualified', QUOTE_AND_DEMO_SENT_STATUS,
+  ...EARLY_LEAD_STATUSES, QUOTE_AND_DEMO_SENT_STATUS,
   POTENTIAL_FOLLOWUP_STATUS, ON_HOLD_STATUS, 'Negotiation', 'Confirmed', 'Lost'
 ];
 
-// Statuses that still belong on the Kanban pipeline board
+// Statuses that belong on the Kanban pipeline board. Pipeline now starts
+// from Quote and Demo Sent onward — New Lead / Contacted / Qualified are
+// deliberately NOT here: they are early-stage prospects, managed only in
+// Lead Records, and never rendered as Pipeline columns. This is a pure
+// UI/filtering change (see EARLY_LEAD_STATUSES above) — those statuses are
+// still valid values on LEAD_STATUSES and in the database; nothing about
+// existing leads or their data changes, they simply stop being rendered
+// on the Pipeline board until a Founder/Admin explicitly advances one.
 const PIPELINE_STATUSES = [
-  'New Lead', 'Contacted', 'Qualified', QUOTE_AND_DEMO_SENT_STATUS,
+  QUOTE_AND_DEMO_SENT_STATUS,
   POTENTIAL_FOLLOWUP_STATUS, ON_HOLD_STATUS, 'Negotiation', 'Confirmed'
 ];
 
@@ -74,10 +89,12 @@ const PIPELINE_STATUSES = [
 // instead) and Lost — so a lead is never counted in both Pipeline Value and
 // Closed Sales at once. On Hold / Future Follow-up stays IN this list — it's
 // still a real, active, open opportunity (just temporarily paused), so it
-// must keep counting toward Pipeline Value / Open Leads everywhere that
-// reads this list, exactly like every other open stage.
+// must keep counting toward Pipeline Value everywhere that reads this
+// list, exactly like every other open Pipeline stage. Early-stage leads
+// (New Lead / Contacted / Qualified) are intentionally excluded — Pipeline
+// Value now reflects ONLY opportunities that actually appear in Pipeline.
 const OPEN_PIPELINE_STATUSES = [
-  'New Lead', 'Contacted', 'Qualified', QUOTE_AND_DEMO_SENT_STATUS,
+  QUOTE_AND_DEMO_SENT_STATUS,
   POTENTIAL_FOLLOWUP_STATUS, ON_HOLD_STATUS, 'Negotiation'
 ];
 
@@ -186,7 +203,7 @@ const ACTIVITY_TYPES = [
   'Data Imported', 'Lead Archived', 'Lead Restored', 'Lead Deleted',
   'Payment Updated', 'Payment Voided', 'Project Value Changed',
   'Follow-up Scheduled', 'Follow-up Cancelled',
-  'Project Code Assigned', 'Project Code Changed'
+  'Project Code Assigned', 'Project Code Changed', 'Lead Added to Pipeline'
 ];
 
 /* ---------------------------------------------------------------------- */
