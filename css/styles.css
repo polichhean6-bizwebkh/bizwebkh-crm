@@ -624,9 +624,35 @@ svg{width:18px;height:18px}
 .quote-doc-accept .sig-line{border-bottom:1px solid var(--muted);height:36px}
 .quote-doc-accept span{font-size:11px;color:var(--muted)}
 
+/* Bilingual client-info table (matches the real BizWeb KH quotation layout —
+   e.g. C039 Engly Khun / C001 IIA Education reference documents) and the
+   two-column Important Notes + Bank Details block at the bottom. */
+.quote-doc-infotable{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:14px;border:1px solid var(--line)}
+.quote-doc-infotable th{background:#f4f8ff;color:var(--navy);text-align:left;padding:8px 10px;width:34%;font-weight:700;border-bottom:1px solid var(--line);vertical-align:top}
+.quote-doc-infotable td{padding:8px 10px;border-bottom:1px solid var(--line)}
+.quote-doc-infotable tr:last-child th, .quote-doc-infotable tr:last-child td{border-bottom:none}
+.quote-doc-bottom{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:16px}
+@media (max-width:640px){ .quote-doc-bottom{grid-template-columns:1fr} }
+
 @media print{
   body *{visibility:hidden}
   #quoteDocPrintable, #quoteDocPrintable *{visibility:visible}
-  #quoteDocPrintable{position:absolute;left:0;top:0;width:100%;box-shadow:none;margin:0;padding:0}
+  #quoteDocPrintable{position:absolute;left:0;top:0;width:100%;box-shadow:none;margin:0;padding:0;background:#fff!important}
   .modal-overlay, .modal-head, .modal-foot{background:none}
+  @page{ size:A4; margin:14mm }
+  #quoteDocPrintable table{page-break-inside:auto}
+  #quoteDocPrintable tr{page-break-inside:avoid;page-break-after:auto}
+  #quoteDocPrintable thead{display:table-header-group}
+  #quoteDocPrintable .quote-doc-h{page-break-after:avoid}
+}
+
+/* ---------- Create Quotation: live split-view (Edit | Preview) ---------- */
+.qc-tabs{display:none;gap:8px;margin-bottom:12px}
+.qc-split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:22px;align-items:start}
+.qc-preview-col{position:sticky;top:0}
+.qc-preview-col .quote-doc{margin:0;max-width:none}
+@media (max-width:960px){
+  .qc-tabs{display:flex}
+  .qc-split{display:block}
+  .qc-split [data-hide-narrow]{display:none}
 }

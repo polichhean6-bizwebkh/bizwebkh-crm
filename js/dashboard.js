@@ -103,13 +103,16 @@ function renderDashboard(){
   const pipelineByIndustry = groupByIndustry(openLeads, l=>industryLabel(l.industry), l=>l.estimatedValue||0);
   const closedByIndustry = groupByIndustry(projects, p=>industryLabel(p.industry), p=>p.confirmedValue||0);
 
-  // ----- quotation summary (compact — Draft/Pending/Sent/Accepted + value) -----
-  const quotations = DB.all('quotations');
-  const qDraft = quotations.filter(q=>q.quotationStatus==='Draft').length;
-  const qPending = quotations.filter(q=>q.quotationStatus==='Pending Founder Review').length;
-  const qSent = quotations.filter(q=>q.quotationStatus==='Sent to Client').length;
-  const qAccepted = quotations.filter(q=>q.quotationStatus==='Accepted').length;
-  const qValue = quotations.filter(q=>!q.priceIsTBC).reduce((s,q)=>s+(q.finalPrice||0),0);
+  // ----- quotation summary (compact — Draft/Awaiting Approval/Sent/Accepted + value) -----
+  // Superseded rows are historical-only (see quotations.js liveQuotations())
+  // and are excluded from every count/total here, same as on the Quotations
+  // list page itself.
+  const quotations = DB.all('quotations').filter(q=>q.status!=='Superseded');
+  const qDraft = quotations.filter(q=>q.status==='Draft').length;
+  const qPending = quotations.filter(q=>q.status==='Awaiting Approval').length;
+  const qSent = quotations.filter(q=>quotationDisplayStatus(q)==='Sent').length;
+  const qAccepted = quotations.filter(q=>q.status==='Accepted').length;
+  const qValue = quotations.reduce((s,q)=>s+(Number(q.year1Total)||0),0);
 
   el.innerHTML = `
     ${kpiGroupHtml('Sales Pipeline', pipelineKpis)}

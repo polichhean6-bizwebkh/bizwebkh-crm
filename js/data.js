@@ -203,7 +203,12 @@ const ACTIVITY_TYPES = [
   'Data Imported', 'Lead Archived', 'Lead Restored', 'Lead Deleted',
   'Payment Updated', 'Payment Voided', 'Project Value Changed',
   'Follow-up Scheduled', 'Follow-up Cancelled',
-  'Project Code Assigned', 'Project Code Changed', 'Lead Added to Pipeline'
+  'Project Code Assigned', 'Project Code Changed', 'Lead Added to Pipeline',
+  // Quotations MVP (spec §26) — the 9 required quotation event types.
+  // 'Quotation Created', 'Quotation Sent', 'Quotation Accepted' and
+  // 'Quotation Expired' already existed above and are reused as-is.
+  'Quotation Updated', 'Quotation Submitted for Approval', 'Quotation Approved',
+  'Quotation Rejected', 'Quotation Superseded', 'Quotation Converted to Project'
 ];
 
 /* ---------------------------------------------------------------------- */
@@ -213,13 +218,36 @@ const ACTIVITY_TYPES = [
 /* other list in the app needs to be renamed or duplicated.                */
 /* ---------------------------------------------------------------------- */
 
+// 8-state MVP lifecycle (Quotations spec). "Superseded" is set automatically
+// on the OLD row the moment an already-Sent-or-later quotation is edited and
+// saved as a new revision (see saveQuotationFromState) — it is never chosen
+// directly by a user. "Expired" is likewise never chosen directly; it's
+// calculated from validUntil (see isQuotationExpired) for display, and can
+// also be set explicitly by Founder/Admin for a quotation that's gone stale.
 const QUOTATION_STATUSES = [
-  'Draft', 'Pending Founder Review', 'Approved', 'Sent to Client',
-  'Accepted', 'Rejected', 'Expired'
+  'Draft', 'Awaiting Approval', 'Approved', 'Sent',
+  'Accepted', 'Rejected', 'Expired', 'Superseded'
 ];
+// Statuses that still count as "live" on the list/summary cards — a
+// Superseded row is historical only (reachable from its newer revision's
+// "Version History", never shown in the main list or counted in totals).
+const QUOTATION_LIVE_STATUSES = QUOTATION_STATUSES.filter(s=>s!=='Superseded');
 const APPROVAL_STATUSES = [
   'Sales Approved', 'Founder Review Required', 'Founder Approved', 'Founder Rejected'
 ];
+// A quotation is visually/operationally "Expired" once its Valid Until date
+// has passed, UNLESS it has already reached a terminal state (Accepted/
+// Rejected/Superseded) or is still a Draft (a draft with no send date yet
+// shouldn't nag as expired). This is computed, never stored as the literal
+// status unless a user explicitly marks it Expired.
+function isQuotationExpired(q){
+  if(!q || !q.validUntil) return false;
+  if(['Accepted','Rejected','Superseded','Draft'].includes(q.status)) return false;
+  return isPastLocalDate(q.validUntil);
+}
+function quotationDisplayStatus(q){
+  return isQuotationExpired(q) ? 'Expired' : q.status;
+}
 
 function svcFn(name, opts={}){
   return { id: fnId(), name, included: opts.included!==false, salesCanQuote: opts.salesCanQuote!==false,
@@ -275,6 +303,140 @@ const SERVICE_PRICE_LIST = [
 
 function serviceByProjectType(projectType){
   return SERVICE_PRICE_LIST.find(s=>s.projectType===projectType) || null;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Quotation template family — spec §29/§32: "A. Website Quotation"        */
+/* (Starter/Pro/Pro Max/Dynamic+CMS) vs "B. System Quotation" (Booking/    */
+/* Customer Management/E-Commerce/Custom/Mobile). Drives the Year 2/3 cost */
+/* structure, the standard exclusion block, and the printed document's     */
+/* Khmer/English title ("Website Quotation" vs "System Quotation").        */
+/* ---------------------------------------------------------------------- */
+const WEBSITE_TEMPLATE_PROJECT_TYPES = ['Starter Website', 'Pro Website', 'Pro Max Website', 'Dynamic Website / CMS'];
+function quotationTypeForProjectType(projectType){
+  return WEBSITE_TEMPLATE_PROJECT_TYPES.includes(projectType) ? 'website' : 'system';
+}
+// Domain estimate used to prefill a new quotation's Domain Cost — matches
+// BizWeb KH's real standard-domain budget seen on live quotations (e.g.
+// C039: "up to a normal registrar price of $15"). Founder/Admin can edit
+// per-quotation; this is only the starting suggestion.
+const DEFAULT_DOMAIN_COST_ESTIMATE = 15;
+
+// Year-by-year cost LABELS shown on the printed document — the actual dollar
+// figures come from the service's own basePrice/year2Price/year3Price
+// (Service Price List, Founder/Admin-editable in Settings), this only
+// controls what each year is described as including (spec §17).
+function yearCostLabels(quotationType){
+  return quotationType==='website'
+    ? { y1:'Website Development, Domain & Year-1 Hosting', y2:'Hosting & Domain Renewal', y3:'Hosting & Domain Renewal' }
+    : { y1:'Development, Domain, Hosting/Backend/Database & Maintenance', y2:'Hosting/Backend/Database & Domain Renewal (excl. Development)', y3:'Hosting/Backend/Database & Domain Renewal (excl. Development)' };
+}
+
+/* ---------------------------------------------------------------------- */
+/* Standard exclusions + Important Notes templates, by quotation type —    */
+/* Founder/Admin-editable (Settings → Quotations tab), Sales view-only.    */
+/* Seeded once into settings.quotationDefaults on first load; these        */
+/* constants are only the factory fallback if that settings JSON is empty. */
+/* ---------------------------------------------------------------------- */
+const DEFAULT_QUOTATION_EXCLUSIONS = {
+  website: [
+    'Online payment gateway / e-commerce checkout',
+    'Customer login / member accounts',
+    'Booking or appointment system',
+    'Custom backend system, database, or admin dashboard',
+    'Mobile app (iOS / Android)',
+    'Multi-branch / multi-location management',
+    'Third-party API integrations',
+  ],
+  system: [
+    'Public marketing website (unless separately quoted)',
+    'Online customer booking / public self-service booking',
+    'Online payment gateway',
+    'OTP / SMS verification',
+    'Payroll / HR management',
+    'Accounting integration',
+    'Full POS / inventory management',
+    'Loyalty program',
+    'Multi-branch support',
+    'Mobile app (iOS / Android)',
+  ],
+};
+const DEFAULT_QUOTATION_NOTES = {
+  website: [
+    { key:'domainHosting', title:'Domain & Hosting Support', text:'Year 1 domain and hosting are included as quoted above. From Year 2 onward, domain and hosting renewal is billed annually at the rates shown.' },
+    { key:'annualRenewal', title:'Annual Renewal', text:'Annual renewal covers hosting and domain only. It does not include new features or major changes — those are quoted separately.' },
+    { key:'contentDelivery', title:'Content Delivery', text:'Client provides all text content, images/logo, and any account access needed (domain registrar, existing hosting, etc.) before development begins.' },
+    { key:'additionalFeatures', title:'Additional Features', text:'Any feature outside this quotation’s listed scope will be quoted separately.' },
+    { key:'providerCosts', title:'Provider Costs', text:'Domain/registrar and third-party service costs are estimates and may vary slightly at the time of purchase/renewal.' },
+    { key:'newFeatures', title:'New Features', text:'New features requested after this quotation is accepted are quoted and invoiced separately.' },
+  ],
+  system: [
+    { key:'domainHosting', title:'Domain & Hosting Support', text:'Year 1 domain, hosting, backend and database are included as quoted above. From Year 2 onward these are billed annually as an Annual Renewal (Development is not part of the renewal).' },
+    { key:'annualRenewal', title:'Annual Renewal', text:'Annual renewal budget is an estimate based on current usage and may be adjusted before each renewal based on actual usage, storage, or provider pricing.' },
+    { key:'contentDelivery', title:'Content Delivery', text:'Client provides service/price lists, staff information, workflow rules, and any account access needed before development begins.' },
+    { key:'additionalFeatures', title:'Additional Features', text:'Features not listed in the Scope of Work above (see Exclusions) are not included and will be quoted separately.' },
+    { key:'providerCosts', title:'Provider Costs', text:'Hosting/backend/database and domain costs are estimates based on the agreed usage level and may vary if actual usage changes.' },
+    { key:'newFeatures', title:'New Features', text:'New features or major workflow changes requested after acceptance are scoped and quoted separately.' },
+  ],
+};
+function quotationDefaults(){
+  const db = DB.read();
+  const qd = (db && db.settings && db.settings.quotationDefaults) || {};
+  return {
+    exclusions: (qd.exclusions && qd.exclusions.website && qd.exclusions.system) ? qd.exclusions : DEFAULT_QUOTATION_EXCLUSIONS,
+    notes: (qd.notes && qd.notes.website && qd.notes.system) ? qd.notes : DEFAULT_QUOTATION_NOTES,
+    validityDays: qd.validityDays || 30,
+  };
+}
+function bankDetails(){
+  const db = DB.read();
+  return (db && db.settings && db.settings.bankDetails) || {
+    accountName:'POLI CHHEAN', accountNumber:'001 355 592', bankName:'ABA Bank', memo:'', qrImageUrl:''
+  };
+}
+
+/* ---------------------------------------------------------------------- */
+/* Payment schedule presets (spec §19) — splits a total into stages that   */
+/* ALWAYS sum back to exactly the total to the cent: every stage but the   */
+/* last is rounded normally to 2dp, and the last stage absorbs whatever    */
+/* cent(s) rounding left over, so `stages.reduce(sum) === total` always    */
+/* holds exactly, never off by a fraction of a cent.                       */
+/* ---------------------------------------------------------------------- */
+const PAYMENT_SCHEDULE_PRESETS = {
+  '30/70': [
+    { label:'Deposit (Stage 1)', pct:30 },
+    { label:'Final Payment', pct:70 },
+  ],
+  '30/30/40': [
+    { label:'Deposit (Stage 1)', pct:30 },
+    { label:'Milestone Payment (Stage 2)', pct:30 },
+    { label:'Final Payment (Stage 3)', pct:40 },
+  ],
+  '50/50': [
+    { label:'Deposit', pct:50 },
+    { label:'Final Payment', pct:50 },
+  ],
+};
+function computePaymentSchedule(total, presetKey, customStages){
+  const t = Number(total) || 0;
+  let stages;
+  if(presetKey==='Custom' && Array.isArray(customStages) && customStages.length){
+    stages = customStages.map(s=>({ label: s.label, pct: Number(s.pct)||0 }));
+  } else {
+    stages = (PAYMENT_SCHEDULE_PRESETS[presetKey] || PAYMENT_SCHEDULE_PRESETS['30/70']).map(s=>({...s}));
+  }
+  let running = 0;
+  const out = stages.map((s, i)=>{
+    let amount;
+    if(i === stages.length-1){
+      amount = Math.round((t - running) * 100) / 100;
+    } else {
+      amount = Math.round(t * (s.pct/100) * 100) / 100;
+      running = Math.round((running + amount) * 100) / 100;
+    }
+    return { label: s.label, pct: s.pct, amount };
+  });
+  return out;
 }
 
 // Additional functions catalog — can be added to ANY quotation regardless
@@ -366,20 +528,22 @@ function evaluateQuotation({ items, basePackage, discountPct=0, manualAdjustment
   };
 }
 
-// BW-Q-{projectId|leadId}-{YYYYMMDD}[-v{n}]
-function generateQuoteNumber(refCode, version=1){
-  const d = new Date();
+// BW-Q-{PROJECTCODE}-{YYYYMMDD}[-R{n}] (spec §14) — the first quotation for
+// a given project code on a given day gets the plain base number; every
+// later one for that SAME project code + SAME day (a same-day duplicate
+// quote, OR a new revision created by editing an already-Sent quotation —
+// both cases in the spec use this identical -R{n} suffix convention) gets
+// -R1, then -R2, -R3... incrementing until a free number is found. Never
+// returns a number that already exists.
+function generateQuoteNumber(refCode, dateStr){
+  const d = dateStr ? new Date(dateStr) : new Date();
   const ymd = d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
   const base = `BW-Q-${refCode}-${ymd}`;
-  const existing = DB.all('quotations').filter(q=>q.quoteNumber && q.quoteNumber.startsWith(base));
-  let num = base;
-  if(version>1 || existing.some(q=>q.quoteNumber===num)){
-    num = `${base}-v${version}`;
-    while(DB.all('quotations').some(q=>q.quoteNumber===num)){
-      version++; num = `${base}-v${version}`;
-    }
-  }
-  return num;
+  const taken = new Set(DB.all('quotations').map(q=>q.quoteNumber));
+  if(!taken.has(base)) return base;
+  let n = 1;
+  while(taken.has(`${base}-R${n}`)) n++;
+  return `${base}-R${n}`;
 }
 
 function slug(s){ return String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,''); }
@@ -394,7 +558,7 @@ function slug(s){ return String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').repl
 
 const COLLECTION_TABLE = {
   leads: 'leads', projects: 'projects', payments: 'payments', services: 'services',
-  leadActivities: 'lead_activities',
+  leadActivities: 'lead_activities', quotations: 'quotations',
 };
 
 function userIdToName(id){
@@ -566,6 +730,76 @@ function serviceToRow(s){
   };
 }
 
+// Quotations — each row is a fully self-contained snapshot (scope items,
+// exclusions, notes, payment schedule all inline as jsonb), which is what
+// makes versioning-on-edit safe: creating a new revision never risks
+// mutating an older, already-Sent version's numbers, because every version
+// is its own complete row (see saveQuotationFromState in quotations.js).
+function rowToQuotation(row){
+  return {
+    id: row.id, quoteNumber: row.quote_number,
+    rootQuotationId: row.root_quotation_id, version: row.version,
+    previousVersionId: row.previous_version_id,
+    leadId: row.lead_id, projectCode: row.project_code,
+    clientName: row.client_name, businessName: row.business_name,
+    phone: row.phone || '', telegram: row.telegram || '', industry: row.industry || '',
+    interestedService: row.interested_service || '',
+    packageKey: row.package_key, packageName: row.package_name,
+    quotationType: row.quotation_type,
+    status: row.status, approvalStatus: row.approval_status,
+    assignedSales: userIdToName(row.assigned_sales) || 'Unassigned',
+    currency: row.currency || 'USD',
+    domainName: row.domain_name || '', domainCost: row.domain_cost,
+    domainIncluded: row.domain_included !== false, domainRenewalEstimate: row.domain_renewal_estimate,
+    year1Total: row.year1_total, year2Total: row.year2_total, year3Total: row.year3_total,
+    discountPct: row.discount_pct || 0,
+    manualAdjustment: (row.manual_adjustment_amount!=null) ? { amount: row.manual_adjustment_amount, reason: row.manual_adjustment_reason||'' } : null,
+    paymentPreset: row.payment_preset || '30/70',
+    quotationDate: row.quotation_date, validUntil: row.valid_until,
+    demoLink: row.demo_link || '',
+    items: row.scope_items || [], exclusions: row.exclusions || [],
+    importantNotes: row.important_notes || [], paymentSchedule: row.payment_schedule || [],
+    reasons: row.founder_review_reasons || [],
+    createdBy: userIdToName(row.created_by) || 'Unassigned',
+    approvedBy: userIdToName(row.approved_by),
+    createdAt: row.created_at, updatedAt: row.updated_at,
+    finalPrice: row.year1_total, priceIsTBC: row.year1_total==null,
+    basePrice: row.year1_total,
+  };
+}
+function quotationToRow(q){
+  return {
+    id: q.id, quote_number: q.quoteNumber,
+    root_quotation_id: q.rootQuotationId || q.id, version: q.version || 1,
+    previous_version_id: q.previousVersionId || null,
+    lead_id: q.leadId || null, project_code: q.projectCode || null,
+    client_name: q.clientName, business_name: q.businessName,
+    phone: q.phone || null, telegram: q.telegram || null, industry: q.industry || null,
+    interested_service: q.interestedService || null,
+    package_key: q.packageKey, package_name: q.packageName,
+    quotation_type: q.quotationType || 'website',
+    status: q.status, approval_status: q.approvalStatus || null,
+    assigned_sales: userNameToId(q.assignedSales),
+    currency: q.currency || 'USD',
+    domain_name: q.domainName || null, domain_cost: q.domainCost==null?null:Number(q.domainCost),
+    domain_included: q.domainIncluded !== false, domain_renewal_estimate: q.domainRenewalEstimate==null?null:Number(q.domainRenewalEstimate),
+    year1_total: q.year1Total==null?null:Number(q.year1Total),
+    year2_total: q.year2Total==null?null:Number(q.year2Total),
+    year3_total: q.year3Total==null?null:Number(q.year3Total),
+    discount_pct: Number(q.discountPct)||0,
+    manual_adjustment_amount: q.manualAdjustment ? Number(q.manualAdjustment.amount) : null,
+    manual_adjustment_reason: q.manualAdjustment ? (q.manualAdjustment.reason||'') : null,
+    payment_preset: q.paymentPreset || '30/70',
+    quotation_date: q.quotationDate, valid_until: q.validUntil || null,
+    demo_link: q.demoLink || null,
+    scope_items: q.items || [], exclusions: q.exclusions || [],
+    important_notes: q.importantNotes || [], payment_schedule: q.paymentSchedule || [],
+    founder_review_reasons: q.reasons || [],
+    created_by: userNameToId(q.createdBy), approved_by: userNameToId(q.approvedBy),
+    created_at: q.createdAt || undefined, updated_at: new Date().toISOString(),
+  };
+}
+
 // Local copies of app.js's initialsOf()/avatarColorFor() — DB.init() (and
 // therefore rowToUser) runs during the dashboard bootstrap BEFORE app.js is
 // loaded (see dashboard/index.html), so this file can't rely on those
@@ -594,7 +828,7 @@ const DB = {
   // (see dashboard/index.html's bootstrap script) — every DB.all()/find()
   // call after that point reads synchronously from _cache.
   async init(){
-    const [leadsRes, projectsRes, paymentsRes, activitiesRes, servicesRes, settingsRes, profilesRes, leadActivitiesRes] = await Promise.all([
+    const [leadsRes, projectsRes, paymentsRes, activitiesRes, servicesRes, settingsRes, profilesRes, leadActivitiesRes, quotationsRes] = await Promise.all([
       supabaseClient.from('leads').select('*'),
       supabaseClient.from('projects').select('*'),
       supabaseClient.from('payments').select('*'),
@@ -603,9 +837,10 @@ const DB = {
       supabaseClient.from('settings').select('*').eq('id', true).maybeSingle(),
       supabaseClient.from('profiles').select('*'),
       supabaseClient.from('lead_activities').select('*').order('created_at', { ascending:false }).limit(2000),
+      supabaseClient.from('quotations').select('*').order('created_at', { ascending:false }),
     ]);
 
-    [leadsRes, projectsRes, paymentsRes, activitiesRes, servicesRes, settingsRes, profilesRes, leadActivitiesRes].forEach(r=>{
+    [leadsRes, projectsRes, paymentsRes, activitiesRes, servicesRes, settingsRes, profilesRes, leadActivitiesRes, quotationsRes].forEach(r=>{
       if(r && r.error) console.error('Supabase fetch error', r.error);
     });
 
@@ -617,11 +852,14 @@ const DB = {
     this._cache.activities = (activitiesRes.data || []).map(rowToActivity);
     this._cache.services = (servicesRes.data || []).map(rowToService);
     this._cache.leadActivities = (leadActivitiesRes.data || []).map(rowToLeadActivity);
-    this._cache.settings = { discountLimitPct: (settingsRes.data && settingsRes.data.discount_limit_pct) || 10 };
-    // Never Supabase-backed — kept empty/local-only so quotations.js
-    // doesn't throw. Follow-up notes/history now live in lead_activities
-    // (Supabase-backed, see above) — `followups` is unused dead cache.
-    this._cache.quotations = this._cache.quotations || [];
+    this._cache.quotations = (quotationsRes.data || []).map(rowToQuotation);
+    this._cache.settings = {
+      discountLimitPct: (settingsRes.data && settingsRes.data.discount_limit_pct) || 10,
+      bankDetails: (settingsRes.data && settingsRes.data.bank_details) || null,
+      quotationDefaults: (settingsRes.data && settingsRes.data.quotation_defaults) || null,
+    };
+    // Never Supabase-backed — kept empty/local-only, dead cache from an
+    // earlier build; quotations itself is now fully Supabase-backed above.
     this._cache.followups = this._cache.followups || [];
     this._cache.quotationReviews = this._cache.quotationReviews || [];
 
@@ -653,7 +891,11 @@ const DB = {
   upsert(collection, record){
     if(collection==='settings'){
       this._cache.settings = { ...this._cache.settings, ...record };
-      supabaseClient.from('settings').update({ discount_limit_pct: this._cache.settings.discountLimitPct }).eq('id', true)
+      const patch = {};
+      if(record.discountLimitPct!==undefined) patch.discount_limit_pct = this._cache.settings.discountLimitPct;
+      if(record.bankDetails!==undefined) patch.bank_details = this._cache.settings.bankDetails;
+      if(record.quotationDefaults!==undefined) patch.quotation_defaults = this._cache.settings.quotationDefaults;
+      supabaseClient.from('settings').update(patch).eq('id', true)
         .then(({error})=>{ if(error) console.error('Supabase settings update failed', error); })
         .catch(e=> console.error('Supabase settings update failed', e));
       return this._cache.settings;
@@ -682,14 +924,16 @@ const DB = {
       return record;
     }
 
-    if(collection==='quotations' || collection==='followups' || collection==='quotationReviews'){
-      // No Supabase table for these yet — cache-only.
+    if(collection==='followups' || collection==='quotationReviews'){
+      // No Supabase table for these (quotationReviews' info now lives inline
+      // on the quotation row itself — reasons/approvedBy/status — nothing
+      // is lost, this cache is just unused by the current quotations.js).
       return record;
     }
 
     const table = COLLECTION_TABLE[collection];
     if(!table) return record; // unknown/local-only collection — cache-only, no remote sync
-    const toRow = { leads: leadToRow, projects: projectToRow, payments: paymentToRow, services: serviceToRow }[collection];
+    const toRow = { leads: leadToRow, projects: projectToRow, payments: paymentToRow, services: serviceToRow, quotations: quotationToRow }[collection];
     supabaseClient.from(table).upsert(toRow(record))
       .then(({error})=>{ if(error) console.error(`Supabase upsert failed for ${collection}`, error); })
       .catch(e=> console.error(`Supabase upsert failed for ${collection}`, e));

@@ -1,9 +1,11 @@
 /* ==========================================================================
    BizWeb KH CRM — quotations.js
-   Quotations list, Create Quotation flow (Lead / Project / New Client),
-   Service Price List–driven pricing with Sales-authority + Founder-review
-   rules, branded preview + PDF (browser print), and the Sent → Accepted →
-   Project-creation workflow.
+   Quotations MVP: list + summary cards, Create Quotation (lead/opportunity
+   autocomplete -> auto-fill -> package/scope/pricing/payment schedule ->
+   live A4 preview), Sales-authority + Founder-review workflow, versioning
+   (edit-after-Sent creates a new revision, old one -> Superseded), branded
+   bilingual preview + PDF (browser print), and Accepted -> Convert to
+   Project.
    ========================================================================== */
 
 function isFounder(){ return /Founder/i.test(CURRENT_USER.role); }
@@ -12,77 +14,75 @@ function discountLimitPct(){ const db = DB.read(); return (db && db.settings && 
 // overrides the global default when present.
 function effectiveDiscountLimit(svc){ return (svc && svc.maxDiscountPct!=null) ? svc.maxDiscountPct : discountLimitPct(); }
 
+const QUOTATIONS_MODULE_ENABLED = true;
+
 /* ---------------------------------------------------------------------- */
 /* List page                                                              */
 /* ---------------------------------------------------------------------- */
 
-let QUOT_FILTER = { search:'', status:'', approval:'' };
-
-// ---------------------------------------------------------------------- //
-// Session 5: the Quotations module is temporarily disabled ("Coming
-// Soon") — BizWeb KH wants to deploy the CRM sooner and the quotation
-// generator is not finished yet. Nothing below this flag is deleted: the
-// full list/create/edit/accept workflow (renderQuotationsPageFull, etc.)
-// still exists intact, it's just not the page that's shown right now.
-// Flip QUOTATIONS_MODULE_ENABLED back to true once the module is ready.
-// ---------------------------------------------------------------------- //
-const QUOTATIONS_MODULE_ENABLED = false;
+let QUOT_FILTER = { search:'', status:'', sales:'' };
 
 function renderQuotationsPage(){
-  if(!QUOTATIONS_MODULE_ENABLED){
-    renderQuotationsComingSoon();
-    return;
-  }
-  renderQuotationsPageFull();
-}
-
-function renderQuotationsComingSoon(){
   const el = document.getElementById('pageContent');
   el.innerHTML = `
-    <div class="panel" style="min-height:60vh;display:flex;align-items:center;justify-content:center">
-      <div style="text-align:center;max-width:440px;padding:40px 20px">
-        <div class="coming-soon-icon" style="width:56px;height:56px;border-radius:16px;display:flex;align-items:center;justify-content:center;margin:0 auto 18px">${icon('list')}</div>
-        <h2 style="margin:0 0 8px;font-size:20px;color:var(--text)">Quotation Management</h2>
-        <div class="coming-soon-badge" style="display:inline-block;margin-bottom:14px;padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:700;letter-spacing:.3px;text-transform:uppercase">Coming Soon</div>
-        <p style="color:var(--muted);font-size:13.5px;line-height:1.6;margin:0">
-          The quotation module is currently being prepared. For now, quotations continue to be created using the existing BizWeb KH quotation process.
-        </p>
-      </div>
-    </div>
-  `;
-}
-
-function renderQuotationsPageFull(){
-  const el = document.getElementById('pageContent');
-  el.innerHTML = `
+    <div id="quotSummaryCards"></div>
     <div class="filters-bar">
       <div class="search-box">
         ${icon('search')}
-        <input type="text" id="qSearch" placeholder="Search quote no., client, or business…" value="${escapeHtml(QUOT_FILTER.search)}">
+        <input type="text" id="qSearch" placeholder="Search quote no., project code, client, or business…" value="${escapeHtml(QUOT_FILTER.search)}">
       </div>
       <select id="qFltStatus" class="sel"><option value="">All Statuses</option>${QUOTATION_STATUSES.map(s=>`<option ${QUOT_FILTER.status===s?'selected':''}>${s}</option>`).join('')}</select>
-      <select id="qFltApproval" class="sel"><option value="">All Approval</option>${APPROVAL_STATUSES.map(s=>`<option ${QUOT_FILTER.approval===s?'selected':''}>${s}</option>`).join('')}</select>
+      <select id="qFltSales" class="sel"><option value="">All Sales</option>${salesOwnersList().map(s=>`<option ${QUOT_FILTER.sales===s?'selected':''}>${s}</option>`).join('')}</select>
       <div class="spacer"></div>
-      <button class="btn btn-primary" id="createQuoteBtn">${icon('grid')} + Create Quotation</button>
+      <button class="btn btn-primary" id="createQuoteBtn">${icon('quote')} + Create Quotation</button>
     </div>
     <div id="quotTableWrap"></div>
   `;
   document.getElementById('qSearch').oninput = e=>{ QUOT_FILTER.search=e.target.value; renderQuotTable(); };
   document.getElementById('qFltStatus').onchange = e=>{ QUOT_FILTER.status=e.target.value; renderQuotTable(); };
-  document.getElementById('qFltApproval').onchange = e=>{ QUOT_FILTER.approval=e.target.value; renderQuotTable(); };
+  document.getElementById('qFltSales').onchange = e=>{ QUOT_FILTER.sales=e.target.value; renderQuotTable(); };
   document.getElementById('createQuoteBtn').onclick = ()=> openCreateQuotationModal();
+  renderQuotSummaryCards();
   renderQuotTable();
+}
+
+// Live quotations = everything except Superseded (historical-only, reached
+// via a newer revision's Version History) — never counted or listed here
+// unless the user explicitly filters the Status dropdown to "Superseded".
+function liveQuotations(){
+  return DB.all('quotations').filter(q=>q.status!=='Superseded');
+}
+
+function renderQuotSummaryCards(){
+  const wrap = document.getElementById('quotSummaryCards');
+  const list = liveQuotations();
+  const draft = list.filter(q=>q.status==='Draft').length;
+  const awaiting = list.filter(q=>q.status==='Awaiting Approval').length;
+  const sent = list.filter(q=>quotationDisplayStatus(q)==='Sent').length;
+  const accepted = list.filter(q=>q.status==='Accepted').length;
+  const totalValue = list.reduce((s,q)=> s + (Number(q.year1Total)||0), 0);
+  wrap.innerHTML = `
+    <div class="kpi-grid summary-cards-5" style="margin-bottom:14px">
+      <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px">${draft}</div><div class="kpi-label" style="margin-top:4px">Draft</div></div>
+      <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px;color:var(--amber)">${awaiting}</div><div class="kpi-label" style="margin-top:4px">Awaiting Approval</div></div>
+      <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px;color:var(--blue)">${sent}</div><div class="kpi-label" style="margin-top:4px">Sent</div></div>
+      <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px;color:var(--green)">${accepted}</div><div class="kpi-label" style="margin-top:4px">Accepted</div></div>
+      <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px">${money(totalValue)}</div><div class="kpi-label" style="margin-top:4px">Total Quoted Value</div></div>
+    </div>
+  `;
 }
 
 function filteredQuotations(){
   const f = QUOT_FILTER;
-  return DB.all('quotations').filter(q=>{
+  const base = f.status==='Superseded' ? DB.all('quotations') : liveQuotations();
+  return base.filter(q=>{
     if(f.search){
       const s = f.search.toLowerCase();
-      if(!(q.quoteNumber.toLowerCase().includes(s) || q.clientName.toLowerCase().includes(s) || q.businessName.toLowerCase().includes(s))) return false;
+      const hay = [q.quoteNumber, q.projectCode, q.clientName, q.businessName].filter(Boolean).join(' ').toLowerCase();
+      if(!hay.includes(s)) return false;
     }
-    if(f.status && q.quotationStatus!==f.status) return false;
-    if(f.approval && q.approvalStatus!==f.approval) return false;
+    if(f.status && quotationDisplayStatus(q)!==f.status && q.status!==f.status) return false;
+    if(f.sales && q.assignedSales!==f.sales) return false;
     return true;
   }).sort((a,b)=> new Date(b.createdAt)-new Date(a.createdAt));
 }
@@ -94,56 +94,103 @@ function renderQuotTable(){
     <div class="table-wrap scroll-x">
       <table class="data-table">
         <thead><tr>
-          <th>Quote No.</th><th>Client</th><th>Business</th><th>Project / Package</th><th>Value</th>
-          <th>Sales</th><th>Status</th><th>Created</th><th>Valid Until</th><th>Approval</th><th>Actions</th>
+          <th>Quote No.</th><th>Project Code</th><th>Client / Business</th><th>Package</th><th>Amount</th>
+          <th>Sales</th><th>Status</th><th>Date</th><th>Valid Until</th><th>Actions</th>
         </tr></thead>
         <tbody>
           ${rows.length ? rows.map(q=>`
             <tr>
-              <td class="cell-link" data-open="${q.id}">${q.quoteNumber}</td>
-              <td class="cell-strong">${escapeHtml(q.clientName)}</td>
-              <td>${escapeHtml(q.businessName)}</td>
-              <td>${escapeHtml(q.projectType)}</td>
-              <td class="cell-strong">${q.priceIsTBC?'TBC':money(q.finalPrice)}</td>
+              <td class="cell-link" data-open="${q.id}">${q.quoteNumber}${q.version>1?` <span class="text-muted" style="font-weight:400">v${q.version}</span>`:''}</td>
+              <td>${escapeHtml(q.projectCode||'—')}</td>
+              <td><div class="cell-strong">${escapeHtml(q.clientName)}</div><div class="text-muted" style="font-size:11.5px">${escapeHtml(q.businessName)}</div></td>
+              <td>${escapeHtml(q.packageName||q.packageKey||'')}</td>
+              <td class="cell-strong">${q.priceIsTBC?'TBC':money(q.year1Total)}</td>
               <td><div class="flex-row"><div class="avatar-sm" style="background:${userColor(q.assignedSales)}">${userInitials(q.assignedSales)}</div>${escapeHtml(q.assignedSales)}</div></td>
-              <td>${statusBadge(q.quotationStatus)}</td>
-              <td>${fmtDate(q.createdAt)}</td>
+              <td>${statusBadge(quotationDisplayStatus(q))}</td>
+              <td>${fmtDate(q.quotationDate||q.createdAt)}</td>
               <td>${fmtDate(q.validUntil)}</td>
-              <td>${statusBadge(q.approvalStatus)}</td>
               <td>
                 <div class="flex-row" style="gap:6px;flex-wrap:wrap">
                   <button class="btn btn-secondary btn-sm" data-open="${q.id}">View</button>
-                  <button class="btn btn-ghost btn-sm" data-preview="${q.id}">Preview</button>
+                  <button class="btn btn-ghost btn-sm" data-dup="${q.id}">Duplicate</button>
+                  <button class="btn btn-ghost btn-sm" data-pdf="${q.id}">PDF</button>
                 </div>
               </td>
-            </tr>`).join('') : `<tr><td colspan="11"><div class="empty-row">No quotations yet. Use "+ Create Quotation" to start one.</div></td></tr>`}
+            </tr>`).join('') : `<tr><td colspan="10"><div class="empty-row">No quotations yet. Use "+ Create Quotation" to start one.</div></td></tr>`}
         </tbody>
       </table>
     </div>
-    <p class="text-muted" style="margin-top:10px;font-size:12px">Showing ${rows.length} of ${DB.all('quotations').length} quotations</p>
+    <p class="text-muted" style="margin-top:10px;font-size:12px">Showing ${rows.length} of ${liveQuotations().length} quotations</p>
   `;
   wrap.querySelectorAll('[data-open]').forEach(x=> x.onclick = ()=> openQuotationDetailModal(x.dataset.open));
-  wrap.querySelectorAll('[data-preview]').forEach(x=> x.onclick = ()=> openQuotationPreview(x.dataset.preview));
+  wrap.querySelectorAll('[data-pdf]').forEach(x=> x.onclick = ()=> openQuotationPreview(x.dataset.pdf, true));
+  wrap.querySelectorAll('[data-dup]').forEach(x=> x.onclick = ()=> duplicateQuotation(x.dataset.dup));
+}
+
+function duplicateQuotation(id){
+  const q = DB.find('quotations', id);
+  if(!q) return;
+  openCreateQuotationModal({ leadId: q.leadId, sourceType: q.leadId ? 'lead' : 'new', duplicateFrom: q.id });
 }
 
 /* ---------------------------------------------------------------------- */
-/* Create Quotation                                                       */
+/* Create Quotation — Step 1: lead / opportunity autocomplete             */
 /* ---------------------------------------------------------------------- */
 
-// draftItems holds the live-editable line items while the create modal is open
 let QC_STATE = null;
+let QC_TAB = 'edit'; // 'edit' | 'preview' — used on narrow screens only
+
+// Any lead/opportunity that a quotation can be created against — never
+// creates a duplicate lead: this always searches EXISTING Lead Records
+// (spec §3), Pipeline opportunities preferred/sorted first, never filtered
+// down to only "eligible" ones the way Add-to-Pipeline is (a quotation can
+// legitimately be created against a lead at any stage).
+function quotationSearchableLeads(){
+  return DB.all('leads').filter(l=>!l.archived);
+}
+function digitsOnly(s){ return String(s||'').replace(/\D/g,''); }
+function quotationLeadMatches(l, nq){
+  if(!nq) return true;
+  const fields = [l.id, l.clientName, l.businessName, l.interestedService, l.projectCode].filter(Boolean).map(v=>String(v).toLowerCase());
+  if(fields.some(f=>f.includes(nq))) return true;
+  const qDigits = digitsOnly(nq);
+  return qDigits.length>=3 && digitsOnly(l.phone).includes(qDigits);
+}
+function quotationLeadSuggestions(query){
+  const nq = String(query||'').trim().toLowerCase();
+  let leads = quotationSearchableLeads();
+  if(nq) leads = leads.filter(l=>quotationLeadMatches(l, nq));
+  // Pipeline opportunities preferred/sorted first (spec §3), then the rest,
+  // each group newest-first.
+  leads.sort((a,b)=>{
+    const pa = PIPELINE_STATUSES.includes(a.status) ? 0 : 1;
+    const pb = PIPELINE_STATUSES.includes(b.status) ? 0 : 1;
+    if(pa!==pb) return pa-pb;
+    return new Date(b.createdAt) - new Date(a.createdAt);
+  });
+  return leads.slice(0, 10);
+}
 
 function openCreateQuotationModal(prefill={}){
-  QC_STATE = {
-    sourceType: prefill.sourceType || 'lead', // lead | project | new
+  let base = null;
+  if(prefill.duplicateFrom){
+    const src = DB.find('quotations', prefill.duplicateFrom);
+    if(src) base = loadStateFromQuotation(src, { asDuplicate:true });
+  }
+  QC_STATE = base || {
+    sourceType: prefill.sourceType || 'lead', // lead | new
     leadId: prefill.leadId || null,
-    projectId: prefill.projectId || null,
-    clientName:'', businessName:'', phone:'', telegram:'', email:'', industry:'', assignedSales: CURRENT_USER.name,
-    projectType:'', discountPct:0, adjustment:0, adjustmentReason:'',
-    items: [], editingId: prefill.editingId || null,
+    clientName:'', businessName:'', phone:'', telegram:'', industry:'', interestedService:'',
+    assignedSales: CURRENT_USER.name,
+    packageKey:'', discountPct:0, adjustment:0, adjustmentReason:'',
+    items: [], exclusions: [], notesOverride: null, clientNote:'',
+    domainName:'', domainCost: DEFAULT_DOMAIN_COST_ESTIMATE, domainIncluded:true, domainRenewalEstimate: DEFAULT_DOMAIN_COST_ESTIMATE,
+    paymentPreset: '30/70', customStages:null,
+    quotationDate: todayLocalISO(), validUntil: daysFromNow(quotationDefaults().validityDays),
+    demoLink:'', editingId: null, versionOf: null,
   };
   if(QC_STATE.leadId) applyLeadToQC(QC_STATE.leadId);
-  if(QC_STATE.projectId) applyProjectToQC(QC_STATE.projectId);
+  QC_TAB = 'edit';
   renderCreateQuotationModal();
 }
 
@@ -151,174 +198,329 @@ function applyLeadToQC(leadId){
   const lead = DB.find('leads', leadId);
   if(!lead) return;
   Object.assign(QC_STATE, {
-    leadId: lead.id, projectId: null,
+    leadId: lead.id, sourceType:'lead', projectCode: lead.projectCode || null,
     clientName: lead.clientName, businessName: lead.businessName, phone: lead.phone,
-    telegram: lead.telegram||'', email:'', industry: lead.industry, assignedSales: lead.assignedSales,
-    projectType: lead.interestedService || QC_STATE.projectType,
+    telegram: lead.telegram||'', industry: lead.industry, interestedService: lead.interestedService||'',
+    assignedSales: canChooseAssignedSales(CURRENT_USER.role) ? lead.assignedSales : CURRENT_USER.name,
   });
-  loadPackageFunctions(QC_STATE.projectType);
+  if(!QC_STATE.packageKey && lead.interestedService){
+    const svc = serviceByProjectType(lead.interestedService);
+    if(svc) selectPackageOnQC(svc.projectType);
+  }
 }
-function applyProjectToQC(projectId){
-  const proj = DB.find('projects', projectId);
-  if(!proj) return;
-  Object.assign(QC_STATE, {
-    projectId: proj.id, leadId: proj.leadId||null,
-    clientName: proj.clientName, businessName: proj.businessName, phone: proj.phone||'',
-    telegram:'', email:'', industry: proj.industry, assignedSales: proj.assignedSales,
-    projectType: proj.projectType || QC_STATE.projectType,
-  });
-  loadPackageFunctions(QC_STATE.projectType);
-}
-function loadPackageFunctions(projectType){
+
+function selectPackageOnQC(projectType){
   const svc = serviceByProjectType(projectType);
-  if(!svc){ QC_STATE.items = []; return; }
-  // Base package price is its own priced line item; included functions are
-  // bundled into that price (shown at $0 — informational scope, not
-  // separately charged) unless the Service Price List gives one its own
-  // defaultPrice (used for founder-review "no fixed price" functions, where
-  // defaultPrice is null / TBC).
+  QC_STATE.packageKey = projectType;
+  QC_STATE.quotationType = svc ? quotationTypeForProjectType(svc.projectType) : 'website';
+  if(!svc){ QC_STATE.items = []; QC_STATE.exclusions = []; return; }
   const baseItem = { id: fnId(), module: svc.category, name: `${svc.name} (Base Package${svc.priceIsStartingFrom?' — starting from':''})`,
     price: svc.basePrice, founderReviewRequired: svc.founderReviewRequired, included: true };
   const fnItems = svc.functions.map(f=>({ id:fnId(), module: svc.category, name:f.name,
     price: f.defaultPrice===null ? null : 0, founderReviewRequired: f.founderReviewRequired, included: f.included }));
   QC_STATE.items = [baseItem, ...fnItems];
+  QC_STATE.exclusions = [...(quotationDefaults().exclusions[QC_STATE.quotationType]||[])];
+}
+
+function qcQuoteNumberPreview(){
+  const code = QC_STATE.projectCode || QC_STATE.leadId || 'DIRECT';
+  return generateQuoteNumber(code, QC_STATE.quotationDate);
 }
 
 function renderCreateQuotationModal(){
   const s = QC_STATE;
-  const leads = DB.all('leads');
-  const projects = DB.all('projects');
-  const svc = serviceByProjectType(s.projectType);
+  const svc = serviceByProjectType(s.packageKey);
+  const activeItems = s.items.filter(i=>i.included!==false).map(i=>({name:i.name, price:i.price, founderReviewRequired:i.founderReviewRequired}));
   const evalRes = evaluateQuotation({
-    items: s.items.filter(i=>i.included!==false).map(i=>({name:i.name, price:i.price, founderReviewRequired:i.founderReviewRequired})),
-    basePackage: svc, discountPct: Number(s.discountPct)||0,
+    items: activeItems, basePackage: svc, discountPct: Number(s.discountPct)||0,
     manualAdjustment: s.adjustment ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
     discountLimitPct: effectiveDiscountLimit(svc),
   });
+  const year1 = evalRes.finalPrice;
+  const paymentTotal = evalRes.priceIsTBC ? 0 : year1;
+  const schedule = computePaymentSchedule(paymentTotal, s.paymentPreset, s.customStages);
+  const notesList = s.notesOverride || (s.packageKey ? (quotationDefaults().notes[quotationTypeForProjectType(s.packageKey)]||[]) : []);
 
   const html = `
     <div class="modal-head"><h3>${s.editingId?'Edit Quotation':'Create Quotation'}</h3><button class="modal-close" id="cqClose">&times;</button></div>
     <div class="modal-body">
-      <div class="form-field" style="margin-bottom:12px">
-        <label>Source</label>
-        <div class="flex-row" style="gap:8px;flex-wrap:wrap">
-          <button class="btn btn-sm ${s.sourceType==='lead'?'btn-primary':'btn-outline'}" data-src="lead">A. Existing Lead</button>
-          <button class="btn btn-sm ${s.sourceType==='project'?'btn-primary':'btn-outline'}" data-src="project">B. Existing Project</button>
-          <button class="btn btn-sm ${s.sourceType==='new'?'btn-primary':'btn-outline'}" data-src="new">C. New / Direct Client</button>
+      <div class="qc-tabs" style="display:none">
+        <div class="tab-btn ${QC_TAB==='edit'?'active':''}" data-qctab="edit">Edit</div>
+        <div class="tab-btn ${QC_TAB==='preview'?'active':''}" data-qctab="preview">Preview</div>
+      </div>
+      <div class="qc-split">
+        <div class="qc-edit-col" ${QC_TAB!=='edit'?'data-hide-narrow="1"':''}>
+
+          <div class="form-field" style="margin-bottom:12px">
+            <label>Source</label>
+            <div class="flex-row" style="gap:8px;flex-wrap:wrap">
+              <button class="btn btn-sm ${s.sourceType==='lead'?'btn-primary':'btn-outline'}" data-src="lead">Existing Lead / Opportunity</button>
+              <button class="btn btn-sm ${s.sourceType==='new'?'btn-primary':'btn-outline'}" data-src="new">New / Direct Client</button>
+            </div>
+          </div>
+
+          ${s.sourceType==='lead' ? `
+          <div class="form-field full" style="margin-bottom:12px">
+            <label class="required">Select Lead</label>
+            <div class="search-box" id="qcSearchBox" style="max-width:100%">
+              ${icon('search')}
+              <input type="text" id="qcSearch" placeholder="Search by Lead ID, Client Name, Business Name, Phone, or Project Code…" autocomplete="off">
+            </div>
+            <div id="qcResults" class="atp-dropdown" style="display:none"></div>
+            ${s.leadId ? `<div class="text-muted" style="font-size:12px;margin-top:6px">Linked: ${escapeHtml(s.leadId)} — ${escapeHtml(s.clientName)} — ${escapeHtml(s.businessName)}</div>` : ''}
+          </div>` : ''}
+
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">A. Client Information</div>
+          <div class="form-grid">
+            <div class="form-field"><label class="required">Client Name</label><input id="cq_clientName" value="${escapeHtml(s.clientName)}" ${s.sourceType!=='new'?'disabled':''}></div>
+            <div class="form-field"><label class="required">Business Name</label><input id="cq_businessName" value="${escapeHtml(s.businessName)}" ${s.sourceType!=='new'?'disabled':''}></div>
+            <div class="form-field"><label>Phone</label><input id="cq_phone" value="${escapeHtml(s.phone)}" ${s.sourceType!=='new'?'disabled':''}></div>
+            <div class="form-field"><label>Telegram</label><input id="cq_telegram" value="${escapeHtml(s.telegram)}"></div>
+            <div class="form-field"><label class="required">Industry</label>
+              <select id="cq_industry" class="sel" ${s.sourceType!=='new'?'disabled':''}>${INDUSTRIES.map(i=>`<option ${s.industry===i?'selected':''}>${i}</option>`).join('')}</select>
+            </div>
+            <div class="form-field"><label class="required">Assigned Sales</label>
+              ${canChooseAssignedSales(CURRENT_USER.role)
+                ? `<select id="cq_sales" class="sel">${salesOwnersList().map(n=>`<option ${s.assignedSales===n?'selected':''}>${n}</option>`).join('')}</select>`
+                : `<input value="${escapeHtml(s.assignedSales)}" disabled>`}
+            </div>
+          </div>
+
+          <div class="divider"></div>
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">B. Project Information</div>
+          <div class="form-grid">
+            <div class="form-field full">
+              <label class="required">Package (from Service Price List)</label>
+              <select id="cq_package" class="sel" style="width:100%">
+                <option value="">Select a package…</option>
+                ${SERVICE_PRICE_LIST.map(p=>`<option value="${p.projectType}" ${s.packageKey===p.projectType?'selected':''}>${p.name} — ${p.priceIsStartingFrom?'from ':''}$${p.basePrice}${p.salesCanQuote?'':' (Founder Review)'}</option>`).join('')}
+              </select>
+            </div>
+            <div class="form-field"><label>Project Code</label><input value="${escapeHtml(s.projectCode||'Assigned when quotation is sent to a Pipeline project')}" disabled></div>
+            <div class="form-field"><label>Quote No. (preview)</label><input value="${s.packageKey?qcQuoteNumberPreview():'—'}" disabled></div>
+            <div class="form-field"><label class="required">Quotation Date</label><input type="date" id="cq_qdate" value="${s.quotationDate}" ${isFounder()?'':'disabled'}></div>
+            <div class="form-field"><label class="required">Valid Until</label><input type="date" id="cq_validUntil" value="${s.validUntil}" ${isFounder()?'':'disabled'}></div>
+            <div class="form-field full"><label>Demo Link</label><input id="cq_demoLink" value="${escapeHtml(s.demoLink)}" placeholder="https://..."></div>
+          </div>
+
+          <div class="divider"></div>
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Domain</div>
+          <div class="form-grid">
+            <div class="form-field"><label>Domain Name</label><input id="cq_domainName" value="${escapeHtml(s.domainName)}" placeholder="e.g. example.com"></div>
+            <div class="form-field"><label>Domain Cost ($)</label><input type="number" id="cq_domainCost" value="${s.domainCost}"></div>
+            <div class="form-field"><label>Domain Included in Year 1?</label>
+              <select id="cq_domainIncluded" class="sel"><option value="yes" ${s.domainIncluded?'selected':''}>Yes</option><option value="no" ${!s.domainIncluded?'selected':''}>No</option></select>
+            </div>
+            <div class="form-field"><label>Domain Renewal Estimate ($/yr)</label><input type="number" id="cq_domainRenewal" value="${s.domainRenewalEstimate}"></div>
+          </div>
+
+          <div class="divider"></div>
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">C. Scope of Work</div>
+          <div id="cq_itemsWrap">${quotationItemsEditorHtml(s.items)}</div>
+          <button class="btn btn-outline btn-sm" id="cq_addFn" style="margin:8px 0 16px">+ Add Custom Scope Item</button>
+          <div class="text-muted" style="font-size:12px;margin:-8px 0 14px">Standard exclusions for this package (Founder/Admin-editable in Settings → Quotations):</div>
+          <ul style="margin:-8px 0 16px;padding-left:18px;font-size:12.5px;color:var(--muted)">${s.exclusions.map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul>
+
+          <div class="divider"></div>
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">D. Year-by-Year Costs</div>
+          <div class="form-grid">
+            <div class="form-field"><label>Year 1 Total (auto)</label><input value="${evalRes.priceIsTBC?'TBC':money(year1)}" disabled></div>
+            <div class="form-field"><label>Year 2 Renewal ($/yr)</label><input type="number" id="cq_year2" value="${s.year2Total!=null?s.year2Total:(svc?svc.year2Price:0)}" ${isFounder()?'':'disabled'}></div>
+            <div class="form-field"><label>Year 3 Renewal ($/yr)</label><input type="number" id="cq_year3" value="${s.year3Total!=null?s.year3Total:(svc?svc.year3Price:0)}" ${isFounder()?'':'disabled'}></div>
+          </div>
+
+          <div class="divider"></div>
+          ${isFounder() ? `
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Pricing Adjustments (Founder/Admin only)</div>
+          <div class="form-grid">
+            <div class="form-field"><label>Discount %</label><input type="number" id="cq_discount" value="${s.discountPct}" min="0" max="100"></div>
+            <div class="form-field"><label>Manual Price Adjustment ($)</label><input type="number" id="cq_adjust" value="${s.adjustment}"></div>
+            <div class="form-field full"><label>Reason for Price Adjustment ${s.adjustment?'<span class="required"></span>':'(required if adjusting)'}</label><input id="cq_adjustReason" value="${escapeHtml(s.adjustmentReason)}" placeholder='e.g. "Client already has hosting."'></div>
+          </div>
+          <div class="divider"></div>` : `
+          <div class="form-field" style="margin-bottom:12px"><label>Discount %</label><input value="0" disabled></div>
+          <div class="divider"></div>`}
+
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">E. Payment Schedule</div>
+          <div class="form-field" style="margin-bottom:12px">
+            <label>Preset</label>
+            <select id="cq_paymentPreset" class="sel">
+              ${['30/70','30/30/40','50/50','Custom'].map(p=>`<option value="${p}" ${s.paymentPreset===p?'selected':''}>${p}</option>`).join('')}
+            </select>
+          </div>
+          <div class="table-wrap scroll-x">
+            <table class="data-table"><thead><tr><th>Stage</th><th>%</th><th>Amount</th></tr></thead>
+            <tbody>${schedule.map(st=>`<tr><td>${escapeHtml(st.label)}</td><td>${st.pct}%</td><td>${money(st.amount)}</td></tr>`).join('')}</tbody></table>
+          </div>
+          <p class="text-muted" style="font-size:11.5px;margin:6px 0 16px">Stages always sum exactly to the Year 1 Total (${evalRes.priceIsTBC?'TBC':money(year1)}).</p>
+
+          <div class="divider"></div>
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">F. Important Notes</div>
+          ${notesList.map(n=>`<div class="mini-row"><div class="mini-main"><div class="mini-title">${escapeHtml(n.title)}</div><div class="mini-sub">${escapeHtml(n.text)}</div></div></div>`).join('')}
+          <div class="form-field" style="margin:10px 0 16px"><label>Client-Specific Note (optional)</label><textarea id="cq_clientNote" placeholder="Anything specific to this client — never overrides the standard notes above.">${escapeHtml(s.clientNote)}</textarea></div>
+
+          <div id="cq_authorityBanner">${authorityBannerHtml(evalRes)}</div>
+        </div>
+
+        <div class="qc-preview-col" ${QC_TAB!=='preview'?'data-hide-narrow="1"':''}>
+          <div id="cq_livePreview">${quotationPreviewDocHtml(qcStateToPreviewQuotation(s, evalRes, schedule))}</div>
         </div>
       </div>
-
-      ${s.sourceType==='lead' ? `
-        <div class="form-field" style="margin-bottom:12px">
-          <label>Link to Lead</label>
-          <select id="cq_leadPick" class="sel" style="width:100%">
-            <option value="">Select a lead…</option>
-            ${leads.map(l=>`<option value="${l.id}" ${s.leadId===l.id?'selected':''}>${l.id} — ${escapeHtml(l.clientName)} — ${escapeHtml(l.businessName)}</option>`).join('')}
-          </select>
-        </div>` : ''}
-      ${s.sourceType==='project' ? `
-        <div class="form-field" style="margin-bottom:12px">
-          <label>Link to Project</label>
-          <select id="cq_projPick" class="sel" style="width:100%">
-            <option value="">Select a project…</option>
-            ${projects.map(p=>`<option value="${p.id}" ${s.projectId===p.id?'selected':''}>${p.id} — ${escapeHtml(p.clientName)} — ${escapeHtml(p.businessName)}</option>`).join('')}
-          </select>
-        </div>` : ''}
-
-      <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Client Information</div>
-      <div class="form-grid">
-        <div class="form-field"><label class="required">Client Name</label><input id="cq_clientName" value="${escapeHtml(s.clientName)}" ${s.sourceType!=='new'?'disabled':''}></div>
-        <div class="form-field"><label class="required">Business Name</label><input id="cq_businessName" value="${escapeHtml(s.businessName)}" ${s.sourceType!=='new'?'disabled':''}></div>
-        <div class="form-field"><label>Phone</label><input id="cq_phone" value="${escapeHtml(s.phone)}" ${s.sourceType!=='new'?'disabled':''}></div>
-        <div class="form-field"><label>Telegram</label><input id="cq_telegram" value="${escapeHtml(s.telegram)}"></div>
-        <div class="form-field"><label>Email</label><input id="cq_email" value="${escapeHtml(s.email)}"></div>
-        <div class="form-field"><label class="required">Industry</label>
-          <select id="cq_industry" class="sel" ${s.sourceType!=='new'?'disabled':''}>${INDUSTRIES.map(i=>`<option ${s.industry===i?'selected':''}>${i}</option>`).join('')}</select>
-        </div>
-        <div class="form-field"><label class="required">Assigned Sales</label>
-          <select id="cq_sales" class="sel">${salesOwnersList().map(n=>`<option ${s.assignedSales===n?'selected':''}>${n}</option>`).join('')}</select>
-        </div>
-      </div>
-
-      <div class="divider"></div>
-      <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Project / Service</div>
-      <div class="form-field" style="margin-bottom:12px">
-        <label class="required">Package (from Service Price List)</label>
-        <select id="cq_package" class="sel" style="width:100%">
-          <option value="">Select a package…</option>
-          ${SERVICE_PRICE_LIST.map(p=>`<option value="${p.projectType}" ${s.projectType===p.projectType?'selected':''}>${p.name} — ${p.priceIsStartingFrom?'from ':''}$${p.basePrice}</option>`).join('')}
-        </select>
-      </div>
-
-      <div id="cq_itemsWrap">${quotationItemsEditorHtml(s.items)}</div>
-      <button class="btn btn-outline btn-sm" id="cq_addFn" style="margin:8px 0 16px">+ Add Function</button>
-
-      <div class="divider"></div>
-      <div class="form-grid">
-        <div class="form-field"><label>Discount %</label><input type="number" id="cq_discount" value="${s.discountPct}" min="0" max="100"></div>
-        <div class="form-field"><label>Manual Price Adjustment ($)</label><input type="number" id="cq_adjust" value="${s.adjustment}"></div>
-        <div class="form-field full"><label>Reason for Price Adjustment ${s.adjustment?'<span class="required"></span>':'(required if adjusting)'}</label><input id="cq_adjustReason" value="${escapeHtml(s.adjustmentReason)}" placeholder='e.g. "Client already has hosting."'></div>
-      </div>
-
-      <div id="cq_authorityBanner">${authorityBannerHtml(evalRes)}</div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-secondary" id="cqCancel">Cancel</button>
-      <button class="btn btn-primary" id="cqSave">${s.editingId?'Save Changes':'Save as Draft'}</button>
+      <button class="btn btn-primary" id="cqSave">${s.editingId?'Save Revision':'Save as Draft'}</button>
     </div>
   `;
 
   openModal(html, { large:true, onMount:(overlay)=>{
     overlay.querySelector('#cqClose').onclick = closeModal;
     overlay.querySelector('#cqCancel').onclick = closeModal;
+    overlay.querySelectorAll('[data-qctab]').forEach(t=> t.onclick = ()=>{ QC_TAB = t.dataset.qctab; renderCreateQuotationModal(); });
 
     overlay.querySelectorAll('[data-src]').forEach(b=> b.onclick = ()=>{
       s.sourceType = b.dataset.src;
-      if(s.sourceType==='new'){ s.leadId=null; s.projectId=null; }
+      if(s.sourceType==='new'){ s.leadId=null; s.projectCode=null; }
       renderCreateQuotationModal();
     });
 
-    const leadPick = overlay.querySelector('#cq_leadPick');
-    if(leadPick) leadPick.onchange = ()=>{ if(leadPick.value){ applyLeadToQC(leadPick.value); renderCreateQuotationModal(); } };
-    const projPick = overlay.querySelector('#cq_projPick');
-    if(projPick) projPick.onchange = ()=>{ if(projPick.value){ applyProjectToQC(projPick.value); renderCreateQuotationModal(); } };
+    const searchInput = overlay.querySelector('#qcSearch');
+    if(searchInput){
+      const resultsEl = overlay.querySelector('#qcResults');
+      const renderResults = ()=>{
+        const matches = quotationLeadSuggestions(searchInput.value);
+        resultsEl.style.display = 'block';
+        resultsEl.innerHTML = matches.length ? matches.map(l=>`
+          <div class="atp-row" data-pick="${l.id}">
+            <div class="mini-main"><div class="mini-title">${escapeHtml(l.id)} — ${escapeHtml(l.clientName)}</div><div class="mini-sub">${escapeHtml(l.businessName)} · ${escapeHtml(l.status)}</div></div>
+            <span class="atp-pill ${PIPELINE_STATUSES.includes(l.status)?'atp-pill-select':'atp-pill-notqualified'}">${PIPELINE_STATUSES.includes(l.status)?'Pipeline':l.status}</span>
+          </div>`).join('') : `<div class="empty-row">No matching Lead Record found.</div>`;
+        resultsEl.querySelectorAll('[data-pick]').forEach(r=> r.onclick = ()=>{
+          applyLeadToQC(r.dataset.pick);
+          renderCreateQuotationModal();
+        });
+      };
+      searchInput.oninput = renderResults;
+      searchInput.onfocus = renderResults;
+    }
 
-    overlay.querySelector('#cq_clientName').oninput = e=> s.clientName = e.target.value;
-    overlay.querySelector('#cq_businessName').oninput = e=> s.businessName = e.target.value;
-    overlay.querySelector('#cq_phone').oninput = e=> s.phone = e.target.value;
+    const cn = overlay.querySelector('#cq_clientName'); if(cn) cn.oninput = e=>{ s.clientName = e.target.value; refreshQcPreview(overlay); };
+    const bn = overlay.querySelector('#cq_businessName'); if(bn) bn.oninput = e=>{ s.businessName = e.target.value; refreshQcPreview(overlay); };
+    const ph = overlay.querySelector('#cq_phone'); if(ph) ph.oninput = e=> s.phone = e.target.value;
     overlay.querySelector('#cq_telegram').oninput = e=> s.telegram = e.target.value;
-    overlay.querySelector('#cq_email').oninput = e=> s.email = e.target.value;
     const industrySel = overlay.querySelector('#cq_industry');
     if(industrySel) industrySel.onchange = e=> s.industry = e.target.value;
-    overlay.querySelector('#cq_sales').onchange = e=> s.assignedSales = e.target.value;
+    const salesSel = overlay.querySelector('#cq_sales');
+    if(salesSel) salesSel.onchange = e=> s.assignedSales = e.target.value;
 
     overlay.querySelector('#cq_package').onchange = e=>{
-      s.projectType = e.target.value;
-      loadPackageFunctions(s.projectType);
+      selectPackageOnQC(e.target.value);
       renderCreateQuotationModal();
     };
+    overlay.querySelector('#cq_qdate').onchange = e=>{ s.quotationDate = e.target.value; renderCreateQuotationModal(); };
+    overlay.querySelector('#cq_validUntil').onchange = e=>{ s.validUntil = e.target.value; refreshQcPreview(overlay); };
+    overlay.querySelector('#cq_demoLink').oninput = e=>{ s.demoLink = e.target.value; refreshQcPreview(overlay); };
+
+    overlay.querySelector('#cq_domainName').oninput = e=>{ s.domainName = e.target.value; refreshQcPreview(overlay); };
+    overlay.querySelector('#cq_domainCost').oninput = e=>{ s.domainCost = e.target.value; refreshQcPreview(overlay); };
+    overlay.querySelector('#cq_domainIncluded').onchange = e=>{ s.domainIncluded = e.target.value==='yes'; refreshQcPreview(overlay); };
+    overlay.querySelector('#cq_domainRenewal').oninput = e=>{ s.domainRenewalEstimate = e.target.value; refreshQcPreview(overlay); };
 
     overlay.querySelector('#cq_addFn').onclick = ()=> openAddQuotationFunctionModal((fnDef)=>{
       s.items.push({ id: fnId(), module:'Add-on', name: fnDef.name, price: fnDef.defaultPrice, founderReviewRequired: fnDef.founderReviewRequired, included:true });
       renderCreateQuotationModal();
     });
-
     wireQuotationItemsEditor(overlay, s);
 
-    overlay.querySelector('#cq_discount').oninput = e=>{ s.discountPct = e.target.value; refreshAuthorityBanner(overlay, s); };
-    overlay.querySelector('#cq_adjust').oninput = e=>{ s.adjustment = e.target.value; refreshAuthorityBanner(overlay, s); };
-    overlay.querySelector('#cq_adjustReason').oninput = e=>{ s.adjustmentReason = e.target.value; };
+    const discountInput = overlay.querySelector('#cq_discount');
+    if(discountInput) discountInput.oninput = e=>{ s.discountPct = e.target.value; renderCreateQuotationModal(); };
+    const adjustInput = overlay.querySelector('#cq_adjust');
+    if(adjustInput) adjustInput.oninput = e=>{ s.adjustment = e.target.value; renderCreateQuotationModal(); };
+    const adjustReason = overlay.querySelector('#cq_adjustReason');
+    if(adjustReason) adjustReason.oninput = e=>{ s.adjustmentReason = e.target.value; };
+    const y2 = overlay.querySelector('#cq_year2'); if(y2) y2.oninput = e=>{ s.year2Total = e.target.value; refreshQcPreview(overlay); };
+    const y3 = overlay.querySelector('#cq_year3'); if(y3) y3.oninput = e=>{ s.year3Total = e.target.value; refreshQcPreview(overlay); };
+
+    overlay.querySelector('#cq_paymentPreset').onchange = e=>{ s.paymentPreset = e.target.value; renderCreateQuotationModal(); };
+    overlay.querySelector('#cq_clientNote').oninput = e=>{ s.clientNote = e.target.value; refreshQcPreview(overlay); };
 
     overlay.querySelector('#cqSave').onclick = ()=> saveQuotationFromState(s);
   }});
 }
 
+function refreshQcPreview(overlay){
+  const s = QC_STATE;
+  const svc = serviceByProjectType(s.packageKey);
+  const activeItems = s.items.filter(i=>i.included!==false).map(i=>({name:i.name, price:i.price, founderReviewRequired:i.founderReviewRequired}));
+  const evalRes = evaluateQuotation({
+    items: activeItems, basePackage: svc, discountPct: Number(s.discountPct)||0,
+    manualAdjustment: s.adjustment ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
+    discountLimitPct: effectiveDiscountLimit(svc),
+  });
+  const schedule = computePaymentSchedule(evalRes.priceIsTBC?0:evalRes.finalPrice, s.paymentPreset, s.customStages);
+  overlay.querySelector('#cq_authorityBanner').innerHTML = authorityBannerHtml(evalRes);
+  const preview = overlay.querySelector('#cq_livePreview');
+  if(preview) preview.innerHTML = quotationPreviewDocHtml(qcStateToPreviewQuotation(s, evalRes, schedule));
+}
+
+function authorityBannerHtml(evalRes){
+  if(evalRes.requiresFounderReview){
+    return `<div class="panel" style="border-color:var(--orange,#d98a12);background:#fff8ec;padding:12px 14px;margin-top:12px">
+      <strong style="color:#a56206">⚠ Founder Review Required</strong>
+      <ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px;color:var(--navy)">${evalRes.reasons.map(r=>`<li>${escapeHtml(r)}</li>`).join('')}</ul>
+      <div style="margin-top:8px;font-size:13px">Estimated Year 1 Total: <b>${evalRes.priceIsTBC?'TBC':money(evalRes.finalPrice)}</b></div>
+    </div>`;
+  }
+  return `<div class="panel" style="border-color:var(--green,#12a775);background:#eefaf4;padding:12px 14px;margin-top:12px">
+    <strong style="color:#0d8a5f">✓ Within Sales Quoting Authority</strong>
+    <div style="margin-top:8px;font-size:13px">Year 1 Total: <b>${money(evalRes.finalPrice)}</b> ${evalRes.discountAmt?`(after ${money(evalRes.discountAmt)} discount)`:''}</div>
+  </div>`;
+}
+
+function openAddQuotationFunctionModal(onPick){
+  const html = `
+    <div class="modal-head"><h3>Add Scope Item</h3><button class="modal-close" id="afqClose">&times;</button></div>
+    <div class="modal-body">
+      <div class="form-field" style="margin-bottom:12px">
+        <label>Choose from catalog</label>
+        <select id="afq_pick" class="sel" style="width:100%">
+          <option value="">Select a function…</option>
+          ${ADDITIONAL_FUNCTIONS_CATALOG.map(a=>`<option value="${a.id}">${escapeHtml(a.name)} — ${a.defaultPrice===null?'TBC (Founder review)':'$'+a.defaultPrice}</option>`).join('')}
+        </select>
+      </div>
+      <div class="divider"></div>
+      <p class="text-muted" style="font-size:12px;margin:0 0 8px">Or add a custom item not in the catalog — this always requires Founder review (price shows as TBC), matching the spec's advanced-feature warning (OTP, Payment Gateway, Mobile App, Multi-Branch, Advanced API Integration, Custom Workflow, etc.).</p>
+      <div class="form-field"><label>Custom Item Name</label><input id="afq_custom" placeholder="e.g. Loyalty points system"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-secondary" id="afqCancel">Cancel</button>
+      <button class="btn btn-primary" id="afqAdd">Add</button>
+    </div>
+  `;
+  openModal(html, { onMount:(overlay)=>{
+    overlay.querySelector('#afqClose').onclick = closeModal;
+    overlay.querySelector('#afqCancel').onclick = closeModal;
+    overlay.querySelector('#afqAdd').onclick = ()=>{
+      const pickId = overlay.querySelector('#afq_pick').value;
+      const custom = overlay.querySelector('#afq_custom').value.trim();
+      if(pickId){
+        const def = ADDITIONAL_FUNCTIONS_CATALOG.find(a=>a.id===pickId);
+        closeModal(); onPick(def); return;
+      }
+      if(custom){
+        closeModal(); onPick({ name: custom, defaultPrice: null, founderReviewRequired: true }); return;
+      }
+      toast('Pick an item from the catalog, or type a custom one.', 'error');
+    };
+  }});
+}
+
 function quotationItemsEditorHtml(items){
-  if(!items.length) return `<div class="empty-row">Select a package to load its included functions.</div>`;
+  if(!items.length) return `<div class="empty-row">Select a package to load its included scope items.</div>`;
   return `
     <div class="table-wrap scroll-x">
       <table class="data-table">
-        <thead><tr><th>Include</th><th>Module</th><th>Function</th><th>Price</th><th></th></tr></thead>
+        <thead><tr><th>Include</th><th>Module</th><th>Item</th><th>Price</th><th></th></tr></thead>
         <tbody>
           ${items.map(it=>`
             <tr data-item="${it.id}">
@@ -337,148 +539,158 @@ function wireQuotationItemsEditor(overlay, s){
   overlay.querySelectorAll('[data-inc]').forEach(cb=> cb.onchange = ()=>{
     const it = s.items.find(x=>x.id===cb.dataset.inc);
     it.included = cb.checked;
-    refreshAuthorityBanner(overlay, s);
+    renderCreateQuotationModal();
   });
   overlay.querySelectorAll('[data-remove-item]').forEach(x=> x.onclick = ()=>{
     s.items = s.items.filter(i=>i.id!==x.dataset.removeItem);
     renderCreateQuotationModal();
   });
 }
-function refreshAuthorityBanner(overlay, s){
-  const svc = serviceByProjectType(s.projectType);
-  const evalRes = evaluateQuotation({
-    items: s.items.filter(i=>i.included!==false).map(i=>({name:i.name, price:i.price, founderReviewRequired:i.founderReviewRequired})),
-    basePackage: svc, discountPct: Number(s.discountPct)||0,
-    manualAdjustment: s.adjustment ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
-    discountLimitPct: effectiveDiscountLimit(svc),
-  });
-  overlay.querySelector('#cq_authorityBanner').innerHTML = authorityBannerHtml(evalRes);
-}
-function authorityBannerHtml(evalRes){
-  if(evalRes.requiresFounderReview){
-    return `<div class="panel" style="border-color:var(--orange,#d98a12);background:#fff8ec;padding:12px 14px;margin-top:12px">
-      <strong style="color:#a56206">⚠ Founder Review Required</strong>
-      <ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px;color:var(--navy)">${evalRes.reasons.map(r=>`<li>${escapeHtml(r)}</li>`).join('')}</ul>
-      <div style="margin-top:8px;font-size:13px">Estimated Price: <b>${evalRes.priceIsTBC?'TBC':money(evalRes.finalPrice)}</b></div>
-    </div>`;
-  }
-  return `<div class="panel" style="border-color:var(--green,#12a775);background:#eefaf4;padding:12px 14px;margin-top:12px">
-    <strong style="color:#0d8a5f">✓ Within Sales Quoting Authority</strong>
-    <div style="margin-top:8px;font-size:13px">Final Price: <b>${money(evalRes.finalPrice)}</b> ${evalRes.discountAmt?`(after ${money(evalRes.discountAmt)} discount)`:''}</div>
-  </div>`;
-}
 
-function openAddQuotationFunctionModal(onPick){
-  const html = `
-    <div class="modal-head"><h3>Add Function</h3><button class="modal-close" id="afqClose">&times;</button></div>
-    <div class="modal-body">
-      <div class="form-field" style="margin-bottom:12px">
-        <label>Choose from catalog</label>
-        <select id="afq_pick" class="sel" style="width:100%">
-          <option value="">Select a function…</option>
-          ${ADDITIONAL_FUNCTIONS_CATALOG.map(a=>`<option value="${a.id}">${escapeHtml(a.name)} — ${a.defaultPrice===null?'TBC (Founder review)':'$'+a.defaultPrice}</option>`).join('')}
-        </select>
-      </div>
-      <div class="divider"></div>
-      <p class="text-muted" style="font-size:12px;margin:0 0 8px">Or add a custom function not in the catalog — this always requires Founder review (price shows as TBC).</p>
-      <div class="form-field"><label>Custom Function Name</label><input id="afq_custom" placeholder="e.g. Loyalty points system"></div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn btn-secondary" id="afqCancel">Cancel</button>
-      <button class="btn btn-primary" id="afqAdd">Add Function</button>
-    </div>
-  `;
-  openModal(html, { onMount:(overlay)=>{
-    overlay.querySelector('#afqClose').onclick = closeModal;
-    overlay.querySelector('#afqCancel').onclick = closeModal;
-    overlay.querySelector('#afqAdd').onclick = ()=>{
-      const pickId = overlay.querySelector('#afq_pick').value;
-      const custom = overlay.querySelector('#afq_custom').value.trim();
-      if(pickId){
-        const def = ADDITIONAL_FUNCTIONS_CATALOG.find(a=>a.id===pickId);
-        closeModal(); onPick(def); return;
-      }
-      if(custom){
-        closeModal(); onPick({ name: custom, defaultPrice: null, founderReviewRequired: true }); return;
-      }
-      toast('Pick a function from the catalog, or type a custom one.', 'error');
-    };
-  }});
-}
+/* ---------------------------------------------------------------------- */
+/* Save                                                                    */
+/* ---------------------------------------------------------------------- */
 
 function saveQuotationFromState(s){
   if(!s.clientName || !s.businessName){ toast('Client Name and Business Name are required.', 'error'); return; }
-  if(!s.projectType){ toast('Please select a package.', 'error'); return; }
-  if(s.adjustment && !s.adjustmentReason.trim()){ toast('A Reason for Price Adjustment is required.', 'error'); return; }
+  if(!s.packageKey){ toast('Please select a package.', 'error'); return; }
+  if(isFounder() && s.adjustment && !s.adjustmentReason.trim()){ toast('A Reason for Price Adjustment is required.', 'error'); return; }
 
-  const svc = serviceByProjectType(s.projectType);
+  const svc = serviceByProjectType(s.packageKey);
   const activeItems = s.items.filter(i=>i.included!==false);
   const evalRes = evaluateQuotation({
     items: activeItems.map(i=>({name:i.name, price:i.price, founderReviewRequired:i.founderReviewRequired})),
-    basePackage: svc, discountPct: Number(s.discountPct)||0,
-    manualAdjustment: s.adjustment ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
+    basePackage: svc, discountPct: isFounder() ? (Number(s.discountPct)||0) : 0,
+    manualAdjustment: (isFounder() && s.adjustment) ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
     discountLimitPct: effectiveDiscountLimit(svc),
   });
 
-  const refCode = s.projectId || s.leadId || 'DIRECT' + Date.now().toString().slice(-4);
+  const year1Total = evalRes.priceIsTBC ? null : evalRes.finalPrice;
+  const schedule = computePaymentSchedule(year1Total||0, s.paymentPreset, s.customStages);
+  const code = s.projectCode || s.leadId || ('DIRECT'+Date.now().toString().slice(-4));
 
-  let quotation, isNewVersion = false, version = 1;
-  if(s.editingId){
-    const existing = DB.find('quotations', s.editingId);
-    if(existing && existing.quotationStatus==='Draft'){
-      quotation = existing; // edit in place
-    } else if(existing){
-      isNewVersion = true; version = (existing.version||1) + 1;
-    }
-  }
-  if(!quotation){
-    quotation = {
-      id: 'QT' + Math.random().toString(36).slice(2,9).toUpperCase(),
-      createdAt: new Date().toISOString(),
-      createdBy: CURRENT_USER.name,
-      version,
-      previousVersionId: isNewVersion ? s.editingId : null,
-    };
-    quotation.quoteNumber = generateQuoteNumber(refCode, version);
+  let existing = s.editingId ? DB.find('quotations', s.editingId) : null;
+  let isNewRevision = false;
+  let id, rootQuotationId, version, previousVersionId, quoteNumber, createdAt, createdBy;
+
+  if(existing && existing.status==='Draft'){
+    // Draft is mutable in place — no version bump, same id/number.
+    id = existing.id; rootQuotationId = existing.rootQuotationId || existing.id;
+    version = existing.version||1; previousVersionId = existing.previousVersionId||null;
+    quoteNumber = existing.quoteNumber; createdAt = existing.createdAt; createdBy = existing.createdBy;
+  } else if(existing){
+    // Already Sent/Approved/Accepted/etc — editing creates a NEW revision row
+    // and marks the old one Superseded (spec §22): every version is kept,
+    // nothing is silently overwritten.
+    isNewRevision = true;
+    id = 'QT' + Math.random().toString(36).slice(2,9).toUpperCase();
+    rootQuotationId = existing.rootQuotationId || existing.id;
+    version = (existing.version||1) + 1;
+    previousVersionId = existing.id;
+    quoteNumber = generateQuoteNumber(code, s.quotationDate);
+    createdAt = new Date().toISOString(); createdBy = CURRENT_USER.name;
+  } else {
+    id = 'QT' + Math.random().toString(36).slice(2,9).toUpperCase();
+    rootQuotationId = id; version = 1; previousVersionId = null;
+    quoteNumber = generateQuoteNumber(code, s.quotationDate);
+    createdAt = new Date().toISOString(); createdBy = CURRENT_USER.name;
   }
 
-  Object.assign(quotation, {
-    leadId: s.leadId, projectId: s.projectId,
-    clientName: s.clientName, businessName: s.businessName, phone: s.phone, telegram: s.telegram, email: s.email,
-    industry: s.industry, projectType: s.projectType, assignedSales: s.assignedSales,
-    items: activeItems.map(i=>({ id:i.id, module:i.module, name:i.name, price:i.price, founderReviewRequired:i.founderReviewRequired, scopeStatus:'Confirmed' })),
-    discountPct: Number(s.discountPct)||0,
-    manualAdjustment: s.adjustment ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
-    basePrice: evalRes.subtotal, finalPrice: evalRes.finalPrice, priceIsTBC: evalRes.priceIsTBC,
-    approvalStatus: evalRes.approvalStatus, reasons: evalRes.reasons,
-    quotationStatus: quotation.quotationStatus && quotation.quotationStatus!=='Draft' ? quotation.quotationStatus : 'Draft',
-    validUntil: quotation.validUntil || daysFromNow(14),
-  });
+  const notesList = s.notesOverride || (quotationDefaults().notes[QC_STATE.quotationType]||[]);
+  const finalNotes = s.clientNote ? [...notesList, { key:'clientNote', title:'Client-Specific Note', text:s.clientNote }] : notesList;
+
+  const quotation = {
+    id, quoteNumber, rootQuotationId, version, previousVersionId,
+    leadId: s.leadId, projectCode: s.projectCode || null,
+    clientName: s.clientName, businessName: s.businessName, phone: s.phone, telegram: s.telegram,
+    industry: s.industry, interestedService: s.interestedService,
+    packageKey: s.packageKey, packageName: svc ? svc.name : s.packageKey,
+    quotationType: quotationTypeForProjectType(s.packageKey),
+    assignedSales: s.assignedSales,
+    currency:'USD',
+    domainName: s.domainName, domainCost: s.domainCost, domainIncluded: s.domainIncluded, domainRenewalEstimate: s.domainRenewalEstimate,
+    year1Total, year2Total: s.year2Total!=null?Number(s.year2Total):(svc?svc.year2Price:null),
+    year3Total: s.year3Total!=null?Number(s.year3Total):(svc?svc.year3Price:null),
+    discountPct: isFounder() ? (Number(s.discountPct)||0) : 0,
+    manualAdjustment: (isFounder() && s.adjustment) ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
+    paymentPreset: s.paymentPreset, quotationDate: s.quotationDate, validUntil: s.validUntil,
+    demoLink: s.demoLink,
+    items: activeItems.map(i=>({ id:i.id, module:i.module, name:i.name, price:i.price, founderReviewRequired:i.founderReviewRequired })),
+    exclusions: s.exclusions, importantNotes: finalNotes, paymentSchedule: schedule,
+    reasons: evalRes.reasons,
+    status: (existing && existing.status==='Draft') ? existing.status : 'Draft',
+    approvalStatus: evalRes.approvalStatus,
+    createdBy, approvedBy: existing ? existing.approvedBy : null,
+    createdAt,
+  };
 
   DB.upsert('quotations', quotation);
 
+  if(isNewRevision){
+    existing.status = 'Superseded';
+    DB.upsert('quotations', existing);
+    logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId: quotation.id, refLabel:`${quotation.quoteNumber} — ${quotation.businessName}`,
+      type:'Quotation Superseded', description:`${CURRENT_USER.name} created revision v${version} of ${existing.quoteNumber} — the previous version is now Superseded.`,
+      fromValue: existing.quoteNumber, toValue: quotation.quoteNumber });
+  }
+
   logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId: quotation.id, refLabel:`${quotation.quoteNumber} — ${quotation.businessName}`,
-    type: (s.editingId && !isNewVersion) ? 'Quotation Edited' : 'Quotation Created',
-    description: `${CURRENT_USER.name} ${(s.editingId && !isNewVersion)?'edited':(isNewVersion?'created version '+version+' of':'created')} quotation ${quotation.quoteNumber}. Value: ${evalRes.priceIsTBC?'TBC':money(evalRes.finalPrice)}.`,
-    remark: evalRes.requiresFounderReview ? 'Founder review required.' : null
-  });
+    type: (s.editingId && !isNewRevision) ? 'Quotation Updated' : 'Quotation Created',
+    description: `${CURRENT_USER.name} ${(s.editingId && !isNewRevision)?'updated':(isNewRevision?'created revision v'+version+' of':'created')} quotation ${quotation.quoteNumber}. Year 1 Total: ${evalRes.priceIsTBC?'TBC':money(evalRes.finalPrice)}.`,
+    remark: evalRes.requiresFounderReview ? 'Founder review required.' : null });
 
   toast(`Quotation ${quotation.quoteNumber} saved as Draft.`, 'success');
   closeModal();
-  if(currentRoute()==='quotations') renderQuotTable();
+  if(currentRoute()==='quotations'){ renderQuotSummaryCards(); renderQuotTable(); }
   openQuotationDetailModal(quotation.id);
 }
 
+function loadStateFromQuotation(q, { asDuplicate=false } = {}){
+  return {
+    sourceType: q.leadId ? 'lead' : 'new', leadId: q.leadId, projectCode: q.projectCode,
+    clientName: q.clientName, businessName: q.businessName, phone: q.phone, telegram: q.telegram,
+    industry: q.industry, interestedService: q.interestedService,
+    assignedSales: q.assignedSales, packageKey: q.packageKey, quotationType: q.quotationType,
+    discountPct: q.discountPct||0, adjustment: q.manualAdjustment?q.manualAdjustment.amount:0, adjustmentReason: q.manualAdjustment?q.manualAdjustment.reason:'',
+    items: (q.items||[]).map(i=>({...i, included:true})), exclusions: [...(q.exclusions||[])],
+    notesOverride: q.importantNotes && q.importantNotes.length ? q.importantNotes.filter(n=>n.key!=='clientNote') : null,
+    clientNote:'',
+    domainName: q.domainName, domainCost: q.domainCost, domainIncluded: q.domainIncluded, domainRenewalEstimate: q.domainRenewalEstimate,
+    year1Total: null, year2Total: q.year2Total, year3Total: q.year3Total,
+    paymentPreset: q.paymentPreset||'30/70', customStages:null,
+    quotationDate: asDuplicate ? todayLocalISO() : q.quotationDate,
+    validUntil: asDuplicate ? daysFromNow(quotationDefaults().validityDays) : q.validUntil,
+    demoLink: q.demoLink||'',
+    editingId: asDuplicate ? null : q.id,
+  };
+}
+
 /* ---------------------------------------------------------------------- */
-/* Quotation detail / actions                                             */
+/* Quotation detail / actions / status workflow                           */
 /* ---------------------------------------------------------------------- */
+
+function versionHistoryFor(q){
+  const chain = [];
+  let cur = q;
+  while(cur){
+    chain.unshift(cur);
+    cur = cur.previousVersionId ? DB.find('quotations', cur.previousVersionId) : null;
+  }
+  // also append any known newer versions
+  let next = DB.all('quotations').find(x=>x.previousVersionId===q.id);
+  let tail = [];
+  while(next){ tail.push(next); next = DB.all('quotations').find(x=>x.previousVersionId===next.id); }
+  return [...chain, ...tail];
+}
 
 function openQuotationDetailModal(id){
   const q = DB.find('quotations', id);
   if(!q){ toast('Quotation not found.', 'error'); return; }
-  const reviews = DB.all('quotationReviews').filter(r=>r.quotationId===id);
   const acts = activitiesFor(id);
+  const displayStatus = quotationDisplayStatus(q);
   const withinAuthority = q.approvalStatus==='Sales Approved' || q.approvalStatus==='Founder Approved';
+  const history = versionHistoryFor(q);
+  const linkedProject = q.projectCode ? DB.find('projects', q.projectCode) : null;
 
   const html = `
     <div class="modal-head">
@@ -487,23 +699,24 @@ function openQuotationDetailModal(id){
     </div>
     <div class="modal-body">
       <div class="flex-row" style="justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-        <div class="flex-row" style="gap:8px;flex-wrap:wrap">${statusBadge(q.quotationStatus)}${statusBadge(q.approvalStatus)}</div>
+        <div class="flex-row" style="gap:8px;flex-wrap:wrap">${statusBadge(displayStatus)}${q.approvalStatus?statusBadge(q.approvalStatus):''}</div>
         <div class="flex-row" style="flex-wrap:wrap;gap:8px" id="qdActions"></div>
       </div>
-      <div id="qdAuthority">${authorityBannerHtml({ requiresFounderReview: q.approvalStatus==='Founder Review Required', reasons: q.reasons||[], priceIsTBC:q.priceIsTBC, finalPrice:q.finalPrice, discountAmt:0 })}</div>
+      ${q.reasons && q.reasons.length ? authorityBannerHtml({ requiresFounderReview: q.approvalStatus==='Founder Review Required', reasons:q.reasons, priceIsTBC:q.priceIsTBC, finalPrice:q.year1Total }) : ''}
 
       <div class="two-col" style="margin-top:14px">
         <div>
           ${infoRow('Client', q.clientName)}
           ${infoRow('Business', q.businessName)}
           ${infoRow('Industry', q.industry)}
-          ${infoRow('Package', q.projectType)}
+          ${infoRow('Package', q.packageName)}
+          ${infoRow('Project Code', q.projectCode||'—')}
         </div>
         <div>
           ${infoRow('Assigned Sales', q.assignedSales)}
-          ${infoRow('Created', fmtDate(q.createdAt))}
+          ${infoRow('Quotation Date', fmtDate(q.quotationDate))}
           ${infoRow('Valid Until', fmtDate(q.validUntil))}
-          ${infoRow('Linked', q.projectId ? 'Project '+q.projectId : (q.leadId ? 'Lead '+q.leadId : 'Direct client (no lead)'))}
+          ${infoRow('Linked', q.projectCode ? 'Project '+q.projectCode : (q.leadId ? 'Lead '+q.leadId : 'Direct client (no lead)'))}
         </div>
       </div>
 
@@ -511,28 +724,31 @@ function openQuotationDetailModal(id){
       <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Scope of Work</div>
       <div class="table-wrap scroll-x">
         <table class="data-table">
-          <thead><tr><th>Module</th><th>Function</th><th>Price</th></tr></thead>
-          <tbody>${q.items.map(it=>`<tr><td>${escapeHtml(it.module)}</td><td>${escapeHtml(it.name)}</td><td>${it.price===null||it.price===undefined?'TBC':money(it.price)}</td></tr>`).join('')}</tbody>
+          <thead><tr><th>Module</th><th>Item</th><th>Price</th></tr></thead>
+          <tbody>${(q.items||[]).map(it=>`<tr><td>${escapeHtml(it.module)}</td><td>${escapeHtml(it.name)}</td><td>${it.price===null||it.price===undefined?'TBC':money(it.price)}</td></tr>`).join('')}</tbody>
         </table>
       </div>
 
       <div class="divider"></div>
       <div class="two-col">
         <div>
-          ${infoRow('Subtotal', money(q.basePrice))}
-          ${infoRow('Discount', q.discountPct+'%')}
+          ${infoRow('Year 1 Total', q.priceIsTBC?'TBC':money(q.year1Total))}
+          ${infoRow('Year 2 Renewal', money(q.year2Total)+'/yr')}
+          ${infoRow('Year 3 Renewal', money(q.year3Total)+'/yr')}
         </div>
         <div>
+          ${infoRow('Discount', (q.discountPct||0)+'%')}
           ${q.manualAdjustment ? infoRow('Price Adjustment', money(q.manualAdjustment.amount)+' — '+escapeHtml(q.manualAdjustment.reason)) : ''}
-          ${infoRow('Final Price', q.priceIsTBC?'TBC':money(q.finalPrice))}
         </div>
       </div>
 
-      ${reviews.length ? `
+      ${history.length>1 ? `
       <div class="divider"></div>
-      <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Founder Review</div>
-      ${reviews.map(r=>`<div class="mini-row"><div class="mini-main"><div class="mini-title">${escapeHtml(r.reviewer)} — ${escapeHtml(r.decision)}</div><div class="mini-sub">${escapeHtml(r.comment||'')}</div></div><div class="mini-right">${fmtDateTime(r.timestamp)}</div></div>`).join('')}
+      <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Version History (${history.length})</div>
+      ${history.map(v=>`<div class="mini-row" style="cursor:pointer" data-hist="${v.id}"><div class="mini-main"><div class="mini-title">v${v.version} — ${v.quoteNumber}</div><div class="mini-sub">${fmtDateTime(v.createdAt)}</div></div><div class="mini-right">${statusBadge(v.id===q.id?displayStatus:v.status)}</div></div>`).join('')}
       ` : ''}
+
+      ${linkedProject ? `<div class="divider"></div><div class="mini-row"><div class="mini-main"><div class="mini-title">Converted to Project ${linkedProject.id}</div></div></div>` : ''}
 
       <div class="divider"></div>
       <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Activity History (${acts.length})</div>
@@ -544,110 +760,93 @@ function openQuotationDetailModal(id){
   openModal(html, { large:true, onMount:(overlay)=>{
     overlay.querySelector('#qdClose').onclick = closeModal;
     overlay.querySelector('#qdClose2').onclick = closeModal;
+    overlay.querySelectorAll('[data-hist]').forEach(x=> x.onclick = ()=> openQuotationDetailModal(x.dataset.hist));
 
     const actionsEl = overlay.querySelector('#qdActions');
     const btns = [];
     btns.push(`<button class="btn btn-outline btn-sm" id="qaPreview">Preview</button>`);
     btns.push(`<button class="btn btn-outline btn-sm" id="qaPdf">Download PDF</button>`);
 
-    if(q.quotationStatus==='Draft'){
+    if(q.status==='Draft'){
       btns.push(`<button class="btn btn-ghost btn-sm" id="qaEdit">Edit</button>`);
-      if(withinAuthority){
-        btns.push(`<button class="btn btn-primary btn-sm" id="qaSend">Mark as Sent</button>`);
-      } else {
-        btns.push(`<button class="btn btn-primary btn-sm" id="qaSubmit">Submit for Review</button>`);
-      }
+      if(withinAuthority) btns.push(`<button class="btn btn-primary btn-sm" id="qaSend">Mark as Sent</button>`);
+      else btns.push(`<button class="btn btn-primary btn-sm" id="qaSubmit">Submit for Approval</button>`);
     }
-    if(q.quotationStatus==='Pending Founder Review' && isFounder()){
+    if(q.status==='Awaiting Approval' && isFounder()){
       btns.push(`<button class="btn btn-primary btn-sm" id="qaApprove">Approve</button>`);
       btns.push(`<button class="btn btn-danger btn-sm" id="qaReject">Reject</button>`);
-      btns.push(`<button class="btn btn-ghost btn-sm" id="qaComment">Add Comment</button>`);
     }
-    if(q.quotationStatus==='Approved'){
+    if(q.status==='Approved'){
       btns.push(`<button class="btn btn-primary btn-sm" id="qaSend">Mark as Sent</button>`);
     }
-    if(q.quotationStatus==='Sent to Client'){
+    if(q.status==='Sent'){
+      btns.push(`<button class="btn btn-ghost btn-sm" id="qaEdit">Edit (new revision)</button>`);
       btns.push(`<button class="btn btn-primary btn-sm" id="qaAccept">Mark as Accepted</button>`);
-      btns.push(`<button class="btn btn-ghost btn-sm" id="qaExpire">Mark as Expired</button>`);
+      btns.push(`<button class="btn btn-ghost btn-sm" id="qaReject2">Mark as Rejected</button>`);
+    }
+    if(q.status==='Accepted' && !linkedProject){
+      btns.push(`<button class="btn btn-primary btn-sm" id="qaConvert">Convert to Project</button>`);
     }
     actionsEl.innerHTML = btns.join('');
 
     overlay.querySelector('#qaPreview').onclick = ()=> openQuotationPreview(q.id);
     overlay.querySelector('#qaPdf').onclick = ()=> openQuotationPreview(q.id, true);
     const editBtn = overlay.querySelector('#qaEdit');
-    if(editBtn) editBtn.onclick = ()=> openCreateQuotationModal({ editingId:q.id, sourceType: q.projectId?'project':(q.leadId?'lead':'new'), leadId:q.leadId, projectId:q.projectId, ...loadStateFromQuotation(q) });
+    if(editBtn) editBtn.onclick = ()=>{ QC_STATE = loadStateFromQuotation(q); QC_STATE.projectCode = q.projectCode; QC_TAB='edit'; renderCreateQuotationModal(); };
     const submitBtn = overlay.querySelector('#qaSubmit');
-    if(submitBtn) submitBtn.onclick = ()=> submitForReview(q.id);
+    if(submitBtn) submitBtn.onclick = ()=> submitForApproval(q.id);
     const sendBtn = overlay.querySelector('#qaSend');
     if(sendBtn) sendBtn.onclick = ()=> markAsSent(q.id);
     const approveBtn = overlay.querySelector('#qaApprove');
     if(approveBtn) approveBtn.onclick = ()=> openFounderReviewModal(q.id, 'approve');
     const rejectBtn = overlay.querySelector('#qaReject');
     if(rejectBtn) rejectBtn.onclick = ()=> openFounderReviewModal(q.id, 'reject');
-    const commentBtn = overlay.querySelector('#qaComment');
-    if(commentBtn) commentBtn.onclick = ()=> openFounderReviewModal(q.id, 'comment');
+    const reject2Btn = overlay.querySelector('#qaReject2');
+    if(reject2Btn) reject2Btn.onclick = ()=> openFounderReviewModal(q.id, 'reject');
     const acceptBtn = overlay.querySelector('#qaAccept');
     if(acceptBtn) acceptBtn.onclick = ()=> markAsAccepted(q.id);
-    const expireBtn = overlay.querySelector('#qaExpire');
-    if(expireBtn) expireBtn.onclick = ()=> markAsExpired(q.id);
+    const convertBtn = overlay.querySelector('#qaConvert');
+    if(convertBtn) convertBtn.onclick = ()=> convertQuotationToProject(q.id);
   }});
 }
 
-function loadStateFromQuotation(q){
-  return {
-    clientNamePrefill: q.clientName
-  };
-}
-
-function submitForReview(id){
+function submitForApproval(id){
   const q = DB.find('quotations', id);
-  q.quotationStatus = 'Pending Founder Review';
+  q.status = 'Awaiting Approval';
   DB.upsert('quotations', q);
   logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
-    type:'Submitted for Review', description:`${CURRENT_USER.name} submitted quotation ${q.quoteNumber} for Founder review.`,
-    fromValue:'Draft', toValue:'Pending Founder Review' });
-  DB.upsert('quotationReviews', { id:'QR'+q.id+Date.now(), quotationId:q.id, reviewer:'', decision:'Pending', comment:'', timestamp:new Date().toISOString() });
-  toast('Submitted for Founder review.', 'success');
+    type:'Quotation Submitted for Approval', description:`${CURRENT_USER.name} submitted quotation ${q.quoteNumber} for Founder approval.`,
+    fromValue:'Draft', toValue:'Awaiting Approval' });
+  toast('Submitted for Founder approval.', 'success');
   openQuotationDetailModal(id);
-  if(currentRoute()==='quotations') renderQuotTable();
+  if(currentRoute()==='quotations'){ renderQuotSummaryCards(); renderQuotTable(); }
 }
 
 function markAsSent(id){
   const q = DB.find('quotations', id);
-  q.quotationStatus = 'Sent to Client';
+  q.status = 'Sent';
   DB.upsert('quotations', q);
   logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
-    type:'Quotation Sent', description:`${CURRENT_USER.name} sent quotation ${q.quoteNumber} / Amount: ${q.priceIsTBC?'TBC':money(q.finalPrice)}`,
-    toValue:'Sent to Client' });
+    type:'Quotation Sent', description:`${CURRENT_USER.name} sent quotation ${q.quoteNumber} / Year 1 Total: ${q.priceIsTBC?'TBC':money(q.year1Total)}`,
+    toValue:'Sent' });
   toast('Quotation marked as sent.', 'success');
   openQuotationDetailModal(id);
-  if(currentRoute()==='quotations') renderQuotTable();
-}
-
-function markAsExpired(id){
-  const q = DB.find('quotations', id);
-  q.quotationStatus = 'Expired';
-  DB.upsert('quotations', q);
-  logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
-    type:'Quotation Expired', description:`${CURRENT_USER.name} marked quotation ${q.quoteNumber} as expired.`, toValue:'Expired' });
-  toast('Quotation marked as expired.');
-  openQuotationDetailModal(id);
-  if(currentRoute()==='quotations') renderQuotTable();
+  if(currentRoute()==='quotations'){ renderQuotSummaryCards(); renderQuotTable(); }
 }
 
 function openFounderReviewModal(id, mode){
   const q = DB.find('quotations', id);
-  const titles = { approve:'Approve Quotation', reject:'Reject Quotation', comment:'Add Review Comment' };
+  const titles = { approve:'Approve Quotation', reject:'Reject Quotation' };
   const html = `
     <div class="modal-head"><h3>${titles[mode]}</h3><button class="modal-close" id="frClose">&times;</button></div>
     <div class="modal-body">
       <p class="text-muted" style="margin-top:0;font-size:13px">${q.quoteNumber} — ${escapeHtml(q.businessName)}</p>
-      ${mode==='approve' ? `<div class="form-field" style="margin-bottom:12px"><label>Edit Price (optional)</label><input type="number" id="fr_price" value="${q.priceIsTBC?'':q.finalPrice}" placeholder="Leave blank to approve as quoted"></div>` : ''}
-      <div class="form-field"><label ${mode!=='comment'?'class="required"':''}>Review Note</label><textarea id="fr_comment" placeholder='e.g. "Price approved at $899." or "Increase to $1,199 because customer login + loyalty included."'></textarea></div>
+      ${mode==='approve' ? `<div class="form-field" style="margin-bottom:12px"><label>Edit Year 1 Total (optional)</label><input type="number" id="fr_price" value="${q.priceIsTBC?'':q.year1Total}" placeholder="Leave blank to approve as quoted"></div>` : ''}
+      <div class="form-field"><label class="required">Review Note</label><textarea id="fr_comment" placeholder='e.g. "Price approved at $899." or "Rejected — scope needs revision."'></textarea></div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-secondary" id="frCancel">Cancel</button>
-      <button class="btn ${mode==='reject'?'btn-danger':'btn-primary'}" id="frSave">${mode==='approve'?'Approve':mode==='reject'?'Reject':'Save Comment'}</button>
+      <button class="btn ${mode==='reject'?'btn-danger':'btn-primary'}" id="frSave">${mode==='approve'?'Approve':'Reject'}</button>
     </div>
   `;
   openModal(html, { onMount:(overlay)=>{
@@ -655,52 +854,45 @@ function openFounderReviewModal(id, mode){
     overlay.querySelector('#frCancel').onclick = closeModal;
     overlay.querySelector('#frSave').onclick = ()=>{
       const comment = overlay.querySelector('#fr_comment').value.trim();
-      if(mode!=='comment' && !comment){ toast('A review note is required.', 'error'); return; }
+      if(!comment){ toast('A review note is required.', 'error'); return; }
       const priceInput = overlay.querySelector('#fr_price');
       if(mode==='approve'){
-        if(priceInput && priceInput.value){ q.finalPrice = Number(priceInput.value); q.priceIsTBC = false; }
+        if(priceInput && priceInput.value){ q.year1Total = Number(priceInput.value); q.priceIsTBC = false; }
         q.approvalStatus = 'Founder Approved';
-        q.quotationStatus = 'Approved';
+        q.status = 'Approved';
+        q.approvedBy = CURRENT_USER.name;
         DB.upsert('quotations', q);
         logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
-          type:'Founder Approved', description:`${CURRENT_USER.name} approved quotation ${q.quoteNumber} at ${money(q.finalPrice)}.`,
-          fromValue:'Pending Founder Review', toValue:'Approved', remark: comment||null });
-      } else if(mode==='reject'){
-        q.approvalStatus = 'Founder Rejected';
-        q.quotationStatus = 'Rejected';
-        DB.upsert('quotations', q);
-        logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
-          type:'Founder Rejected', description:`${CURRENT_USER.name} rejected quotation ${q.quoteNumber}.`,
-          fromValue:'Pending Founder Review', toValue:'Rejected', remark: comment||null });
+          type:'Quotation Approved', description:`${CURRENT_USER.name} approved quotation ${q.quoteNumber} at ${money(q.year1Total)}.`,
+          fromValue:'Awaiting Approval', toValue:'Approved', remark: comment });
       } else {
+        q.approvalStatus = 'Founder Rejected';
+        q.status = 'Rejected';
+        DB.upsert('quotations', q);
         logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
-          type:'Quotation Edited', description:`${CURRENT_USER.name} commented on ${q.quoteNumber}: "${comment}"`, remark: comment });
+          type:'Quotation Rejected', description:`${CURRENT_USER.name} rejected quotation ${q.quoteNumber}.`,
+          fromValue: q.status, toValue:'Rejected', remark: comment });
       }
-      DB.upsert('quotationReviews', { id:'QR'+q.id+Date.now(), quotationId:q.id, reviewer: CURRENT_USER.name, decision: mode==='approve'?'Approved':mode==='reject'?'Rejected':'Comment', comment, timestamp:new Date().toISOString() });
       closeModal();
       toast('Saved.', 'success');
       openQuotationDetailModal(id);
-      if(currentRoute()==='quotations') renderQuotTable();
+      if(currentRoute()==='quotations'){ renderQuotSummaryCards(); renderQuotTable(); }
     };
   }});
 }
 
 /* ---------------------------------------------------------------------- */
-/* Accepted → Project link                                                */
+/* Accepted -> Convert to Project                                         */
 /* ---------------------------------------------------------------------- */
 
 function markAsAccepted(id){
   const q = DB.find('quotations', id);
-  q.quotationStatus = 'Accepted';
+  q.status = 'Accepted';
   DB.upsert('quotations', q);
   logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
-    type:'Quotation Accepted', description:`${CURRENT_USER.name} marked quotation ${q.quoteNumber} as Accepted. Value: ${money(q.finalPrice)}.`,
+    type:'Quotation Accepted', description:`${CURRENT_USER.name} marked quotation ${q.quoteNumber} as Accepted. Value: ${money(q.year1Total)}.`,
     toValue:'Accepted' });
 
-  // Accepting a quotation is the sales-confirmation moment — the linked
-  // lead moves to Confirmed here too (and stays Confirmed permanently; see
-  // LEAD_STATUSES). This keeps Lead → Quotation → Project as one flow
-  // instead of the lead silently sitting at "Quotation Sent" forever.
   const lead = q.leadId ? DB.find('leads', q.leadId) : null;
   if(lead && lead.status!=='Confirmed'){
     const prevStatus = lead.status;
@@ -711,159 +903,187 @@ function markAsAccepted(id){
       type:'Status Changed', description:`${CURRENT_USER.name} changed status: ${prevStatus} → Confirmed`,
       fromValue: prevStatus, toValue:'Confirmed', remark:`Quotation ${q.quoteNumber} accepted.` });
   }
-
-  // Duplicate protection: if this lead (or a manually-linked project) is
-  // already tied to a Project, link the quotation to it instead of
-  // creating a second Project record.
-  const linkedExisting = q.projectId ? DB.find('projects', q.projectId) : (lead && lead.projectCode ? DB.find('projects', lead.projectCode) : null);
-  if(!linkedExisting){
-    if(confirm(`Create Project from this Quotation?\n\n${q.quoteNumber} — ${q.businessName}\nConfirmed Value: ${money(q.finalPrice)}`)){
-      createProjectFromQuotation(q);
-    } else {
-      toast('Quotation accepted. No project was created.', 'success');
-      openQuotationDetailModal(id);
-    }
-  } else {
-    // Reuse the existing project — copy the quotation's confirmed value +
-    // functions onto it (accepted quotation value becomes authoritative)
-    // rather than duplicating.
-    q.projectId = linkedExisting.id;
-    DB.upsert('quotations', q);
-    applyQuotationOntoProject(q, linkedExisting);
-    toast(`Quotation accepted — linked to existing project ${linkedExisting.id}.`, 'success');
-    openQuotationDetailModal(id);
-  }
-  if(currentRoute()==='quotations') renderQuotTable();
+  toast('Quotation accepted.', 'success');
+  openQuotationDetailModal(id);
+  if(currentRoute()==='quotations'){ renderQuotSummaryCards(); renderQuotTable(); }
 }
 
-// Copies an accepted quotation's value + scope onto an already-existing
-// Project (used both by createProjectFromQuotation for a brand new project,
-// and when accepting a quotation for a lead that already has one).
-function applyQuotationOntoProject(q, proj){
-  proj.confirmedValue = q.finalPrice || q.basePrice || proj.confirmedValue || 0;
-  proj.quotationRef = q.quoteNumber;
+function convertQuotationToProject(id){
+  const q = DB.find('quotations', id);
+  const lead = q.leadId ? DB.find('leads', q.leadId) : null;
+  const linkedExisting = q.projectCode ? DB.find('projects', q.projectCode) : (lead && lead.projectCode ? DB.find('projects', lead.projectCode) : null);
+
   const groups = {};
-  q.items.forEach(it=>{
+  (q.items||[]).forEach(it=>{
     if(!groups[it.module]) groups[it.module] = { id: fnId(), module: it.module, functions: [] };
     groups[it.module].functions.push({ id: fnId(), name: it.name, status:'Confirmed' });
   });
-  proj.functions = Object.values(groups);
-  DB.upsert('projects', proj);
-  logActivity({ userName: CURRENT_USER.name, refType:'project', refId: proj.id, refLabel:`${proj.id} — ${proj.businessName}`,
-    type:'Function Changed', description:`${CURRENT_USER.name} applied accepted quotation ${q.quoteNumber} to project ${proj.id} — Confirmed Value and Scope updated.`,
-    remark:`Confirmed Value: ${money(proj.confirmedValue)}.` });
-}
 
-function createProjectFromQuotation(q){
-  const lead = q.leadId ? DB.find('leads', q.leadId) : null;
-  // Reuse the lead's already-reserved Project Code (spec §9: one Project
-  // Code per project, never a newly-generated one when a code already
-  // exists) — this path used to always mint a fresh code via
-  // DB.nextId('C','projects'), which would have silently orphaned a code
-  // already assigned back at Qualified -> Quote and Demo Sent.
-  const code = (lead && lead.projectCode) ? lead.projectCode : suggestNextProjectCode();
+  if(linkedExisting){
+    linkedExisting.confirmedValue = q.year1Total || linkedExisting.confirmedValue || 0;
+    linkedExisting.quotationRef = q.quoteNumber;
+    linkedExisting.functions = Object.values(groups);
+    DB.upsert('projects', linkedExisting);
+    q.projectCode = linkedExisting.id;
+    DB.upsert('quotations', q);
+    logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
+      type:'Quotation Converted to Project', description:`${CURRENT_USER.name} linked quotation ${q.quoteNumber} to existing project ${linkedExisting.id}.`, toValue: linkedExisting.id });
+    toast(`Linked to existing project ${linkedExisting.id}.`, 'success');
+    openQuotationDetailModal(id);
+    return;
+  }
 
+  const code = (lead && lead.projectCode) ? lead.projectCode : (q.projectCode || suggestNextProjectCode());
   const proj = createProjectRecord({
-    code, lead, confirmedValue: q.finalPrice || q.basePrice || 0, depositPct:50,
+    code, lead, confirmedValue: q.year1Total || 0, depositPct:50,
     overrides: {
       clientName: q.clientName, businessName: q.businessName, phone: q.phone,
-      industry: q.industry, projectType: q.projectType, assignedSales: q.assignedSales,
+      industry: q.industry, projectType: q.packageKey, assignedSales: q.assignedSales,
       notes: `Created from quotation ${q.quoteNumber}.`,
     }
   });
-
-  // VERY IMPORTANT: copy confirmed functions from the quotation into the
-  // project's Confirmed Functions / Scope, grouped by module.
-  const groups = {};
-  q.items.forEach(it=>{
-    if(!groups[it.module]) groups[it.module] = { id: fnId(), module: it.module, functions: [] };
-    groups[it.module].functions.push({ id: fnId(), name: it.name, status:'Confirmed' });
-  });
   proj.functions = Object.values(groups);
   proj.quotationRef = q.quoteNumber;
   DB.upsert('projects', proj);
 
-  q.projectId = proj.id;
+  q.projectCode = proj.id;
   DB.upsert('quotations', q);
 
+  logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
+    type:'Quotation Converted to Project', description:`${CURRENT_USER.name} converted quotation ${q.quoteNumber} to project ${proj.id}. Confirmed Value: ${money(proj.confirmedValue)}.`,
+    toValue: proj.id });
   logActivity({ userName: CURRENT_USER.name, refType:'project', refId: proj.id, refLabel:`${proj.id} — ${proj.businessName}`,
     type:'Project Created', description:`${CURRENT_USER.name} created project ${proj.id} from accepted quotation ${q.quoteNumber}. Confirmed Value: ${money(proj.confirmedValue)}.`,
     toValue:'Confirmed', remark:`Functions copied from ${q.quoteNumber}.` });
 
   toast(`Project ${proj.id} created from ${q.quoteNumber}.`, 'success');
   closeModal();
-  openProjectDetailModal(proj.id);
+  if(typeof openProjectDetailModal==='function') openProjectDetailModal(proj.id);
 }
 
 /* ---------------------------------------------------------------------- */
-/* Branded preview + PDF (browser print)                                  */
+/* Branded bilingual A4 preview + PDF (browser print)                     */
 /* ---------------------------------------------------------------------- */
+
+// Adapts the live Create-Quotation form state into a preview-shaped object
+// (same shape as a saved quotation) so the preview renderer can be reused
+// for both the live edit-preview pane and the saved-quotation preview modal.
+function qcStateToPreviewQuotation(s, evalRes, schedule){
+  const svc = serviceByProjectType(s.packageKey);
+  const notesList = s.notesOverride || (s.packageKey ? (quotationDefaults().notes[quotationTypeForProjectType(s.packageKey)]||[]) : []);
+  return {
+    quoteNumber: s.packageKey ? qcQuoteNumberPreview() : 'BW-Q-PREVIEW',
+    clientName: s.clientName, businessName: s.businessName, industry: s.industry,
+    packageName: svc?svc.name:s.packageKey, packageKey: s.packageKey,
+    quotationType: s.packageKey ? quotationTypeForProjectType(s.packageKey) : 'website',
+    quotationDate: s.quotationDate, validUntil: s.validUntil, demoLink: s.demoLink,
+    items: s.items.filter(i=>i.included!==false),
+    exclusions: s.exclusions,
+    domainName: s.domainName, domainCost: s.domainCost, domainIncluded: s.domainIncluded, domainRenewalEstimate: s.domainRenewalEstimate,
+    year1Total: evalRes.finalPrice, priceIsTBC: evalRes.priceIsTBC,
+    year2Total: s.year2Total!=null?Number(s.year2Total):(svc?svc.year2Price:null),
+    year3Total: s.year3Total!=null?Number(s.year3Total):(svc?svc.year3Price:null),
+    paymentSchedule: schedule,
+    importantNotes: s.clientNote ? [...notesList, {key:'clientNote',title:'Client-Specific Note',text:s.clientNote}] : notesList,
+  };
+}
+
+function quotationTitleBlock(quotationType){
+  return quotationType==='system'
+    ? { khmer:'សំណើតម្លៃប្រព័ន្ធ', english:'SYSTEM QUOTATION' }
+    : { khmer:'សំណើតម្លៃគេហទំព័រ', english:'WEBSITE QUOTATION' };
+}
+
+function quotationPreviewDocHtml(q){
+  const title = quotationTitleBlock(q.quotationType);
+  const bank = bankDetails();
+  const labels = yearCostLabels(q.quotationType);
+  const grouped = {};
+  (q.items||[]).forEach(it=>{ if(!grouped[it.module]) grouped[it.module]=[]; grouped[it.module].push(it); });
+
+  return `
+    <div class="quote-doc" id="quoteDocPrintable">
+      <div class="quote-doc-head">
+        <div class="quote-doc-brand"><div class="logo-mark">BW</div><div><strong>BizWeb KH</strong><div class="text-muted" style="font-size:11px">Tel: 017 400 044 | Telegram: @BizWebKH | www.bizwebkh.com</div></div></div>
+        <div class="quote-doc-meta">
+          <div style="font-family:'Noto Sans Khmer',sans-serif;font-size:13px;color:var(--blue)">${title.khmer}</div>
+          <div><b>${title.english}</b></div>
+          <div>Quote No: ${escapeHtml(q.quoteNumber)}</div>
+        </div>
+      </div>
+
+      <table class="quote-doc-infotable">
+        <tr><th>ឈ្មោះអតិថិជន / Client Name</th><td>${escapeHtml(q.clientName)}</td></tr>
+        <tr><th>ឈ្មោះអាជីវកម្ម / Business Name</th><td>${escapeHtml(q.businessName)}</td></tr>
+        <tr><th>គម្រោង / Project</th><td>${escapeHtml(q.packageName)}${q.industry?' — '+escapeHtml(q.industry):''}</td></tr>
+        <tr><th>កាលបរិច្ឆេទ / Date</th><td>${fmtDate(q.quotationDate)}</td></tr>
+        <tr><th>សុពលភាព / Valid Until</th><td>${fmtDate(q.validUntil)}</td></tr>
+        ${q.demoLink ? `<tr><th>Demo Preview Link</th><td>${escapeHtml(q.demoLink)}</td></tr>` : ''}
+      </table>
+
+      <h4 class="quote-doc-h">Scope of Work</h4>
+      ${Object.entries(grouped).map(([module,items])=>`
+        <div style="margin-bottom:8px">
+          <div style="font-weight:700;font-size:12.5px;color:var(--navy,#0b2545)">${escapeHtml(module)}</div>
+          <ul style="margin:4px 0 0;padding-left:18px;font-size:12.5px">${items.map(it=>`<li>${escapeHtml(it.name)}${it.price===null||it.price===undefined?' — TBC':''}</li>`).join('')}</ul>
+        </div>
+      `).join('') || `<p class="text-muted" style="font-size:12.5px">Select a package to load scope.</p>`}
+
+      <h4 class="quote-doc-h">Year-by-Year Budget</h4>
+      <table class="quote-doc-table">
+        <thead><tr><th>Year</th><th>Details</th><th>Amount</th></tr></thead>
+        <tbody>
+          <tr><td>Year 1</td><td>${escapeHtml(labels.y1)}</td><td>${q.priceIsTBC?'TBC':money(q.year1Total)}</td></tr>
+          <tr><td>Year 2</td><td>${escapeHtml(labels.y2)}</td><td>${q.year2Total!=null?'~'+money(q.year2Total)+'/year':'TBC'}</td></tr>
+          <tr><td>Year 3</td><td>${escapeHtml(labels.y3)}</td><td>${q.year3Total!=null?'~'+money(q.year3Total)+'/year':'TBC'}</td></tr>
+        </tbody>
+      </table>
+
+      ${q.domainName || q.domainCost!=null ? `
+      <h4 class="quote-doc-h">Domain</h4>
+      <p style="font-size:12.5px;margin:0">${q.domainName?escapeHtml(q.domainName)+' — ':''}${q.domainIncluded?'included in Year 1':'not included'} (est. ${money(q.domainCost)}); renewal est. ${money(q.domainRenewalEstimate)}/year.</p>
+      ` : ''}
+
+      <h4 class="quote-doc-h">Payment Schedule</h4>
+      <table class="quote-doc-table">
+        <thead><tr><th>Stage</th><th>%</th><th>Amount</th></tr></thead>
+        <tbody>${(q.paymentSchedule||[]).map(st=>`<tr><td>${escapeHtml(st.label)}</td><td>${st.pct}%</td><td>${money(st.amount)}</td></tr>`).join('')}</tbody>
+      </table>
+
+      <div class="quote-doc-bottom">
+        <div>
+          <h4 class="quote-doc-h">Important Notes</h4>
+          <ol style="margin:4px 0 0;padding-left:18px;font-size:11.5px;color:var(--muted)">
+            ${(q.importantNotes||[]).map(n=>`<li><b>${escapeHtml(n.title)}:</b> ${escapeHtml(n.text)}</li>`).join('')}
+            ${(q.exclusions||[]).length ? `<li><b>Not Included:</b> ${q.exclusions.map(escapeHtml).join(', ')}.</li>` : ''}
+          </ol>
+        </div>
+        <div>
+          <h4 class="quote-doc-h">Payment Bank Details</h4>
+          <div style="font-size:12px;line-height:1.9">
+            <div><b>Account Name:</b> ${escapeHtml(bank.accountName)}</div>
+            <div><b>Account Number:</b> ${escapeHtml(bank.accountNumber)}</div>
+            <div><b>Bank Name:</b> ${escapeHtml(bank.bankName)}</div>
+            ${bank.memo?`<div><b>Memo:</b> ${escapeHtml(bank.memo)}</div>`:''}
+            ${bank.qrImageUrl?`<img src="${bank.qrImageUrl}" style="width:90px;margin-top:6px" alt="Payment QR">`:''}
+          </div>
+        </div>
+      </div>
+
+      <div class="quote-doc-accept">
+        <div><div class="sig-line"></div><span>Client Signature / Date</span></div>
+        <div><div class="sig-line"></div><span>BizWeb KH Representative / Date</span></div>
+      </div>
+    </div>
+  `;
+}
 
 function openQuotationPreview(id, autoPrint=false){
   const q = DB.find('quotations', id);
   if(!q) return;
-  const grouped = {};
-  q.items.forEach(it=>{ if(!grouped[it.module]) grouped[it.module]=[]; grouped[it.module].push(it); });
-
-  const year1 = q.priceIsTBC ? 'TBC' : money(q.finalPrice);
-  const svc = serviceByProjectType(q.projectType);
-  const year2 = svc ? (svc.year2Price ? '~'+money(svc.year2Price)+' / year' : 'TBC') : 'TBC';
-  const year3 = svc ? (svc.year3Price ? '~'+money(svc.year3Price)+' / year' : 'TBC') : 'TBC';
-
   const html = `
     <div class="modal-head"><h3>Quotation Preview</h3><button class="modal-close" id="qpClose">&times;</button></div>
-    <div class="modal-body" style="background:#eef1f6;padding:20px">
-      <div class="quote-doc" id="quoteDocPrintable">
-        <div class="quote-doc-head">
-          <div class="quote-doc-brand"><div class="logo-mark">BW</div><div><strong>BizWeb KH</strong><div class="text-muted" style="font-size:11px">Web &amp; Digital Solutions — Cambodia</div></div></div>
-          <div class="quote-doc-meta">
-            <div><b>Quotation No:</b> ${q.quoteNumber}</div>
-            <div><b>Date:</b> ${fmtDate(q.createdAt)}</div>
-            <div><b>Valid Until:</b> ${fmtDate(q.validUntil)}</div>
-          </div>
-        </div>
-        <div class="quote-doc-clientbox">
-          <div><b>Client:</b> ${escapeHtml(q.clientName)}</div>
-          <div><b>Business:</b> ${escapeHtml(q.businessName)}</div>
-          <div><b>Project:</b> ${escapeHtml(q.projectType)}</div>
-        </div>
-        <h4 class="quote-doc-h">Project Summary</h4>
-        <p style="font-size:12.5px;margin:0 0 10px">A ${escapeHtml(q.projectType)} solution scoped and quoted for ${escapeHtml(q.businessName)}, including the functions listed below.</p>
-
-        <h4 class="quote-doc-h">Scope of Work</h4>
-        ${Object.entries(grouped).map(([module,items])=>`
-          <div style="margin-bottom:8px">
-            <div style="font-weight:700;font-size:12.5px;color:var(--navy,#0b2545)">${escapeHtml(module)}</div>
-            <ul style="margin:4px 0 0;padding-left:18px;font-size:12.5px">${items.map(it=>`<li>${escapeHtml(it.name)}</li>`).join('')}</ul>
-          </div>
-        `).join('')}
-
-        <h4 class="quote-doc-h">Pricing</h4>
-        <table class="quote-doc-table">
-          <thead><tr><th>Year</th><th>Details</th><th>Amount</th></tr></thead>
-          <tbody>
-            <tr><td>Year 1</td><td>Development, Hosting, Domain, Maintenance</td><td>${year1}</td></tr>
-            <tr><td>Year 2</td><td>Renewal (hosting / maintenance)</td><td>${year2}</td></tr>
-            <tr><td>Year 3</td><td>Renewal (hosting / maintenance)</td><td>${year3}</td></tr>
-          </tbody>
-        </table>
-
-        <h4 class="quote-doc-h">Payment Schedule</h4>
-        <p style="font-size:12.5px;margin:0">50% deposit to begin work, 50% balance due before final delivery/publish. Yearly renewals billed separately from Year 2 onward.</p>
-
-        <h4 class="quote-doc-h">Important Notes</h4>
-        <ul style="margin:4px 0 0;padding-left:18px;font-size:12px;color:var(--muted)">
-          <li>Prices marked TBC are subject to Founder review and confirmation before final approval.</li>
-          <li>This quotation is valid until ${fmtDate(q.validUntil)}.</li>
-          <li>Scope changes after acceptance may require a revised quotation.</li>
-        </ul>
-
-        <div class="quote-doc-accept">
-          <div><div class="sig-line"></div><span>Client Signature / Date</span></div>
-          <div><div class="sig-line"></div><span>BizWeb KH Representative / Date</span></div>
-        </div>
-      </div>
-    </div>
+    <div class="modal-body" style="background:#eef1f6;padding:20px">${quotationPreviewDocHtml(q)}</div>
     <div class="modal-foot">
       <button class="btn btn-secondary" id="qpClose2">Close</button>
       <button class="btn btn-primary" id="qpPrint">Download PDF (Print)</button>
@@ -883,7 +1103,7 @@ function openQuotationPreview(id, autoPrint=false){
 /* ---------------------------------------------------------------------- */
 
 function linkedQuotationsHtml(leadId, projectId){
-  const list = DB.all('quotations').filter(q=> (leadId && q.leadId===leadId) || (projectId && q.projectId===projectId));
+  const list = DB.all('quotations').filter(q=> q.status!=='Superseded' && ((leadId && q.leadId===leadId) || (projectId && q.projectCode===projectId)));
   return `
     <div class="flex-row" style="justify-content:space-between;margin-bottom:8px">
       <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:0">Quotations</div>
@@ -891,8 +1111,8 @@ function linkedQuotationsHtml(leadId, projectId){
     </div>
     ${list.length ? list.map(q=>`
       <div class="mini-row" data-quote-row="${q.id}" style="cursor:pointer">
-        <div class="mini-main"><div class="mini-title">${q.quoteNumber}</div><div class="mini-sub">${q.priceIsTBC?'TBC':money(q.finalPrice)} · ${escapeHtml(q.assignedSales)}</div></div>
-        <div class="mini-right">${statusBadge(q.quotationStatus)}</div>
+        <div class="mini-main"><div class="mini-title">${q.quoteNumber}</div><div class="mini-sub">${q.priceIsTBC?'TBC':money(q.year1Total)} · ${escapeHtml(q.assignedSales)}</div></div>
+        <div class="mini-right">${statusBadge(quotationDisplayStatus(q))}</div>
       </div>`).join('') : `<div class="empty-row">No quotations yet.</div>`}
   `;
 }
@@ -901,8 +1121,7 @@ function wireLinkedQuotations(container){
   const newBtn = container.querySelector('[data-new-quote]');
   if(newBtn) newBtn.onclick = ()=>{
     const [leadId, projectId] = newBtn.dataset.newQuote.split('|');
-    if(projectId) openCreateQuotationModal({ sourceType:'project', projectId });
-    else if(leadId) openCreateQuotationModal({ sourceType:'lead', leadId });
+    if(leadId) openCreateQuotationModal({ sourceType:'lead', leadId });
     else openCreateQuotationModal({ sourceType:'new' });
   };
 }

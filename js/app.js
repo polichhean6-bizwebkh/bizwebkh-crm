@@ -514,7 +514,7 @@ function renderUsersPage(){
           ${salesNames.map(name=>{
             const myLeads = leads.filter(l=>l.assignedSales===name);
             const followupsCompleted = activities.filter(a=>a.userName===name && a.type==='Follow-up Completed').length;
-            const quotationsSent = quotations.filter(q=>q.assignedSales===name && ['Sent to Client','Accepted'].includes(q.quotationStatus)).length;
+            const quotationsSent = quotations.filter(q=>q.assignedSales===name && ['Sent','Accepted'].includes(quotationDisplayStatus(q))).length;
             const myProjects = projects.filter(p=>p.assignedSales===name);
             const collected = myProjects.reduce((s,p)=> s + totalPaidForProject(p.id), 0);
             // Archived leads are excluded here too — they're hidden from the
@@ -550,13 +550,15 @@ function renderSettingsBody(){
     <div class="tabs" style="max-width:640px">
       <div class="tab-btn ${SETTINGS_TAB==='general'?'active':''}" data-stab="general">General</div>
       <div class="tab-btn ${SETTINGS_TAB==='prices'?'active':''}" data-stab="prices">Service Price List</div>
+      <div class="tab-btn ${SETTINGS_TAB==='quotations'?'active':''}" data-stab="quotations">Quotations</div>
     </div>
     <div id="settingsTabBody"></div>
   `;
   el.querySelectorAll('[data-stab]').forEach(t=> t.onclick = ()=>{ SETTINGS_TAB = t.dataset.stab; renderSettingsBody(); });
   const body = document.getElementById('settingsTabBody');
   if(SETTINGS_TAB==='general') body.innerHTML = settingsGeneralTab();
-  else body.innerHTML = settingsPricesTab();
+  else if(SETTINGS_TAB==='prices') body.innerHTML = settingsPricesTab();
+  else body.innerHTML = settingsQuotationsTab();
 
   if(SETTINGS_TAB==='general'){
     document.getElementById('resetBtn').onclick = async ()=>{
@@ -581,8 +583,10 @@ function renderSettingsBody(){
         toast('Sales discount authority updated.', 'success');
       };
     }
-  } else {
+  } else if(SETTINGS_TAB==='prices'){
     wireSettingsPricesTab();
+  } else {
+    wireSettingsQuotationsTab();
   }
 }
 
@@ -593,7 +597,7 @@ function settingsGeneralTab(){
     <div class="panel" style="max-width:640px;margin-top:14px">
       <div class="panel-head"><h3>Demo Environment</h3></div>
       <div class="panel-body pad">
-        <p class="text-muted" style="margin-top:0">This CRM is connected to BizWeb KH's live Supabase backend. Leads, projects, payments and activity are stored server-side and shared across every device/user — Quotations remains local-only ("Coming Soon").</p>
+        <p class="text-muted" style="margin-top:0">This CRM is connected to BizWeb KH's live Supabase backend. Leads, projects, payments, activity and quotations are all stored server-side and shared across every device/user.</p>
         <div class="divider"></div>
         <div class="flex-row" style="justify-content:space-between;margin-bottom:10px">
           <div>
@@ -660,6 +664,104 @@ function wireSettingsPricesTab(){
       DB.upsert('services', svc);
       toast(`${svc.name} updated.`, 'success');
     };
+  });
+}
+
+/* ---------------------------------------------------------------------- */
+/* Settings -> Quotations tab: one centralized bank-details block (never   */
+/* duplicated per quotation, spec §21) + the standard exclusions/notes     */
+/* templates by quotation type (spec §12/§20) — Founder/Admin-editable,    */
+/* Sales view-only, exactly like the Service Price List tab above.         */
+/* ---------------------------------------------------------------------- */
+function settingsQuotationsTab(){
+  const editable = isFounder();
+  const bank = bankDetails();
+  const qd = quotationDefaults();
+  const typeLabel = { website:'Website Quotation', system:'System Quotation' };
+  return `
+    <p class="text-muted" style="margin:14px 0">Centralized quotation settings used by every quotation — never duplicated per-record. ${editable?'As Owner/Admin you can edit these below.':'View-only for your role — Owner/Admin can edit.'}</p>
+    <div class="panel" style="max-width:640px;margin-bottom:16px">
+      <div class="panel-head"><h3>Payment Bank Details</h3></div>
+      <div class="panel-body pad">
+        <div class="form-grid">
+          <div class="form-field"><label>Account Name</label><input id="qs_accountName" value="${escapeHtml(bank.accountName)}" ${editable?'':'disabled'}></div>
+          <div class="form-field"><label>Account Number</label><input id="qs_accountNumber" value="${escapeHtml(bank.accountNumber)}" ${editable?'':'disabled'}></div>
+          <div class="form-field"><label>Bank Name</label><input id="qs_bankName" value="${escapeHtml(bank.bankName)}" ${editable?'':'disabled'}></div>
+          <div class="form-field"><label>Default Memo</label><input id="qs_memo" value="${escapeHtml(bank.memo)}" ${editable?'':'disabled'}></div>
+          <div class="form-field full"><label>QR Image URL (optional)</label><input id="qs_qr" value="${escapeHtml(bank.qrImageUrl)}" ${editable?'':'disabled'}></div>
+        </div>
+        ${editable?`<button class="btn btn-primary btn-sm" id="qsSaveBank" style="margin-top:10px">Save Bank Details</button>`:''}
+      </div>
+    </div>
+    <div class="panel" style="max-width:640px;margin-bottom:16px">
+      <div class="panel-head"><h3>Default Validity</h3></div>
+      <div class="panel-body pad">
+        <div class="flex-row" style="justify-content:space-between">
+          <div><strong style="font-size:13.5px">Valid Until (days from Quotation Date)</strong></div>
+          ${editable?`<input type="number" id="qs_validityDays" class="sel" style="width:70px;text-align:right" value="${qd.validityDays}">`:`<span class="cell-strong">${qd.validityDays}</span>`}
+        </div>
+      </div>
+    </div>
+    ${['website','system'].map(type=>`
+      <div class="panel" style="margin-bottom:16px">
+        <div class="panel-head"><h3>${typeLabel[type]} — Standard Exclusions</h3></div>
+        <div class="panel-body pad">
+          <textarea id="qs_excl_${type}" style="min-height:110px" ${editable?'':'disabled'}>${escapeHtml((qd.exclusions[type]||[]).join('\n'))}</textarea>
+          <p class="text-muted" style="font-size:11.5px;margin:6px 0 0">One item per line.</p>
+          ${editable?`<button class="btn btn-outline btn-sm" data-save-excl="${type}" style="margin-top:8px">Save</button>`:''}
+        </div>
+      </div>
+      <div class="panel" style="margin-bottom:16px">
+        <div class="panel-head"><h3>${typeLabel[type]} — Important Notes</h3></div>
+        <div class="panel-body pad">
+          ${(qd.notes[type]||[]).map((n,i)=>`
+            <div class="form-field" style="margin-bottom:10px">
+              <label>${escapeHtml(n.title)}</label>
+              <textarea data-note="${type}|${i}" ${editable?'':'disabled'}>${escapeHtml(n.text)}</textarea>
+            </div>`).join('')}
+          ${editable?`<button class="btn btn-outline btn-sm" data-save-notes="${type}">Save</button>`:''}
+        </div>
+      </div>
+    `).join('')}
+  `;
+}
+function wireSettingsQuotationsTab(){
+  if(!isFounder()) return;
+  const saveBankBtn = document.getElementById('qsSaveBank');
+  if(saveBankBtn) saveBankBtn.onclick = ()=>{
+    const newBank = {
+      accountName: document.getElementById('qs_accountName').value.trim(),
+      accountNumber: document.getElementById('qs_accountNumber').value.trim(),
+      bankName: document.getElementById('qs_bankName').value.trim(),
+      memo: document.getElementById('qs_memo').value.trim(),
+      qrImageUrl: document.getElementById('qs_qr').value.trim(),
+    };
+    DB.upsert('settings', { bankDetails: newBank });
+    toast('Bank details updated.', 'success');
+  };
+  const validityInput = document.getElementById('qs_validityDays');
+  if(validityInput) validityInput.onchange = ()=>{
+    const qd = quotationDefaults();
+    DB.upsert('settings', { quotationDefaults: { ...qd, validityDays: Math.max(1, Number(validityInput.value)||30) } });
+    toast('Default validity updated.', 'success');
+  };
+  document.querySelectorAll('[data-save-excl]').forEach(btn=> btn.onclick = ()=>{
+    const type = btn.dataset.saveExcl;
+    const lines = document.getElementById(`qs_excl_${type}`).value.split('\n').map(s=>s.trim()).filter(Boolean);
+    const qd = quotationDefaults();
+    const exclusions = { ...qd.exclusions, [type]: lines };
+    DB.upsert('settings', { quotationDefaults: { ...qd, exclusions } });
+    toast(`${type==='website'?'Website':'System'} exclusions updated.`, 'success');
+  });
+  document.querySelectorAll('[data-save-notes]').forEach(btn=> btn.onclick = ()=>{
+    const type = btn.dataset.saveNotes;
+    const qd = quotationDefaults();
+    const notes = (qd.notes[type]||[]).map((n,i)=>{
+      const ta = document.querySelector(`[data-note="${type}|${i}"]`);
+      return ta ? { ...n, text: ta.value } : n;
+    });
+    DB.upsert('settings', { quotationDefaults: { ...qd, notes: { ...qd.notes, [type]: notes } } });
+    toast(`${type==='website'?'Website':'System'} notes updated.`, 'success');
   });
 }
 
