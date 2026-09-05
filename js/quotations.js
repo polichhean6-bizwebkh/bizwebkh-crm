@@ -139,6 +139,11 @@ function duplicateQuotation(id){
 
 let QC_STATE = null;
 let QC_TAB = 'edit'; // 'edit' | 'preview' — used on narrow screens only
+// Live preview zoom: 'fit' (recomputed to the panel's current width) or a
+// literal scale factor (1 = 100%). Typography/layout fix — purely a screen
+// convenience, never applied to the printed/PDF document itself.
+let QC_ZOOM = 'fit';
+const QC_A4_PAGE_WIDTH_PX = 794; // 210mm at 96dpi — the physical page width the preview scales from
 
 // Any lead/opportunity that a quotation can be created against — never
 // creates a duplicate lead: this always searches EXISTING Lead Records
@@ -191,6 +196,7 @@ function openCreateQuotationModal(prefill={}){
   };
   if(QC_STATE.leadId) applyLeadToQC(QC_STATE.leadId);
   QC_TAB = 'edit';
+  QC_ZOOM = 'fit';
   renderCreateQuotationModal();
 }
 
@@ -242,12 +248,15 @@ function renderCreateQuotationModal(){
   const notesList = s.notesOverride || (s.packageKey ? (quotationDefaults().notes[quotationTypeForProjectType(s.packageKey)]||[]) : []);
 
   const html = `
-    <div class="modal-head"><h3>${s.editingId?'Edit Quotation':'Create Quotation'}</h3><button class="modal-close" id="cqClose">&times;</button></div>
-    <div class="modal-body">
-      <div class="qc-tabs" style="display:none">
+    <div class="modal-head">
+      <h3>${s.editingId?'Edit Quotation':'Create Quotation'}</h3>
+      <div class="qc-tabs">
         <div class="tab-btn ${QC_TAB==='edit'?'active':''}" data-qctab="edit">Edit</div>
         <div class="tab-btn ${QC_TAB==='preview'?'active':''}" data-qctab="preview">Preview</div>
       </div>
+      <button class="modal-close" id="cqClose">&times;</button>
+    </div>
+    <div class="modal-body qc-modal-body">
       <div class="qc-split">
         <div class="qc-edit-col" ${QC_TAB!=='edit'?'data-hide-narrow="1"':''}>
 
@@ -363,7 +372,20 @@ function renderCreateQuotationModal(){
         </div>
 
         <div class="qc-preview-col" ${QC_TAB!=='preview'?'data-hide-narrow="1"':''}>
-          <div id="cq_livePreview">${quotationPreviewDocHtml(qcStateToPreviewQuotation(s, evalRes, schedule))}</div>
+          <div class="qc-preview-toolbar">
+            <span class="text-muted" style="font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Quotation Preview</span>
+            <div class="qc-zoom-controls">
+              <button class="btn btn-ghost btn-sm ${QC_ZOOM==='fit'?'active':''}" data-zoom="fit" title="Fit to panel width">Fit</button>
+              <button class="btn btn-ghost btn-sm ${QC_ZOOM===1?'active':''}" data-zoom="100" title="Actual size">100%</button>
+              <button class="btn btn-ghost btn-sm" data-zoom="out" title="Zoom out">&minus;</button>
+              <button class="btn btn-ghost btn-sm" data-zoom="in" title="Zoom in">+</button>
+            </div>
+          </div>
+          <div class="qc-preview-canvas" id="qcPreviewCanvas">
+            <div class="qc-a4-scale" id="qcA4Scale">
+              <div id="cq_livePreview">${quotationPreviewDocHtml(qcStateToPreviewQuotation(s, evalRes, schedule))}</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -373,10 +395,20 @@ function renderCreateQuotationModal(){
     </div>
   `;
 
-  openModal(html, { large:true, onMount:(overlay)=>{
+  openModal(html, { xl:true, onMount:(overlay)=>{
     overlay.querySelector('#cqClose').onclick = closeModal;
     overlay.querySelector('#cqCancel').onclick = closeModal;
     overlay.querySelectorAll('[data-qctab]').forEach(t=> t.onclick = ()=>{ QC_TAB = t.dataset.qctab; renderCreateQuotationModal(); });
+    overlay.querySelectorAll('[data-zoom]').forEach(b=> b.onclick = ()=>{
+      const z = b.dataset.zoom;
+      if(z==='fit') QC_ZOOM = 'fit';
+      else if(z==='100') QC_ZOOM = 1;
+      else if(z==='in') QC_ZOOM = Math.min(2, (QC_ZOOM==='fit'?qcCurrentFitZoom(overlay):QC_ZOOM) + 0.1);
+      else if(z==='out') QC_ZOOM = Math.max(0.3, (QC_ZOOM==='fit'?qcCurrentFitZoom(overlay):QC_ZOOM) - 0.1);
+      renderCreateQuotationModal();
+    });
+    qcApplyZoom(overlay);
+    qcWireResize(overlay);
 
     overlay.querySelectorAll('[data-src]').forEach(b=> b.onclick = ()=>{
       s.sourceType = b.dataset.src;
@@ -461,6 +493,45 @@ function refreshQcPreview(overlay){
   overlay.querySelector('#cq_authorityBanner').innerHTML = authorityBannerHtml(evalRes);
   const preview = overlay.querySelector('#cq_livePreview');
   if(preview) preview.innerHTML = quotationPreviewDocHtml(qcStateToPreviewQuotation(s, evalRes, schedule));
+  qcApplyZoom(overlay);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Live preview zoom (screen-only — never affects the printed document)   */
+/* ---------------------------------------------------------------------- */
+
+// The actual "Fit" ratio for the panel's current width — used both to
+// render the page and as the starting point for +/- so zooming in/out
+// always feels continuous from whatever "Fit" was just showing.
+function qcCurrentFitZoom(overlay){
+  const canvas = overlay.querySelector('#qcPreviewCanvas');
+  if(!canvas) return 1;
+  const available = canvas.clientWidth - 32; // minus the canvas's own side padding
+  if(!available || available<=0) return 1;
+  return Math.max(0.3, Math.min(1.5, available / QC_A4_PAGE_WIDTH_PX));
+}
+function qcApplyZoom(overlay){
+  const canvas = overlay.querySelector('#qcPreviewCanvas');
+  const scaleEl = overlay.querySelector('#qcA4Scale');
+  if(!canvas || !scaleEl) return;
+  const z = QC_ZOOM==='fit' ? qcCurrentFitZoom(overlay) : QC_ZOOM;
+  // `zoom` (not `transform:scale`) so the panel's scrollable height tracks
+  // the scaled page automatically — no manual height/overflow math needed
+  // to keep the internal vertical scrollbar correct at any zoom level.
+  scaleEl.style.zoom = z;
+}
+// Recomputes "Fit" on window resize while a Create/Edit Quotation modal is
+// open. Only one listener is ever live at a time (each call removes the
+// previous one first) so re-rendering the modal repeatedly never piles up
+// duplicate handlers.
+let QC_RESIZE_HANDLER = null;
+function qcWireResize(overlay){
+  if(QC_RESIZE_HANDLER) window.removeEventListener('resize', QC_RESIZE_HANDLER);
+  QC_RESIZE_HANDLER = ()=>{
+    if(!document.body.contains(overlay)){ window.removeEventListener('resize', QC_RESIZE_HANDLER); QC_RESIZE_HANDLER = null; return; }
+    if(QC_ZOOM==='fit') qcApplyZoom(overlay);
+  };
+  window.addEventListener('resize', QC_RESIZE_HANDLER);
 }
 
 function authorityBannerHtml(evalRes){
@@ -994,6 +1065,14 @@ function quotationTitleBlock(quotationType){
     : { khmer:'សំណើតម្លៃគេហទំព័រ', english:'WEBSITE QUOTATION' };
 }
 
+// Two-line bilingual table label (Khmer on its own line so Noto Sans Khmer
+// gets the extra line-height it needs, English underneath) — used for every
+// row of the client-info table. See the .quote-doc-infotable th CSS for the
+// per-script font-family split.
+function bilingualLabel(khmer, english){
+  return `<span class="khmer-label">${khmer}</span><span class="en-label">${escapeHtml(english)}</span>`;
+}
+
 function quotationPreviewDocHtml(q){
   const title = quotationTitleBlock(q.quotationType);
   const bank = bankDetails();
@@ -1006,18 +1085,18 @@ function quotationPreviewDocHtml(q){
       <div class="quote-doc-head">
         <div class="quote-doc-brand"><div class="logo-mark">BW</div><div><strong>BizWeb KH</strong><div class="text-muted" style="font-size:11px">Tel: 017 400 044 | Telegram: @BizWebKH | www.bizwebkh.com</div></div></div>
         <div class="quote-doc-meta">
-          <div style="font-family:'Noto Sans Khmer',sans-serif;font-size:13px;color:var(--blue)">${title.khmer}</div>
+          <div class="khmer-text" style="font-size:13px;color:var(--blue)">${title.khmer}</div>
           <div><b>${title.english}</b></div>
           <div>Quote No: ${escapeHtml(q.quoteNumber)}</div>
         </div>
       </div>
 
       <table class="quote-doc-infotable">
-        <tr><th>ឈ្មោះអតិថិជន / Client Name</th><td>${escapeHtml(q.clientName)}</td></tr>
-        <tr><th>ឈ្មោះអាជីវកម្ម / Business Name</th><td>${escapeHtml(q.businessName)}</td></tr>
-        <tr><th>គម្រោង / Project</th><td>${escapeHtml(q.packageName)}${q.industry?' — '+escapeHtml(q.industry):''}</td></tr>
-        <tr><th>កាលបរិច្ឆេទ / Date</th><td>${fmtDate(q.quotationDate)}</td></tr>
-        <tr><th>សុពលភាព / Valid Until</th><td>${fmtDate(q.validUntil)}</td></tr>
+        <tr><th>${bilingualLabel('ឈ្មោះអតិថិជន','Client Name')}</th><td>${escapeHtml(q.clientName)}</td></tr>
+        <tr><th>${bilingualLabel('ឈ្មោះអាជីវកម្ម','Business Name')}</th><td>${escapeHtml(q.businessName)}</td></tr>
+        <tr><th>${bilingualLabel('គម្រោង','Project')}</th><td>${escapeHtml(q.packageName)}${q.industry?' — '+escapeHtml(q.industry):''}</td></tr>
+        <tr><th>${bilingualLabel('កាលបរិច្ឆេទ','Date')}</th><td>${fmtDate(q.quotationDate)}</td></tr>
+        <tr><th>${bilingualLabel('សុពលភាព','Valid Until')}</th><td>${fmtDate(q.validUntil)}</td></tr>
         ${q.demoLink ? `<tr><th>Demo Preview Link</th><td>${escapeHtml(q.demoLink)}</td></tr>` : ''}
       </table>
 
@@ -1092,8 +1171,11 @@ function openQuotationPreview(id, autoPrint=false){
   openModal(html, { large:true, onMount:(overlay)=>{
     overlay.querySelector('#qpClose').onclick = closeModal;
     overlay.querySelector('#qpClose2').onclick = closeModal;
-    overlay.querySelector('#qpPrint').onclick = ()=> window.print();
-    if(autoPrint) setTimeout(()=> window.print(), 200);
+    overlay.querySelector('#qpPrint').onclick = printAfterFontsReady;
+    // Same font-ready wait as the manual Print button — an auto-triggered
+    // print (e.g. the list page's PDF action) is exactly the case most
+    // likely to fire before the Khmer webfont has finished loading.
+    if(autoPrint) setTimeout(printAfterFontsReady, 200);
   }});
 }
 

@@ -156,12 +156,16 @@ function toast(msg, type=''){
 /* Generic modal helper                                                   */
 /* ---------------------------------------------------------------------- */
 
-function openModal(innerHtml, { large=false, onMount=null } = {}){
+// `xl` is the wide split-view size (Create/Edit Quotation's form+A4-preview
+// layout — Quotations typography/layout fix, spec §7) — a fixed-size,
+// internally-scrolling modal (own CSS: .modal-box.modal-xl), distinct from
+// the older `large` (.modal-lg) size used by every other detail modal.
+function openModal(innerHtml, { large=false, xl=false, onMount=null } = {}){
   closeModal();
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'activeModalOverlay';
-  overlay.innerHTML = `<div class="modal-box ${large?'modal-lg':''}">${innerHtml}</div>`;
+  overlay.innerHTML = `<div class="modal-box ${xl?'modal-xl':(large?'modal-lg':'')}">${innerHtml}</div>`;
   overlay.addEventListener('mousedown', (e)=>{ if(e.target===overlay) closeModal(); });
   document.body.appendChild(overlay);
   if(onMount) onMount(overlay);
@@ -172,6 +176,20 @@ function closeModal(){
   if(el) el.remove();
 }
 document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeModal(); });
+
+// Waits for web fonts (e.g. Noto Sans Khmer) to finish loading before
+// calling window.print() — the quotation preview can look fine on screen
+// the instant it renders, then print/PDF with the Khmer text still on a
+// fallback font because the browser hadn't finished fetching the webfont
+// yet. document.fonts.ready resolves once every requested font is loaded
+// (or immediately if there's nothing to wait for), so this is a no-op
+// everywhere except that one race.
+function printAfterFontsReady(){
+  try{
+    if(document.fonts && document.fonts.ready){ document.fonts.ready.then(()=> window.print()); return; }
+  }catch(e){ /* fall through to a plain print */ }
+  window.print();
+}
 
 /* ---------------------------------------------------------------------- */
 /* Status-change confirmation modal (leads + projects share this)         */
