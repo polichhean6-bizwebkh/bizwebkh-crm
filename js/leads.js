@@ -193,22 +193,112 @@ function renderLeadSummaryCards(){
   // so it can never go stale if either of those definitions changes above.
   const open = all.filter(l=> !isLeadStatus(l,'Confirmed') && !isLeadStatus(l,'Lost')).length;
   const followupDue = all.filter(l=> l.nextFollowup && ['overdue','today'].includes(urgencyOf(l.nextFollowup)) && !isLeadStatus(l,'Lost') && !isLeadStatus(l,'Confirmed')).length;
+  // Tooltip copy is the exact wording from the KPI-tooltip spec (§1) — keep
+  // these in sync with that spec if the definitions above ever change.
   const cards = [
-    { label:'Total Leads', value: total, color:'#1d7bff', help:'All active (non-archived) lead records.' },
-    { label:'Open Leads', value: open, color:'#18c8ff', help:'All active leads not yet Confirmed or Lost — includes Contacted, Qualified, Quote and Demo Sent, Potential Need Follow Up, On Hold / Future Follow-up, and Negotiation.' },
-    { label:'Confirmed', value: confirmed, color:'#12a775', help:'Only leads whose status is exactly Confirmed.' },
-    { label:'Lost', value: lost, color:'#e0473c', help:'Only leads whose status is exactly Lost.' },
-    { label:'Follow-up Due', value: followupDue, color:'#d98a12', help:'Active leads (not Confirmed/Lost) whose next follow-up is today or earlier.' },
+    { label:'Total Leads', value: total, color:'#1d7bff', help:'All non-archived lead records currently stored in CRM.' },
+    { label:'Open Leads', value: open, color:'#18c8ff', help:'Active leads that are not yet Confirmed or Lost.' },
+    { label:'Confirmed', value: confirmed, color:'#12a775', help:'Leads whose current status is Confirmed.' },
+    { label:'Lost', value: lost, color:'#e0473c', help:'Leads whose current status is Lost.' },
+    { label:'Follow-up Due', value: followupDue, color:'#d98a12', help:'Active leads with a follow-up date due today or already overdue.' },
   ];
+  // No native `title` attribute here on purpose — the "?" below is a real,
+  // focusable <button> wired to a single shared, JS-positioned tooltip (see
+  // wireKpiHelpTooltips) so it works on hover, click, tap, and keyboard
+  // focus, and is announced to screen readers via aria-label/aria-describedby.
   el.innerHTML = `
     <div class="kpi-grid summary-cards-5">
       ${cards.map(c=>`
-        <div class="kpi-card" style="padding:12px 14px" title="${escapeHtml(c.help)}">
+        <div class="kpi-card" style="padding:12px 14px">
           <div class="kpi-value" style="font-size:20px;color:${c.color}">${c.value}</div>
-          <div class="kpi-label" style="margin-top:4px">${c.label} <span class="text-muted" style="font-size:11px;cursor:help;border:1px solid currentColor;border-radius:50%;display:inline-block;width:13px;height:13px;line-height:12px;text-align:center" aria-hidden="true">?</span></div>
+          <div class="kpi-label" style="margin-top:4px">${c.label} <button type="button" class="kpi-help-btn" data-help-text="${escapeHtml(c.help)}" aria-label="What does ${escapeHtml(c.label)} mean?">?</button></div>
         </div>`).join('')}
     </div>
   `;
+  wireKpiHelpTooltips(el);
+}
+
+/* ---------------------------------------------------------------------- */
+/* KPI card help tooltips (Lead Records summary cards). A single shared    */
+/* tooltip element is appended once to <body> and repositioned/relabelled  */
+/* for whichever "?" button is active, rather than nesting a tooltip       */
+/* inside each card — this guarantees it's never clipped by a card/panel  */
+/* boundary and can be clamped/flipped to always stay inside the viewport. */
+/* Works via hover (desktop), click/tap (desktop + mobile/tablet), and     */
+/* keyboard focus (Enter/Space activation is free — it's a real <button>). */
+/* ---------------------------------------------------------------------- */
+function ensureKpiTooltipEl(){
+  let tip = document.getElementById('kpiHelpTooltip');
+  if(!tip){
+    tip = document.createElement('div');
+    tip.id = 'kpiHelpTooltip';
+    tip.className = 'kpi-help-tooltip';
+    tip.setAttribute('role', 'tooltip');
+    document.body.appendChild(tip);
+  }
+  return tip;
+}
+
+// Positions the tooltip under (or, if there's no room below the viewport,
+// above) the given button, and clamps it horizontally so it never spills
+// past the left/right edge of the screen — satisfies "does not get
+// clipped", "stays within viewport", and "flips ... if near screen edge".
+function positionKpiTooltip(tip, btn){
+  const r = btn.getBoundingClientRect();
+  const margin = 8;
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let left = r.left + (r.width / 2) - (tw / 2);
+  left = Math.max(margin, Math.min(left, window.innerWidth - tw - margin));
+  let top = r.bottom + 8;
+  if(top + th > window.innerHeight - margin) top = r.top - th - 8; // flip above
+  if(top < margin) top = margin;
+  tip.style.left = left + 'px';
+  tip.style.top = top + 'px';
+}
+
+let KPI_TOOLTIP_OPEN_BTN = null;
+function showKpiTooltip(btn){
+  if(KPI_TOOLTIP_OPEN_BTN && KPI_TOOLTIP_OPEN_BTN !== btn) KPI_TOOLTIP_OPEN_BTN.removeAttribute('aria-describedby');
+  const tip = ensureKpiTooltipEl();
+  tip.textContent = btn.getAttribute('data-help-text') || '';
+  tip.classList.add('is-visible');
+  KPI_TOOLTIP_OPEN_BTN = btn;
+  btn.setAttribute('aria-describedby', 'kpiHelpTooltip');
+  positionKpiTooltip(tip, btn);
+}
+function hideKpiTooltip(){
+  const tip = document.getElementById('kpiHelpTooltip');
+  if(tip) tip.classList.remove('is-visible');
+  if(KPI_TOOLTIP_OPEN_BTN) KPI_TOOLTIP_OPEN_BTN.removeAttribute('aria-describedby');
+  KPI_TOOLTIP_OPEN_BTN = null;
+}
+
+function wireKpiHelpTooltips(container){
+  container.querySelectorAll('.kpi-help-btn').forEach(btn=>{
+    // Desktop hover.
+    btn.onmouseenter = ()=> showKpiTooltip(btn);
+    btn.onmouseleave = ()=> { if(document.activeElement !== btn) hideKpiTooltip(); };
+    // Keyboard focus (Tab) + native Enter/Space activation on a <button>
+    // fires focus first, so this alone covers keyboard use; blur closes it.
+    btn.onfocus = ()=> showKpiTooltip(btn);
+    btn.onblur = ()=> hideKpiTooltip();
+    // Click/tap — desktop accessibility fallback and the mobile/tablet path
+    // (touch doesn't reliably fire mouseenter). stopPropagation keeps this
+    // from being immediately closed by the document-level "click outside"
+    // handler registered just below.
+    btn.onclick = (e)=>{ e.stopPropagation(); showKpiTooltip(btn); };
+  });
+  // Wired once globally (not per render) — renderLeadSummaryCards() re-runs
+  // on every filter change and replaces the buttons above each time, but
+  // there is only ever one shared tooltip element and one set of
+  // page-level close conditions to manage.
+  if(!window.__kpiTooltipGlobalWired){
+    window.__kpiTooltipGlobalWired = true;
+    document.addEventListener('click', ()=> hideKpiTooltip());
+    document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape') hideKpiTooltip(); });
+    window.addEventListener('scroll', ()=> hideKpiTooltip(), true);
+    window.addEventListener('resize', ()=> hideKpiTooltip());
+  }
 }
 
 function filteredLeads(){

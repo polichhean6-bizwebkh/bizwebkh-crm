@@ -215,6 +215,34 @@ img{max-width:100%;display:block}
 .kpi-card .kpi-label{font-size:12px;color:var(--muted);margin-top:6px;font-weight:600}
 .kpi-card .kpi-trend{font-size:11px;font-weight:700;margin-top:8px}
 
+/* KPI card help icon + tooltip (Lead Records summary cards). The "?" is a
+   real focusable <button>, not decorative — it works on hover, click/tap,
+   and keyboard focus (see wireKpiHelpTooltips in leads.js). The tooltip
+   itself is a single shared element appended to <body> and positioned via
+   JS with getBoundingClientRect(), rather than nested inside the card, so
+   it can never be clipped by the card/panel and is always clamped to stay
+   inside the viewport. Background is intentionally INVERTED from the
+   normal --surface tokens (dark in light mode, light in dark mode) so it
+   reads as a distinct floating overlay rather than blending into the card
+   underneath it. */
+.kpi-help-btn{
+  appearance:none;-webkit-appearance:none;background:transparent;padding:0;margin-left:4px;
+  width:14px;height:14px;line-height:12px;font-size:10px;font-weight:800;font-family:inherit;
+  border:1px solid var(--muted);border-radius:50%;color:var(--muted);
+  display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;cursor:pointer;
+}
+.kpi-help-btn:hover, .kpi-help-btn:focus-visible{color:#fff;background:var(--blue);border-color:var(--blue)}
+.kpi-help-btn:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.kpi-help-tooltip{
+  position:fixed;z-index:250;max-width:260px;padding:8px 11px;border-radius:8px;
+  font-size:12px;line-height:1.45;font-weight:500;letter-spacing:0;
+  background:var(--navy);color:#fff;box-shadow:0 10px 26px rgba(7,20,45,.28);
+  opacity:0;transform:translateY(2px);pointer-events:none;
+  transition:opacity .12s ease,transform .12s ease;
+}
+.kpi-help-tooltip.is-visible{opacity:1;transform:translateY(0)}
+[data-theme="dark"] .kpi-help-tooltip{background:#F1F5F9;color:var(--navy);box-shadow:0 10px 26px rgba(0,0,0,.45)}
+
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 4px 14px rgba(21,62,121,.05)}
 .panel-head{display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid var(--line)}
 .panel-head h3{font-size:14.5px;font-weight:800}
