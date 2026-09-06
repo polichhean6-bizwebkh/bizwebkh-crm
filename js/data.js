@@ -458,6 +458,11 @@ const PAYMENT_SCHEDULE_PRESETS = {
     { label:'Milestone Payment (Stage 2)', pct:30 },
     { label:'Final Payment (Stage 3)', pct:40 },
   ],
+  '20/40/40': [
+    { label:'Deposit (Stage 1)', pct:20 },
+    { label:'Milestone Payment (Stage 2)', pct:40 },
+    { label:'Final Payment (Stage 3)', pct:40 },
+  ],
   '50/50': [
     { label:'Deposit', pct:50 },
     { label:'Final Payment', pct:50 },

@@ -175,7 +175,43 @@ function closeModal(){
   const el = document.getElementById('activeModalOverlay');
   if(el) el.remove();
 }
-document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeModal(); });
+
+// Child modal — a modal opened ON TOP of an already-open modal (e.g. "Add
+// Scope Item" opened from inside Create/Edit Quotation), using its own
+// separate overlay element rather than reusing openModal()/closeModal().
+// openModal() always calls closeModal() first, which REMOVES the single
+// #activeModalOverlay element outright — if a nested modal were opened via
+// openModal() while a parent modal was open, the parent's entire DOM
+// (and all its unsaved form state) would be destroyed the moment the child
+// opened, and clicking the child's Cancel would then close the child with
+// no parent left underneath to return to (this was the exact root cause of
+// the "Add Scope Item -> Cancel resets/closes Create Quotation" bug — see
+// quotations.js openAddQuotationFunctionModal). A child modal must NEVER
+// touch the parent's overlay, so opening/closing it can never reset,
+// remount, or lose any parent form state, scroll position, or preview zoom.
+function openChildModal(innerHtml, { large=false, xl=false, onMount=null } = {}){
+  closeChildModal();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay modal-overlay-child';
+  overlay.id = 'activeChildModalOverlay';
+  overlay.innerHTML = `<div class="modal-box ${xl?'modal-xl':(large?'modal-lg':'')}">${innerHtml}</div>`;
+  overlay.addEventListener('mousedown', (e)=>{ if(e.target===overlay) closeChildModal(); });
+  document.body.appendChild(overlay);
+  if(onMount) onMount(overlay);
+  return overlay;
+}
+function closeChildModal(){
+  const el = document.getElementById('activeChildModalOverlay');
+  if(el) el.remove();
+}
+document.addEventListener('keydown', (e)=>{
+  if(e.key==='Escape'){
+    // A child modal (if open) always takes Escape first, so Escape closes
+    // one modal at a time instead of dismissing the parent underneath it.
+    if(document.getElementById('activeChildModalOverlay')) closeChildModal();
+    else closeModal();
+  }
+});
 
 // Waits for web fonts (e.g. Noto Sans Khmer) to finish loading before
 // calling window.print() — the quotation preview can look fine on screen

@@ -176,6 +176,75 @@ function quotationLeadSuggestions(query){
   return leads.slice(0, 10);
 }
 
+// A brand-new quotation defaults Year 1 Maintenance to Included/Free ($0) —
+// the friendly, common case per the spec's own example ("Free Maintenance —
+// 1 Year, Cost = $0"). Editing an EXISTING quotation instead defaults to
+// 'not_included' (see loadStateFromQuotation) whenever the saved record has
+// no `maintenance` object at all, so opening an old quotation created
+// before this feature existed never silently adds new maintenance wording/
+// terms to it (spec §16: never overwrite old quotation terms).
+function defaultMaintenanceState(){
+  return { year1Mode:'included', year1Cost:0, year2Cost:0, year3Cost:0, year2DisplayMode:'estimated', year3DisplayMode:'estimated' };
+}
+
+// The Year-1 PAYMENT SCHEDULE total, additive-only: the stored/displayed
+// scope total (year1ScopeTotal) is never mutated by maintenance — this is
+// computed only at the specific points that need a maintenance-inclusive
+// number (the payment-schedule split, and the printed Year 1 Amount cell),
+// keeping `year1Total` itself pure scope/hosting everywhere else (dashboard
+// KPIs, lead.quotationAmount, the quotations list-table Amount column).
+function qcYear1PaymentTotal(maintenance, year1ScopeTotal){
+  const m = maintenance || {};
+  const scope = Number(year1ScopeTotal) || 0;
+  const addOn = (m.year1Mode==='paid') ? (Number(m.year1Cost)||0) : 0;
+  return scope + addOn;
+}
+
+// Formats a Year 2/3 renewal amount per its display mode (spec §3) — never
+// forces a single fixed renewal total onto every quotation.
+function qcYearAmountDisplay(amount, mode){
+  if(mode==='tbc') return 'To be confirmed';
+  const amt = Number(amount)||0;
+  if(mode==='exact') return money(amt)+'/year';
+  return '~'+money(amt)+'/year'; // 'estimated' (default)
+}
+
+// The two maintenance wording notes (spec §14) — regenerated fresh from the
+// live maintenance state every time (never stored as static text), and only
+// added when maintenance was actually mentioned on this quotation at all.
+function maintenanceWordingNotes(maintenance){
+  const m = maintenance;
+  if(!m || m.year1Mode==='not_included') return [];
+  const notes = [
+    { key:'maintenanceY1', title:'Year 1 Maintenance', text: m.year1Mode==='included'
+        ? 'Basic maintenance and support included for Year 1.'
+        : `Year 1 maintenance is billed separately at ${money(Number(m.year1Cost)||0)}. Standard maintenance covers minor bug fixes, basic CMS/admin guidance, and small support within the existing scope — it does not include new features, major redesign, new integrations, or major workflow changes.` },
+    { key:'maintenanceRenewal', title:'Maintenance Renewal', text:'Annual maintenance and support is billed separately from Year 2 onward at the quoted/confirmed annual rate. Standard maintenance covers minor bug fixes, basic CMS/admin guidance, and small support within the existing scope — it does not include new features, major redesign, new integrations, or major workflow changes.' },
+  ];
+  return notes;
+}
+
+// Non-destructive display filter for spec §15: hides a standard exclusion
+// from the PRINTED/displayed list when a currently-active scope item's name
+// clearly overlaps with it (e.g. "Online Payment" added to scope hides
+// "Online payment gateway" from Not Included) — the underlying stored
+// `exclusions` array is never mutated, so toggling the scope item back off
+// instantly restores the exclusion with zero data-loss risk.
+const EXCLUSION_FILTER_STOPWORDS = new Set(['the','and','for','with','from','this','that','system','management','support','service','services']);
+function significantWords(text){
+  return String(text||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(w=>w.length>=5 && !EXCLUSION_FILTER_STOPWORDS.has(w));
+}
+function activeScopeMentionsExclusion(items, exclusionText){
+  const exWords = significantWords(exclusionText);
+  if(!exWords.length) return false;
+  const scopeWords = new Set();
+  (items||[]).forEach(it=> significantWords(it.name).forEach(w=>scopeWords.add(w)));
+  return exWords.some(w=>scopeWords.has(w));
+}
+function visibleExclusions(items, exclusions){
+  return (exclusions||[]).filter(x=>!activeScopeMentionsExclusion(items, x));
+}
+
 function openCreateQuotationModal(prefill={}){
   let base = null;
   if(prefill.duplicateFrom){
@@ -190,6 +259,7 @@ function openCreateQuotationModal(prefill={}){
     packageKey:'', discountPct:0, adjustment:0, adjustmentReason:'',
     items: [], exclusions: [], notesOverride: null, clientNote:'',
     domainName:'', domainCost: DEFAULT_DOMAIN_COST_ESTIMATE, domainIncluded:true, domainRenewalEstimate: DEFAULT_DOMAIN_COST_ESTIMATE,
+    maintenance: defaultMaintenanceState(),
     paymentPreset: '30/70', customStages:null,
     quotationDate: todayLocalISO(), validUntil: daysFromNow(quotationDefaults().validityDays),
     demoLink:'', editingId: null, versionOf: null,
@@ -234,6 +304,15 @@ function qcQuoteNumberPreview(){
 }
 
 function renderCreateQuotationModal(){
+  // A handful of edits still require a full remount (package change, item
+  // include/remove, Add Scope Item, discount/adjustment, payment preset,
+  // quotation date) rather than the lighter refreshQcPreview path. A full
+  // remount would otherwise always jump the left panel back to its top
+  // (spec §12) — captured here and restored after the new DOM mounts so
+  // the user's place in a long form is never lost.
+  const prevOverlay = document.getElementById('activeModalOverlay');
+  const prevScrollTop = prevOverlay ? (prevOverlay.querySelector('.qc-edit-col')||{}).scrollTop : null;
+
   const s = QC_STATE;
   const svc = serviceByProjectType(s.packageKey);
   const activeItems = s.items.filter(i=>i.included!==false).map(i=>({name:i.name, price:i.price, founderReviewRequired:i.founderReviewRequired}));
@@ -243,7 +322,7 @@ function renderCreateQuotationModal(){
     discountLimitPct: effectiveDiscountLimit(svc),
   });
   const year1 = evalRes.finalPrice;
-  const paymentTotal = evalRes.priceIsTBC ? 0 : year1;
+  const paymentTotal = evalRes.priceIsTBC ? 0 : qcYear1PaymentTotal(s.maintenance, year1);
   const schedule = computePaymentSchedule(paymentTotal, s.paymentPreset, s.customStages);
   const notesList = s.notesOverride || (s.packageKey ? (quotationDefaults().notes[quotationTypeForProjectType(s.packageKey)]||[]) : []);
 
@@ -313,7 +392,14 @@ function renderCreateQuotationModal(){
           </div>
 
           <div class="divider"></div>
-          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Domain</div>
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">C. Scope of Work / Functions</div>
+          <div id="cq_itemsWrap">${quotationItemsEditorHtml(s.items)}</div>
+          <button class="btn btn-outline btn-sm" id="cq_addFn" style="margin:8px 0 16px">+ Add Scope Item</button>
+          <div class="text-muted" style="font-size:12px;margin:-8px 0 14px">Standard exclusions for this package (Founder/Admin-editable in Settings → Quotations):</div>
+          <ul style="margin:-8px 0 16px;padding-left:18px;font-size:12.5px;color:var(--muted)">${visibleExclusions(s.items.filter(i=>i.included!==false), s.exclusions).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul>
+
+          <div class="divider"></div>
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">D. Domain & Infrastructure</div>
           <div class="form-grid">
             <div class="form-field"><label>Domain Name</label><input id="cq_domainName" value="${escapeHtml(s.domainName)}" placeholder="e.g. example.com"></div>
             <div class="form-field"><label>Domain Cost ($)</label><input type="number" id="cq_domainCost" value="${s.domainCost}"></div>
@@ -324,16 +410,39 @@ function renderCreateQuotationModal(){
           </div>
 
           <div class="divider"></div>
-          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">C. Scope of Work</div>
-          <div id="cq_itemsWrap">${quotationItemsEditorHtml(s.items)}</div>
-          <button class="btn btn-outline btn-sm" id="cq_addFn" style="margin:8px 0 16px">+ Add Custom Scope Item</button>
-          <div class="text-muted" style="font-size:12px;margin:-8px 0 14px">Standard exclusions for this package (Founder/Admin-editable in Settings → Quotations):</div>
-          <ul style="margin:-8px 0 16px;padding-left:18px;font-size:12.5px;color:var(--muted)">${s.exclusions.map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul>
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">E. Maintenance & Support</div>
+          <div class="form-grid">
+            <div class="form-field"><label>Year 1 Maintenance</label>
+              <select id="cq_maintY1Mode" class="sel" ${isFounder()?'':'disabled'}>
+                <option value="included" ${s.maintenance.year1Mode==='included'?'selected':''}>Included / Free</option>
+                <option value="paid" ${s.maintenance.year1Mode==='paid'?'selected':''}>Paid</option>
+                <option value="not_included" ${s.maintenance.year1Mode==='not_included'?'selected':''}>Not Included</option>
+              </select>
+            </div>
+            <div class="form-field"><label>Maintenance Cost — Year 1 ($)</label><input type="number" id="cq_maintY1Cost" value="${s.maintenance.year1Cost}" ${(isFounder() && s.maintenance.year1Mode==='paid')?'':'disabled'}></div>
+            <div class="form-field"><label>Year 2 Maintenance ($/yr)</label><input type="number" id="cq_maintY2Cost" value="${s.maintenance.year2Cost}" ${isFounder()?'':'disabled'}></div>
+            <div class="form-field"><label>Year 3 Maintenance ($/yr)</label><input type="number" id="cq_maintY3Cost" value="${s.maintenance.year3Cost}" ${isFounder()?'':'disabled'}></div>
+            <div class="form-field"><label>Year 2 Amount Display</label>
+              <select id="cq_maintY2Display" class="sel" ${isFounder()?'':'disabled'}>
+                <option value="exact" ${s.maintenance.year2DisplayMode==='exact'?'selected':''}>Exact Amount</option>
+                <option value="estimated" ${s.maintenance.year2DisplayMode==='estimated'?'selected':''}>Estimated Amount</option>
+                <option value="tbc" ${s.maintenance.year2DisplayMode==='tbc'?'selected':''}>To be confirmed</option>
+              </select>
+            </div>
+            <div class="form-field"><label>Year 3 Amount Display</label>
+              <select id="cq_maintY3Display" class="sel" ${isFounder()?'':'disabled'}>
+                <option value="exact" ${s.maintenance.year3DisplayMode==='exact'?'selected':''}>Exact Amount</option>
+                <option value="estimated" ${s.maintenance.year3DisplayMode==='estimated'?'selected':''}>Estimated Amount</option>
+                <option value="tbc" ${s.maintenance.year3DisplayMode==='tbc'?'selected':''}>To be confirmed</option>
+              </select>
+            </div>
+          </div>
+          <p class="text-muted" style="font-size:11.5px;margin:6px 0 0">Standard maintenance covers minor bug fixes, basic CMS/admin guidance, and small support within the existing scope. It does not include new features, major redesign, new integrations, or major workflow changes.</p>
 
           <div class="divider"></div>
-          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">D. Year-by-Year Costs</div>
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">F. Year-by-Year Cost</div>
           <div class="form-grid">
-            <div class="form-field"><label>Year 1 Total (auto)</label><input value="${evalRes.priceIsTBC?'TBC':money(year1)}" disabled></div>
+            <div class="form-field"><label>Year 1 Total (auto${s.maintenance.year1Mode==='paid'?' incl. maintenance':''})</label><input value="${evalRes.priceIsTBC?'TBC':money(qcYear1PaymentTotal(s.maintenance, year1))}" disabled></div>
             <div class="form-field"><label>Year 2 Renewal ($/yr)</label><input type="number" id="cq_year2" value="${s.year2Total!=null?s.year2Total:(svc?svc.year2Price:0)}" ${isFounder()?'':'disabled'}></div>
             <div class="form-field"><label>Year 3 Renewal ($/yr)</label><input type="number" id="cq_year3" value="${s.year3Total!=null?s.year3Total:(svc?svc.year3Price:0)}" ${isFounder()?'':'disabled'}></div>
           </div>
@@ -350,22 +459,23 @@ function renderCreateQuotationModal(){
           <div class="form-field" style="margin-bottom:12px"><label>Discount %</label><input value="0" disabled></div>
           <div class="divider"></div>`}
 
-          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">E. Payment Schedule</div>
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">G. Payment Schedule</div>
           <div class="form-field" style="margin-bottom:12px">
             <label>Preset</label>
             <select id="cq_paymentPreset" class="sel">
-              ${['30/70','30/30/40','50/50','Custom'].map(p=>`<option value="${p}" ${s.paymentPreset===p?'selected':''}>${p}</option>`).join('')}
+              ${['30/70','30/30/40','20/40/40','50/50','Custom'].map(p=>`<option value="${p}" ${s.paymentPreset===p?'selected':''}>${p}</option>`).join('')}
             </select>
           </div>
           <div class="table-wrap scroll-x">
-            <table class="data-table"><thead><tr><th>Stage</th><th>%</th><th>Amount</th></tr></thead>
+            <table class="data-table qc-mini-table"><thead><tr><th>Stage</th><th>%</th><th>Amount</th></tr></thead>
             <tbody>${schedule.map(st=>`<tr><td>${escapeHtml(st.label)}</td><td>${st.pct}%</td><td>${money(st.amount)}</td></tr>`).join('')}</tbody></table>
           </div>
-          <p class="text-muted" style="font-size:11.5px;margin:6px 0 16px">Stages always sum exactly to the Year 1 Total (${evalRes.priceIsTBC?'TBC':money(year1)}).</p>
+          <p class="text-muted" style="font-size:11.5px;margin:6px 0 16px">Stages always sum exactly to the Year 1 Total (${evalRes.priceIsTBC?'TBC':money(qcYear1PaymentTotal(s.maintenance, year1))}${s.maintenance.year1Mode==='paid'?', including Year 1 maintenance':''}).</p>
 
           <div class="divider"></div>
-          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">F. Important Notes</div>
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">H. Important Notes</div>
           ${notesList.map(n=>`<div class="mini-row"><div class="mini-main"><div class="mini-title">${escapeHtml(n.title)}</div><div class="mini-sub">${escapeHtml(n.text)}</div></div></div>`).join('')}
+          ${maintenanceWordingNotes(s.maintenance).map(n=>`<div class="mini-row"><div class="mini-main"><div class="mini-title">${escapeHtml(n.title)}</div><div class="mini-sub">${escapeHtml(n.text)}</div></div></div>`).join('')}
           <div class="form-field" style="margin:10px 0 16px"><label>Client-Specific Note (optional)</label><textarea id="cq_clientNote" placeholder="Anything specific to this client — never overrides the standard notes above.">${escapeHtml(s.clientNote)}</textarea></div>
 
           <div id="cq_authorityBanner">${authorityBannerHtml(evalRes)}</div>
@@ -396,6 +506,8 @@ function renderCreateQuotationModal(){
   `;
 
   openModal(html, { xl:true, onMount:(overlay)=>{
+    const editCol = overlay.querySelector('.qc-edit-col');
+    if(editCol && prevScrollTop!=null) editCol.scrollTop = prevScrollTop;
     overlay.querySelector('#cqClose').onclick = closeModal;
     overlay.querySelector('#cqCancel').onclick = closeModal;
     overlay.querySelectorAll('[data-qctab]').forEach(t=> t.onclick = ()=>{ QC_TAB = t.dataset.qctab; renderCreateQuotationModal(); });
@@ -458,6 +570,27 @@ function renderCreateQuotationModal(){
     overlay.querySelector('#cq_domainIncluded').onchange = e=>{ s.domainIncluded = e.target.value==='yes'; refreshQcPreview(overlay); };
     overlay.querySelector('#cq_domainRenewal').oninput = e=>{ s.domainRenewalEstimate = e.target.value; refreshQcPreview(overlay); };
 
+    // Maintenance fields (spec §1) — all always rendered (never conditionally
+    // hidden) and always routed through refreshQcPreview (never a full
+    // remount), so no maintenance-mode change ever disturbs left-panel
+    // scroll position, preview zoom, or any other unrelated form state
+    // (spec §12/§13). The one exception is Year 1 Mode itself: switching it
+    // enables/disables the Year 1 Cost input, which does need a remount to
+    // reflect the new disabled/enabled state — still scoped to this single
+    // section, not a parent-form reset.
+    const mY1Mode = overlay.querySelector('#cq_maintY1Mode');
+    if(mY1Mode) mY1Mode.onchange = e=>{ s.maintenance.year1Mode = e.target.value; if(e.target.value!=='paid') s.maintenance.year1Cost = 0; renderCreateQuotationModal(); };
+    const mY1Cost = overlay.querySelector('#cq_maintY1Cost');
+    if(mY1Cost) mY1Cost.oninput = e=>{ s.maintenance.year1Cost = e.target.value; refreshQcPreview(overlay); };
+    const mY2Cost = overlay.querySelector('#cq_maintY2Cost');
+    if(mY2Cost) mY2Cost.oninput = e=>{ s.maintenance.year2Cost = e.target.value; refreshQcPreview(overlay); };
+    const mY3Cost = overlay.querySelector('#cq_maintY3Cost');
+    if(mY3Cost) mY3Cost.oninput = e=>{ s.maintenance.year3Cost = e.target.value; refreshQcPreview(overlay); };
+    const mY2Disp = overlay.querySelector('#cq_maintY2Display');
+    if(mY2Disp) mY2Disp.onchange = e=>{ s.maintenance.year2DisplayMode = e.target.value; refreshQcPreview(overlay); };
+    const mY3Disp = overlay.querySelector('#cq_maintY3Display');
+    if(mY3Disp) mY3Disp.onchange = e=>{ s.maintenance.year3DisplayMode = e.target.value; refreshQcPreview(overlay); };
+
     overlay.querySelector('#cq_addFn').onclick = ()=> openAddQuotationFunctionModal((fnDef)=>{
       s.items.push({ id: fnId(), module:'Add-on', name: fnDef.name, price: fnDef.defaultPrice, founderReviewRequired: fnDef.founderReviewRequired, included:true });
       renderCreateQuotationModal();
@@ -489,7 +622,7 @@ function refreshQcPreview(overlay){
     manualAdjustment: s.adjustment ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
     discountLimitPct: effectiveDiscountLimit(svc),
   });
-  const schedule = computePaymentSchedule(evalRes.priceIsTBC?0:evalRes.finalPrice, s.paymentPreset, s.customStages);
+  const schedule = computePaymentSchedule(evalRes.priceIsTBC?0:qcYear1PaymentTotal(s.maintenance, evalRes.finalPrice), s.paymentPreset, s.customStages);
   overlay.querySelector('#cq_authorityBanner').innerHTML = authorityBannerHtml(evalRes);
   const preview = overlay.querySelector('#cq_livePreview');
   if(preview) preview.innerHTML = quotationPreviewDocHtml(qcStateToPreviewQuotation(s, evalRes, schedule));
@@ -548,38 +681,66 @@ function authorityBannerHtml(evalRes){
   </div>`;
 }
 
+// Opened from INSIDE the Create/Edit Quotation modal — this is always a
+// CHILD modal (openChildModal/closeChildModal, its own separate overlay
+// stacked on top), never openModal()/closeModal(), specifically so opening
+// or cancelling it can never touch, remount, or reset the parent Create
+// Quotation modal's DOM, form state, scroll position, or preview zoom
+// (spec §6/§7 — this is the actual fix for the reported "Cancel resets
+// Create Quotation" bug: the two modals no longer share one overlay).
 function openAddQuotationFunctionModal(onPick){
   const html = `
     <div class="modal-head"><h3>Add Scope Item</h3><button class="modal-close" id="afqClose">&times;</button></div>
     <div class="modal-body">
-      <div class="form-field" style="margin-bottom:12px">
-        <label>Choose from catalog</label>
+      <div class="form-field" style="margin-bottom:4px">
+        <label>A. Add Existing Function</label>
         <select id="afq_pick" class="sel" style="width:100%">
           <option value="">Select a function…</option>
           ${ADDITIONAL_FUNCTIONS_CATALOG.map(a=>`<option value="${a.id}">${escapeHtml(a.name)} — ${a.defaultPrice===null?'TBC (Founder review)':'$'+a.defaultPrice}</option>`).join('')}
         </select>
       </div>
-      <div class="divider"></div>
-      <p class="text-muted" style="font-size:12px;margin:0 0 8px">Or add a custom item not in the catalog — this always requires Founder review (price shows as TBC), matching the spec's advanced-feature warning (OTP, Payment Gateway, Mobile App, Multi-Branch, Advanced API Integration, Custom Workflow, etc.).</p>
-      <div class="form-field"><label>Custom Item Name</label><input id="afq_custom" placeholder="e.g. Loyalty points system"></div>
+      <div class="flex-row" style="justify-content:center;margin:10px 0"><span class="text-muted" style="font-size:11.5px;font-weight:700;letter-spacing:.4px">OR</span></div>
+      <div class="form-field" style="margin-bottom:4px">
+        <label>B. Add Custom Function</label>
+        <input id="afq_custom" placeholder="Custom item name — e.g. Loyalty points system">
+      </div>
+      <p class="text-muted" style="font-size:11.5px;margin:8px 0 0">Pick one option — a custom item always requires Founder review (price shows as TBC), matching the spec's advanced-feature warning (OTP, Payment Gateway, Mobile App, Multi-Branch, Advanced API Integration, Custom Workflow, etc.).</p>
     </div>
     <div class="modal-foot">
       <button class="btn btn-secondary" id="afqCancel">Cancel</button>
-      <button class="btn btn-primary" id="afqAdd">Add</button>
+      <button class="btn btn-primary" id="afqAdd" disabled>Add</button>
     </div>
   `;
-  openModal(html, { onMount:(overlay)=>{
-    overlay.querySelector('#afqClose').onclick = closeModal;
-    overlay.querySelector('#afqCancel').onclick = closeModal;
-    overlay.querySelector('#afqAdd').onclick = ()=>{
-      const pickId = overlay.querySelector('#afq_pick').value;
-      const custom = overlay.querySelector('#afq_custom').value.trim();
+  openChildModal(html, { onMount:(overlay)=>{
+    const pickSel = overlay.querySelector('#afq_pick');
+    const customInput = overlay.querySelector('#afq_custom');
+    const addBtn = overlay.querySelector('#afqAdd');
+    // Neither option is required on its own, but they're mutually exclusive:
+    // picking a catalog function clears/disables the custom name field and
+    // vice versa, and the Add button activates only once exactly one valid
+    // option is provided (spec §8).
+    const sync = ()=>{
+      const hasPick = !!pickSel.value;
+      const hasCustom = !!customInput.value.trim();
+      customInput.disabled = hasPick;
+      pickSel.disabled = hasCustom;
+      addBtn.disabled = !(hasPick || hasCustom);
+    };
+    pickSel.onchange = sync;
+    customInput.oninput = sync;
+    sync();
+
+    overlay.querySelector('#afqClose').onclick = closeChildModal;
+    overlay.querySelector('#afqCancel').onclick = closeChildModal;
+    addBtn.onclick = ()=>{
+      const pickId = pickSel.value;
+      const custom = customInput.value.trim();
       if(pickId){
         const def = ADDITIONAL_FUNCTIONS_CATALOG.find(a=>a.id===pickId);
-        closeModal(); onPick(def); return;
+        closeChildModal(); onPick(def); return;
       }
       if(custom){
-        closeModal(); onPick({ name: custom, defaultPrice: null, founderReviewRequired: true }); return;
+        closeChildModal(); onPick({ name: custom, defaultPrice: null, founderReviewRequired: true }); return;
       }
       toast('Pick an item from the catalog, or type a custom one.', 'error');
     };
@@ -590,7 +751,7 @@ function quotationItemsEditorHtml(items){
   if(!items.length) return `<div class="empty-row">Select a package to load its included scope items.</div>`;
   return `
     <div class="table-wrap scroll-x">
-      <table class="data-table">
+      <table class="data-table qc-mini-table">
         <thead><tr><th>Include</th><th>Module</th><th>Item</th><th>Price</th><th></th></tr></thead>
         <tbody>
           ${items.map(it=>`
@@ -637,7 +798,7 @@ function saveQuotationFromState(s){
   });
 
   const year1Total = evalRes.priceIsTBC ? null : evalRes.finalPrice;
-  const schedule = computePaymentSchedule(year1Total||0, s.paymentPreset, s.customStages);
+  const schedule = computePaymentSchedule(evalRes.priceIsTBC?0:qcYear1PaymentTotal(s.maintenance, year1Total), s.paymentPreset, s.customStages);
   const code = s.projectCode || s.leadId || ('DIRECT'+Date.now().toString().slice(-4));
 
   let existing = s.editingId ? DB.find('quotations', s.editingId) : null;
@@ -680,6 +841,7 @@ function saveQuotationFromState(s){
     assignedSales: s.assignedSales,
     currency:'USD',
     domainName: s.domainName, domainCost: s.domainCost, domainIncluded: s.domainIncluded, domainRenewalEstimate: s.domainRenewalEstimate,
+    maintenance: s.maintenance,
     year1Total, year2Total: s.year2Total!=null?Number(s.year2Total):(svc?svc.year2Price:null),
     year3Total: s.year3Total!=null?Number(s.year3Total):(svc?svc.year3Price:null),
     discountPct: isFounder() ? (Number(s.discountPct)||0) : 0,
@@ -724,9 +886,20 @@ function loadStateFromQuotation(q, { asDuplicate=false } = {}){
     assignedSales: q.assignedSales, packageKey: q.packageKey, quotationType: q.quotationType,
     discountPct: q.discountPct||0, adjustment: q.manualAdjustment?q.manualAdjustment.amount:0, adjustmentReason: q.manualAdjustment?q.manualAdjustment.reason:'',
     items: (q.items||[]).map(i=>({...i, included:true})), exclusions: [...(q.exclusions||[])],
-    notesOverride: q.importantNotes && q.importantNotes.length ? q.importantNotes.filter(n=>n.key!=='clientNote') : null,
+    // Maintenance wording notes (maintenanceY1 / maintenanceRenewal) are
+    // regenerated fresh at save time from the live maintenance state — never
+    // carried over as static text — so they're filtered out here the same
+    // way the per-client `clientNote` already is, to avoid duplicating them
+    // when this quotation is re-edited and re-saved.
+    notesOverride: q.importantNotes && q.importantNotes.length ? q.importantNotes.filter(n=>n.key!=='clientNote' && n.key!=='maintenanceY1' && n.key!=='maintenanceRenewal') : null,
     clientNote:'',
     domainName: q.domainName, domainCost: q.domainCost, domainIncluded: q.domainIncluded, domainRenewalEstimate: q.domainRenewalEstimate,
+    // Editing an EXISTING quotation defaults to 'not_included' whenever the
+    // saved record has no `maintenance` object at all (created before this
+    // feature existed), so opening it for editing never silently adds new
+    // maintenance terms it never had (spec §16). Compare defaultMaintenanceState()
+    // above, used only for BRAND-NEW quotations.
+    maintenance: q.maintenance || { year1Mode:'not_included', year1Cost:0, year2Cost:0, year3Cost:0, year2DisplayMode:'estimated', year3DisplayMode:'estimated' },
     year1Total: null, year2Total: q.year2Total, year3Total: q.year3Total,
     paymentPreset: q.paymentPreset||'30/70', customStages:null,
     quotationDate: asDuplicate ? todayLocalISO() : q.quotationDate,
@@ -1054,6 +1227,7 @@ function qcStateToPreviewQuotation(s, evalRes, schedule){
     year1Total: evalRes.finalPrice, priceIsTBC: evalRes.priceIsTBC,
     year2Total: s.year2Total!=null?Number(s.year2Total):(svc?svc.year2Price:null),
     year3Total: s.year3Total!=null?Number(s.year3Total):(svc?svc.year3Price:null),
+    maintenance: s.maintenance,
     paymentSchedule: schedule,
     importantNotes: s.clientNote ? [...notesList, {key:'clientNote',title:'Client-Specific Note',text:s.clientNote}] : notesList,
   };
@@ -1079,6 +1253,32 @@ function quotationPreviewDocHtml(q){
   const labels = yearCostLabels(q.quotationType);
   const grouped = {};
   (q.items||[]).forEach(it=>{ if(!grouped[it.module]) grouped[it.module]=[]; grouped[it.module].push(it); });
+
+  // Maintenance-aware Year-by-Year Budget (spec §2/§3): the base
+  // year1/2/3 totals never absorb maintenance silently — a Year-1-paid
+  // maintenance add-on is shown as its own clearly-labeled line item, and
+  // Year 2/3 renewal + maintenance are broken out separately underneath the
+  // headline amount so it's always clear what the renewal consists of.
+  const maint = q.maintenance || { year1Mode:'not_included', year1Cost:0, year2Cost:0, year3Cost:0, year2DisplayMode:'estimated', year3DisplayMode:'estimated' };
+  const maintActive = maint.year1Mode && maint.year1Mode!=='not_included';
+  // The system-type Year 1 label already bundles "& Maintenance" into its
+  // base wording (yearCostLabels), so only APPEND it when the label doesn't
+  // already mention maintenance — avoids "...Database & Maintenance & Maintenance".
+  const mentionsMaintenance = (label)=> /maintenance/i.test(label);
+  const y1Label = (maintActive && !mentionsMaintenance(labels.y1)) ? `${labels.y1} & Maintenance` : labels.y1;
+  const y2Label = (Number(maint.year2Cost)>0 && !mentionsMaintenance(labels.y2)) ? `${labels.y2} & Maintenance` : labels.y2;
+  const y3Label = (Number(maint.year3Cost)>0 && !mentionsMaintenance(labels.y3)) ? `${labels.y3} & Maintenance` : labels.y3;
+  const y1MaintAddOn = maint.year1Mode==='paid' ? (Number(maint.year1Cost)||0) : 0;
+  const y1Amount = q.priceIsTBC ? 'TBC' : money((Number(q.year1Total)||0) + y1MaintAddOn);
+  const y2Base = Number(q.year2Total)||0;
+  const y2Maint = Number(maint.year2Cost)||0;
+  const y3Base = Number(q.year3Total)||0;
+  const y3Maint = Number(maint.year3Cost)||0;
+  const y2Amount = q.year2Total!=null ? qcYearAmountDisplay(y2Base + y2Maint, maint.year2DisplayMode||'estimated') : 'TBC';
+  const y3Amount = q.year3Total!=null ? qcYearAmountDisplay(y3Base + y3Maint, maint.year3DisplayMode||'estimated') : 'TBC';
+  const y2Breakdown = (q.year2Total!=null && y2Maint>0) ? `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Renewal ${money(y2Base)} + Maintenance ${money(y2Maint)}</div>` : '';
+  const y3Breakdown = (q.year3Total!=null && y3Maint>0) ? `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Renewal ${money(y3Base)} + Maintenance ${money(y3Maint)}</div>` : '';
+  const visibleExcl = visibleExclusions(q.items, q.exclusions);
 
   return `
     <div class="quote-doc" id="quoteDocPrintable">
@@ -1115,9 +1315,9 @@ function quotationPreviewDocHtml(q){
       <table class="quote-doc-table">
         <thead><tr><th>Year</th><th>Details</th><th>Amount</th></tr></thead>
         <tbody>
-          <tr><td>Year 1</td><td>${escapeHtml(labels.y1)}</td><td>${q.priceIsTBC?'TBC':money(q.year1Total)}</td></tr>
-          <tr><td>Year 2</td><td>${escapeHtml(labels.y2)}</td><td>${q.year2Total!=null?'~'+money(q.year2Total)+'/year':'TBC'}</td></tr>
-          <tr><td>Year 3</td><td>${escapeHtml(labels.y3)}</td><td>${q.year3Total!=null?'~'+money(q.year3Total)+'/year':'TBC'}</td></tr>
+          <tr><td>Year 1</td><td>${escapeHtml(y1Label)}</td><td>${y1Amount}</td></tr>
+          <tr><td>Year 2</td><td>${escapeHtml(y2Label)}${y2Breakdown}</td><td>${y2Amount}</td></tr>
+          <tr><td>Year 3</td><td>${escapeHtml(y3Label)}${y3Breakdown}</td><td>${y3Amount}</td></tr>
         </tbody>
       </table>
 
@@ -1127,17 +1327,19 @@ function quotationPreviewDocHtml(q){
       ` : ''}
 
       <h4 class="quote-doc-h">Payment Schedule</h4>
-      <table class="quote-doc-table">
+      <table class="quote-doc-table qc-mini-table">
         <thead><tr><th>Stage</th><th>%</th><th>Amount</th></tr></thead>
         <tbody>${(q.paymentSchedule||[]).map(st=>`<tr><td>${escapeHtml(st.label)}</td><td>${st.pct}%</td><td>${money(st.amount)}</td></tr>`).join('')}</tbody>
       </table>
+      ${maintActive && y1MaintAddOn>0 ? `<p class="text-muted" style="font-size:11px;margin:4px 0 0">Includes Year 1 maintenance (${money(y1MaintAddOn)}).</p>` : ''}
 
       <div class="quote-doc-bottom">
         <div>
           <h4 class="quote-doc-h">Important Notes</h4>
           <ol style="margin:4px 0 0;padding-left:18px;font-size:11.5px;color:var(--muted)">
             ${(q.importantNotes||[]).map(n=>`<li><b>${escapeHtml(n.title)}:</b> ${escapeHtml(n.text)}</li>`).join('')}
-            ${(q.exclusions||[]).length ? `<li><b>Not Included:</b> ${q.exclusions.map(escapeHtml).join(', ')}.</li>` : ''}
+            ${maintenanceWordingNotes(maint).map(n=>`<li><b>${escapeHtml(n.title)}:</b> ${escapeHtml(n.text)}</li>`).join('')}
+            ${visibleExcl.length ? `<li><b>Not Included:</b> ${visibleExcl.map(escapeHtml).join(', ')}.</li>` : ''}
           </ol>
         </div>
         <div>

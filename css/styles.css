@@ -295,7 +295,31 @@ img{max-width:100%;display:block}
 
 /* ---------- Tables ---------- */
 .table-wrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;box-shadow:0 4px 14px rgba(21,62,121,.05)}
+/* `.table-wrap`'s own `overflow:hidden` (for rounded corners on the big
+   list tables) was silently overriding `.scroll-x`'s `overflow-x:auto`
+   whenever both classes were combined (`class="table-wrap scroll-x"`,
+   used by every table.data-table nested inside a modal) — same-specificity
+   rules cascade by source order, and .table-wrap happens to be declared
+   after .scroll-x. Net effect: a data-table with its baked-in 1100px
+   min-width (below), rendered inside a much narrower panel like the
+   Create/Edit Quotation form column, had nowhere to go but get hard-
+   clipped at the container edge instead of scrolling — exactly the
+   "30/30/40 payment schedule % column partially hidden" bug. This
+   two-class selector outranks the single-class `.table-wrap` rule above on
+   specificity (not source order), so scrolling is restored wherever both
+   classes are actually used together, with zero effect on `.table-wrap`
+   used alone. */
+.table-wrap.scroll-x{overflow-x:auto;overflow-y:visible}
 table.data-table{width:100%;border-collapse:collapse;font-size:13px;min-width:1100px}
+/* Small, few-column tables embedded inside a narrow panel (Create/Edit
+   Quotation's Scope-of-Work editor and Payment Schedule tables) — the
+   1100px min-width above is sized for the big list-page tables (Leads,
+   Quotations, …) that need horizontal scroll room on narrow screens; it
+   has no reason to apply to a 3-column mini-table that already fits its
+   container. Combined with the overflow fix above, this is what actually
+   keeps every column (including %) fully visible with no clipping and no
+   horizontal scrollbar at normal laptop widths. */
+table.data-table.qc-mini-table{min-width:0}
 /* Payment History (Project View > Payment History) renders inside the
    .modal-lg panel (max-width:820px, ~776px usable after padding) — the
    shared 1100px min-width above (tuned for full-width page tables like
@@ -479,6 +503,11 @@ svg{width:18px;height:18px}
 
 /* ---------- Modal ---------- */
 .modal-overlay{position:fixed;inset:0;background:rgba(7,20,45,.5);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px}
+/* A child modal (openChildModal in app.js — e.g. Add Scope Item opened from
+   inside Create/Edit Quotation) stacks ON TOP of the parent's own overlay
+   rather than replacing it, so it needs a higher z-index than the base
+   .modal-overlay above. */
+.modal-overlay.modal-overlay-child{z-index:110}
 .modal-box{background:var(--surface);border-radius:16px;max-width:560px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 30px 70px rgba(7,20,45,.35)}
 .modal-box.modal-lg{max-width:820px}
 /* .modal-xl — Quotations wide split-view editor only (kept separate from
