@@ -155,28 +155,57 @@ function assignedSalesFieldHtml({ id, currentValue }){
     <span class="form-hint">Automatically assigned to you.</span></div>`;
 }
 
+// Safe status comparison for the KPI cards below: statuses are always
+// chosen from the fixed LEAD_STATUSES dropdown (never free-typed), so a
+// casing/whitespace mismatch should never occur in practice — but this
+// guards against it defensively without touching any stored data.
+function isLeadStatus(lead, name){
+  return String(lead.status||'').trim().toLowerCase() === name.trim().toLowerCase();
+}
+
 function renderLeadSummaryCards(){
   const el = document.getElementById('leadSummaryCards');
   if(!el) return;
-  const all = DB.all('leads');
+  // KPI cards reflect ACTIVE (non-archived) leads only, regardless of which
+  // archive-view tab the table itself is currently showing (spec: archived
+  // leads must never count in the default KPI cards). Uses the same
+  // activeLeads() helper the rest of Lead Records/Pipeline/Follow-ups rely
+  // on, so this stays in lockstep with the rest of the app if that
+  // definition ever changes.
+  const all = activeLeads();
   const total = all.length;
-  const lost = all.filter(l=>l.status==='Lost').length;
-  const confirmed = all.filter(l=>l.projectCode && l.status!=='Lost').length;
-  const open = total - lost - confirmed;
-  const followupDue = all.filter(l=> l.nextFollowup && ['overdue','today'].includes(urgencyOf(l.nextFollowup)) && !['Lost','Confirmed'].includes(l.status)).length;
+  const lost = all.filter(l=>isLeadStatus(l,'Lost')).length;
+  // CONFIRMED = status is explicitly "Confirmed" — nothing else. Previously
+  // this derived "confirmed" from projectCode presence (`l.projectCode &&
+  // l.status!=='Lost'`), which is wrong: a lead gets a Project Code the
+  // moment it's added to Pipeline (see EARLY_LEAD_STATUSES/pipeline.js
+  // comments above), long before it actually reaches Confirmed status. That
+  // meant every Pipeline lead — Quote and Demo Sent, Negotiation, On Hold,
+  // etc. — was being counted as "Confirmed" simply for having a Project
+  // Code, which is why Confirmed was showing ~= Total Leads. Do not
+  // reintroduce any project/pipeline/active-based fallback here.
+  const confirmed = all.filter(l=>isLeadStatus(l,'Confirmed')).length;
+  // OPEN = every active lead that is not Confirmed and not Lost — this
+  // intentionally includes early-stage statuses (New Lead, Contacted,
+  // Qualified) as well as every Pipeline stage (Quote and Demo Sent,
+  // Potential Need Follow Up, On Hold / Future Follow-up, Negotiation).
+  // Computed directly from status, not as a total/lost/confirmed remainder,
+  // so it can never go stale if either of those definitions changes above.
+  const open = all.filter(l=> !isLeadStatus(l,'Confirmed') && !isLeadStatus(l,'Lost')).length;
+  const followupDue = all.filter(l=> l.nextFollowup && ['overdue','today'].includes(urgencyOf(l.nextFollowup)) && !isLeadStatus(l,'Lost') && !isLeadStatus(l,'Confirmed')).length;
   const cards = [
-    { label:'Total Leads', value: total, color:'#1d7bff' },
-    { label:'Open Leads', value: open, color:'#18c8ff' },
-    { label:'Confirmed', value: confirmed, color:'#12a775' },
-    { label:'Lost', value: lost, color:'#e0473c' },
-    { label:'Follow-up Due', value: followupDue, color:'#d98a12' },
+    { label:'Total Leads', value: total, color:'#1d7bff', help:'All active (non-archived) lead records.' },
+    { label:'Open Leads', value: open, color:'#18c8ff', help:'All active leads not yet Confirmed or Lost — includes Contacted, Qualified, Quote and Demo Sent, Potential Need Follow Up, On Hold / Future Follow-up, and Negotiation.' },
+    { label:'Confirmed', value: confirmed, color:'#12a775', help:'Only leads whose status is exactly Confirmed.' },
+    { label:'Lost', value: lost, color:'#e0473c', help:'Only leads whose status is exactly Lost.' },
+    { label:'Follow-up Due', value: followupDue, color:'#d98a12', help:'Active leads (not Confirmed/Lost) whose next follow-up is today or earlier.' },
   ];
   el.innerHTML = `
     <div class="kpi-grid summary-cards-5">
       ${cards.map(c=>`
-        <div class="kpi-card" style="padding:12px 14px">
+        <div class="kpi-card" style="padding:12px 14px" title="${escapeHtml(c.help)}">
           <div class="kpi-value" style="font-size:20px;color:${c.color}">${c.value}</div>
-          <div class="kpi-label" style="margin-top:4px">${c.label}</div>
+          <div class="kpi-label" style="margin-top:4px">${c.label} <span class="text-muted" style="font-size:11px;cursor:help;border:1px solid currentColor;border-radius:50%;display:inline-block;width:13px;height:13px;line-height:12px;text-align:center" aria-hidden="true">?</span></div>
         </div>`).join('')}
     </div>
   `;
