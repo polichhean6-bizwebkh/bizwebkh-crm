@@ -136,11 +136,19 @@ img{max-width:100%;display:block}
   position:fixed;top:0;left:0;bottom:0;z-index:40;
   transition:transform .2s ease;
 }
-.sidebar-brand{display:flex;align-items:center;gap:10px;padding:20px 18px 16px;border-bottom:1px solid rgba(255,255,255,.08)}
-.sidebar-brand .logo-mark{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--blue),var(--cyan));display:flex;align-items:center;justify-content:center;font-weight:900;color:#fff;font-size:15px;flex:0 0 34px}
-.sidebar-brand .logo-text{line-height:1.15}
-.sidebar-brand .logo-text strong{display:block;font-size:14.5px;color:#fff;font-weight:800;letter-spacing:.2px}
-.sidebar-brand .logo-text span{display:block;font-size:10.5px;color:#8fa6c9;font-weight:600;letter-spacing:.4px;text-transform:uppercase}
+/* Official BizWeb KH branding (spec: standardize on bizweb-kh-logo-main/
+   -white.svg from the centralized assets/branding/ folder — see also
+   .login-logo and .quote-doc-brand below). The sidebar's own background is
+   a fixed dark navy gradient regardless of the app's light/dark theme
+   toggle (it's a brand element, not a themed surface), so it always uses
+   the WHITE logo variant for contrast — no light/dark switching needed
+   here, unlike the login page. The logo SVG already contains the "BizWeb
+   KH" wordmark, so no separate brand-name text is duplicated beside it —
+   only the "Internal CRM" supporting caption remains, stacked below per
+   the recommended layout. */
+.sidebar-brand{display:flex;flex-direction:column;align-items:flex-start;gap:7px;padding:20px 18px 16px;border-bottom:1px solid rgba(255,255,255,.08)}
+.sidebar-brand .brand-logo{display:block;width:100%;max-width:172px;height:auto}
+.sidebar-brand .brand-caption{font-size:10.5px;color:#8fa6c9;font-weight:600;letter-spacing:.4px;text-transform:uppercase}
 
 .sidebar-nav{flex:1;padding:14px 10px;overflow-y:auto}
 .sidebar-nav .nav-item{
@@ -516,10 +524,22 @@ svg{width:18px;height:18px}
 /* ---------- Login page ---------- */
 .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 75% 13%,rgba(255,138,61,.14),transparent 30%),radial-gradient(circle at 20% 22%,rgba(24,200,255,.16),transparent 32%),linear-gradient(135deg,#071c3d,#0d2d5d 60%,#12386f);padding:20px}
 .login-card{background:var(--surface);border-radius:20px;width:100%;max-width:400px;padding:34px 32px;box-shadow:0 30px 80px rgba(0,0,0,.35)}
-.login-logo{display:flex;align-items:center;gap:10px;margin-bottom:22px}
-.login-logo .logo-mark{width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,var(--blue),var(--cyan));display:flex;align-items:center;justify-content:center;font-weight:900;color:#fff;font-size:17px}
-.login-logo strong{display:block;font-size:16px;font-weight:800;color:var(--text)}
-.login-logo span{display:block;font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+/* Official BizWeb KH branding — logo centered above the form, medium size,
+   clean spacing (spec §3). Unlike the always-dark sidebar, the login card
+   itself follows the app's light/dark theme (var(--surface)), so which
+   logo variant has enough contrast actually changes with theme: the main
+   (navy/blue) logo for light mode, the white logo for dark mode. Both
+   <img> tags are always present (so the swap needs no JS/flash-of-wrong-
+   logo risk) — CSS alone shows/hides the right one for the current
+   [data-theme]. The SVG already contains the "BizWeb KH" wordmark, so no
+   separate brand-name text is duplicated — only "Internal CRM" remains as
+   a supporting caption below it. */
+.login-logo{display:flex;flex-direction:column;align-items:center;gap:9px;margin-bottom:22px}
+.login-logo .brand-logo{display:block;width:220px;max-width:100%;height:auto}
+.login-logo .brand-logo-dark{display:none}
+:root[data-theme="dark"] .login-logo .brand-logo-light{display:none}
+:root[data-theme="dark"] .login-logo .brand-logo-dark{display:block}
+.login-logo .brand-caption{display:block;font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px}
 .login-card h2{font-size:19px;margin-bottom:22px}
 .login-card .lead-sub{font-size:13px;color:var(--muted);margin-bottom:22px}
 .login-divider{display:flex;align-items:center;gap:10px;margin:16px 0;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
@@ -690,7 +710,17 @@ svg{width:18px;height:18px}
 .khmer-label{display:block;font-size:12.5px;font-weight:700;padding-bottom:2px}
 .en-label{display:block;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.2px}
 .quote-doc-head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid var(--blue);padding-bottom:16px;margin-bottom:16px}
-.quote-doc-brand{display:flex;align-items:center;gap:12px}
+/* Official BizWeb KH branding in the quotation header (spec §4/§5): logo on
+   top, Tel/Telegram/website line below it — stacked, not the old side-by-side
+   "BW" box + text layout. The quote document is always rendered light/white
+   regardless of app theme, so only the main (navy/blue) logo variant is ever
+   needed here — no light/dark switching. Uses the pre-rendered PNG derivative
+   (assets/branding/bizweb-kh-logo-main-print.png) rather than the raw SVG:
+   the official SVG embeds an ~8.7k px raster behind filter-based recoloring,
+   which bloats generated PDFs to ~4.9MB; the PNG keeps the same look at a
+   fraction of the size for reliable print/PDF output (spec §7). */
+.quote-doc-brand{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.quote-doc-logo{display:block;width:150px;max-width:60%;height:auto}
 .quote-doc-meta{text-align:right;font-size:12px;line-height:1.7}
 .quote-doc-clientbox{background:#f4f8ff;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.8}
 .quote-doc-h{font-size:12.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--blue);border-bottom:1px solid var(--line);padding-bottom:5px;margin:18px 0 8px}

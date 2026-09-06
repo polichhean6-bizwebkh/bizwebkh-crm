@@ -385,8 +385,8 @@ function renderShell(){
     <div class="app-shell">
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-brand">
-          <div class="logo-mark">BW</div>
-          <div class="logo-text"><strong>BizWeb KH</strong><span>Internal CRM</span></div>
+          <img class="brand-logo" src="../assets/branding/bizweb-kh-logo-white.svg" alt="BizWeb KH">
+          <span class="brand-caption">Internal CRM</span>
         </div>
         <nav class="sidebar-nav" id="sidebarNav"></nav>
         <div class="sidebar-foot">

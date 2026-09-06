@@ -1083,7 +1083,10 @@ function quotationPreviewDocHtml(q){
   return `
     <div class="quote-doc" id="quoteDocPrintable">
       <div class="quote-doc-head">
-        <div class="quote-doc-brand"><div class="logo-mark">BW</div><div><strong>BizWeb KH</strong><div class="text-muted" style="font-size:11px">Tel: 017 400 044 | Telegram: @BizWebKH | www.bizwebkh.com</div></div></div>
+        <div class="quote-doc-brand">
+          <img class="quote-doc-logo" src="../assets/branding/bizweb-kh-logo-main-print.png" alt="BizWeb KH">
+          <div class="text-muted" style="font-size:11px">Tel: 017 400 044 | Telegram: @BizWebKH | www.bizwebkh.com</div>
+        </div>
         <div class="quote-doc-meta">
           <div class="khmer-text" style="font-size:13px;color:var(--blue)">${title.khmer}</div>
           <div><b>${title.english}</b></div>
