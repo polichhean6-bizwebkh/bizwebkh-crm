@@ -102,7 +102,7 @@ function renderQuotTable(){
             <tr>
               <td class="cell-link" data-open="${q.id}">${q.quoteNumber}${q.version>1?` <span class="text-muted" style="font-weight:400">v${q.version}</span>`:''}</td>
               <td>${escapeHtml(q.projectCode||'—')}</td>
-              <td><div class="cell-strong">${escapeHtml(q.clientName)}</div><div class="text-muted" style="font-size:11.5px">${escapeHtml(q.businessName)}</div></td>
+              <td><div class="cell-strong">${escapeHtml(q.clientName)}</div>${q.businessName?`<div class="text-muted" style="font-size:11.5px">${escapeHtml(q.businessName)}</div>`:''}</td>
               <td>${escapeHtml(q.packageName||q.packageKey||'')}</td>
               <td class="cell-strong">${q.priceIsTBC?'TBC':money(q.year1Total)}</td>
               <td><div class="flex-row"><div class="avatar-sm" style="background:${userColor(q.assignedSales)}">${userInitials(q.assignedSales)}</div>${escapeHtml(q.assignedSales)}</div></td>
@@ -360,9 +360,9 @@ function renderCreateQuotationModal(){
 
           <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">A. Client Information</div>
           <div class="form-grid">
-            <div class="form-field"><label class="required">Client Name</label><input id="cq_clientName" value="${escapeHtml(s.clientName)}" ${s.sourceType!=='new'?'disabled':''}></div>
-            <div class="form-field"><label class="required">Business Name</label><input id="cq_businessName" value="${escapeHtml(s.businessName)}" ${s.sourceType!=='new'?'disabled':''}></div>
-            <div class="form-field"><label>Phone</label><input id="cq_phone" value="${escapeHtml(s.phone)}" ${s.sourceType!=='new'?'disabled':''}></div>
+            <div class="form-field"><label class="required">Client Name</label><input id="cq_clientName" value="${escapeHtml(s.clientName)}" ${s.sourceType!=='new'?'readonly class="field-locked"':''}></div>
+            <div class="form-field"><label>Business Name <span class="text-muted" style="font-weight:400">(optional)</span></label><input id="cq_businessName" value="${escapeHtml(s.businessName)}" placeholder="Leave blank if the client has no business/trade name" ${s.sourceType!=='new'?'readonly class="field-locked"':''}></div>
+            <div class="form-field"><label>Phone</label><input id="cq_phone" value="${escapeHtml(s.phone)}" ${s.sourceType!=='new'?'readonly class="field-locked"':''}></div>
             <div class="form-field"><label>Telegram</label><input id="cq_telegram" value="${escapeHtml(s.telegram)}"></div>
             <div class="form-field"><label class="required">Industry</label>
               <select id="cq_industry" class="sel" ${s.sourceType!=='new'?'disabled':''}>${INDUSTRIES.map(i=>`<option ${s.industry===i?'selected':''}>${i}</option>`).join('')}</select>
@@ -370,7 +370,7 @@ function renderCreateQuotationModal(){
             <div class="form-field"><label class="required">Assigned Sales</label>
               ${canChooseAssignedSales(CURRENT_USER.role)
                 ? `<select id="cq_sales" class="sel">${salesOwnersList().map(n=>`<option ${s.assignedSales===n?'selected':''}>${n}</option>`).join('')}</select>`
-                : `<input value="${escapeHtml(s.assignedSales)}" disabled>`}
+                : `<input value="${escapeHtml(s.assignedSales)}" readonly class="field-locked">`}
             </div>
           </div>
 
@@ -384,10 +384,10 @@ function renderCreateQuotationModal(){
                 ${SERVICE_PRICE_LIST.map(p=>`<option value="${p.projectType}" ${s.packageKey===p.projectType?'selected':''}>${p.name} — ${p.priceIsStartingFrom?'from ':''}$${p.basePrice}${p.salesCanQuote?'':' (Founder Review)'}</option>`).join('')}
               </select>
             </div>
-            <div class="form-field"><label>Project Code</label><input value="${escapeHtml(s.projectCode||'Assigned when quotation is sent to a Pipeline project')}" disabled></div>
-            <div class="form-field"><label>Quote No. (preview)</label><input value="${s.packageKey?qcQuoteNumberPreview():'—'}" disabled></div>
-            <div class="form-field"><label class="required">Quotation Date</label><input type="date" id="cq_qdate" value="${s.quotationDate}" ${isFounder()?'':'disabled'}></div>
-            <div class="form-field"><label class="required">Valid Until</label><input type="date" id="cq_validUntil" value="${s.validUntil}" ${isFounder()?'':'disabled'}></div>
+            <div class="form-field"><label>Project Code <span class="field-auto-badge">Auto</span></label><input value="${escapeHtml(s.projectCode||'Assigned when quotation is sent to a Pipeline project')}" readonly></div>
+            <div class="form-field"><label>Quote No. (preview) <span class="field-auto-badge">Auto</span></label><input value="${s.packageKey?qcQuoteNumberPreview():'—'}" readonly></div>
+            <div class="form-field"><label class="required">Quotation Date</label><input type="date" id="cq_qdate" value="${s.quotationDate}" ${isFounder()?'':'readonly class="field-locked"'}></div>
+            <div class="form-field"><label class="required">Valid Until</label><input type="date" id="cq_validUntil" value="${s.validUntil}" ${isFounder()?'':'readonly class="field-locked"'}></div>
             <div class="form-field full"><label>Demo Link</label><input id="cq_demoLink" value="${escapeHtml(s.demoLink)}" placeholder="https://..."></div>
           </div>
 
@@ -419,9 +419,9 @@ function renderCreateQuotationModal(){
                 <option value="not_included" ${s.maintenance.year1Mode==='not_included'?'selected':''}>Not Included</option>
               </select>
             </div>
-            <div class="form-field"><label>Maintenance Cost — Year 1 ($)</label><input type="number" id="cq_maintY1Cost" value="${s.maintenance.year1Cost}" ${(isFounder() && s.maintenance.year1Mode==='paid')?'':'disabled'}></div>
-            <div class="form-field"><label>Year 2 Maintenance ($/yr)</label><input type="number" id="cq_maintY2Cost" value="${s.maintenance.year2Cost}" ${isFounder()?'':'disabled'}></div>
-            <div class="form-field"><label>Year 3 Maintenance ($/yr)</label><input type="number" id="cq_maintY3Cost" value="${s.maintenance.year3Cost}" ${isFounder()?'':'disabled'}></div>
+            <div class="form-field"><label>Maintenance Cost — Year 1 ($)</label><input type="number" id="cq_maintY1Cost" value="${s.maintenance.year1Cost}" ${(isFounder() && s.maintenance.year1Mode==='paid')?'':'readonly class="field-locked"'}></div>
+            <div class="form-field"><label>Year 2 Maintenance ($/yr)</label><input type="number" id="cq_maintY2Cost" value="${s.maintenance.year2Cost}" ${isFounder()?'':'readonly class="field-locked"'}></div>
+            <div class="form-field"><label>Year 3 Maintenance ($/yr)</label><input type="number" id="cq_maintY3Cost" value="${s.maintenance.year3Cost}" ${isFounder()?'':'readonly class="field-locked"'}></div>
             <div class="form-field"><label>Year 2 Amount Display</label>
               <select id="cq_maintY2Display" class="sel" ${isFounder()?'':'disabled'}>
                 <option value="exact" ${s.maintenance.year2DisplayMode==='exact'?'selected':''}>Exact Amount</option>
@@ -442,9 +442,9 @@ function renderCreateQuotationModal(){
           <div class="divider"></div>
           <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">F. Year-by-Year Cost</div>
           <div class="form-grid">
-            <div class="form-field"><label>Year 1 Total (auto${s.maintenance.year1Mode==='paid'?' incl. maintenance':''})</label><input value="${evalRes.priceIsTBC?'TBC':money(qcYear1PaymentTotal(s.maintenance, year1))}" disabled></div>
-            <div class="form-field"><label>Year 2 Renewal ($/yr)</label><input type="number" id="cq_year2" value="${s.year2Total!=null?s.year2Total:(svc?svc.year2Price:0)}" ${isFounder()?'':'disabled'}></div>
-            <div class="form-field"><label>Year 3 Renewal ($/yr)</label><input type="number" id="cq_year3" value="${s.year3Total!=null?s.year3Total:(svc?svc.year3Price:0)}" ${isFounder()?'':'disabled'}></div>
+            <div class="form-field"><label>Year 1 Total (auto${s.maintenance.year1Mode==='paid'?' incl. maintenance':''}) <span class="field-auto-badge">Auto</span></label><input value="${evalRes.priceIsTBC?'TBC':money(qcYear1PaymentTotal(s.maintenance, year1))}" readonly></div>
+            <div class="form-field"><label>Year 2 Renewal ($/yr)</label><input type="number" id="cq_year2" value="${s.year2Total!=null?s.year2Total:(svc?svc.year2Price:0)}" ${isFounder()?'':'readonly class="field-locked"'}></div>
+            <div class="form-field"><label>Year 3 Renewal ($/yr)</label><input type="number" id="cq_year3" value="${s.year3Total!=null?s.year3Total:(svc?svc.year3Price:0)}" ${isFounder()?'':'readonly class="field-locked"'}></div>
           </div>
 
           <div class="divider"></div>
@@ -456,7 +456,7 @@ function renderCreateQuotationModal(){
             <div class="form-field full"><label>Reason for Price Adjustment ${s.adjustment?'<span class="required"></span>':'(required if adjusting)'}</label><input id="cq_adjustReason" value="${escapeHtml(s.adjustmentReason)}" placeholder='e.g. "Client already has hosting."'></div>
           </div>
           <div class="divider"></div>` : `
-          <div class="form-field" style="margin-bottom:12px"><label>Discount %</label><input value="0" disabled></div>
+          <div class="form-field" style="margin-bottom:12px"><label>Discount %</label><input value="0" readonly class="field-locked"></div>
           <div class="divider"></div>`}
 
           <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">G. Payment Schedule</div>
@@ -493,7 +493,7 @@ function renderCreateQuotationModal(){
           </div>
           <div class="qc-preview-canvas" id="qcPreviewCanvas">
             <div class="qc-a4-scale" id="qcA4Scale">
-              <div id="cq_livePreview">${quotationPreviewDocHtml(qcStateToPreviewQuotation(s, evalRes, schedule))}</div>
+              <div id="cq_livePreview"><div class="quote-doc-loading">Rendering preview…</div></div>
             </div>
           </div>
         </div>
@@ -521,6 +521,8 @@ function renderCreateQuotationModal(){
     });
     qcApplyZoom(overlay);
     qcWireResize(overlay);
+    const livePreviewEl = overlay.querySelector('#cq_livePreview');
+    if(livePreviewEl) paintQuotePreview(livePreviewEl, qcStateToPreviewQuotation(s, evalRes, schedule), ()=>qcApplyZoom(overlay));
 
     overlay.querySelectorAll('[data-src]').forEach(b=> b.onclick = ()=>{
       s.sourceType = b.dataset.src;
@@ -625,8 +627,8 @@ function refreshQcPreview(overlay){
   const schedule = computePaymentSchedule(evalRes.priceIsTBC?0:qcYear1PaymentTotal(s.maintenance, evalRes.finalPrice), s.paymentPreset, s.customStages);
   overlay.querySelector('#cq_authorityBanner').innerHTML = authorityBannerHtml(evalRes);
   const preview = overlay.querySelector('#cq_livePreview');
-  if(preview) preview.innerHTML = quotationPreviewDocHtml(qcStateToPreviewQuotation(s, evalRes, schedule));
-  qcApplyZoom(overlay);
+  if(preview) paintQuotePreview(preview, qcStateToPreviewQuotation(s, evalRes, schedule), ()=>qcApplyZoom(overlay));
+  else qcApplyZoom(overlay);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -784,7 +786,12 @@ function wireQuotationItemsEditor(overlay, s){
 /* ---------------------------------------------------------------------- */
 
 function saveQuotationFromState(s){
-  if(!s.clientName || !s.businessName){ toast('Client Name and Business Name are required.', 'error'); return; }
+  // Business Name is OPTIONAL (spec §1) — Client Name alone is enough to
+  // create and save a quotation. Business Name still saves/prints if the
+  // client has one; when blank, quoteInfoRows() below simply omits that row
+  // from the client-facing document rather than showing an empty
+  // "Business Name: " line.
+  if(!s.clientName || !s.clientName.trim()){ toast('Client Name is required.', 'error'); return; }
   if(!s.packageKey){ toast('Please select a package.', 'error'); return; }
   if(isFounder() && s.adjustment && !s.adjustmentReason.trim()){ toast('A Reason for Price Adjustment is required.', 'error'); return; }
 
@@ -862,12 +869,12 @@ function saveQuotationFromState(s){
   if(isNewRevision){
     existing.status = 'Superseded';
     DB.upsert('quotations', existing);
-    logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId: quotation.id, refLabel:`${quotation.quoteNumber} — ${quotation.businessName}`,
+    logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId: quotation.id, refLabel:`${quotation.quoteNumber} — ${quotation.businessName||quotation.clientName}`,
       type:'Quotation Superseded', description:`${CURRENT_USER.name} created revision v${version} of ${existing.quoteNumber} — the previous version is now Superseded.`,
       fromValue: existing.quoteNumber, toValue: quotation.quoteNumber });
   }
 
-  logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId: quotation.id, refLabel:`${quotation.quoteNumber} — ${quotation.businessName}`,
+  logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId: quotation.id, refLabel:`${quotation.quoteNumber} — ${quotation.businessName||quotation.clientName}`,
     type: (s.editingId && !isNewRevision) ? 'Quotation Updated' : 'Quotation Created',
     description: `${CURRENT_USER.name} ${(s.editingId && !isNewRevision)?'updated':(isNewRevision?'created revision v'+version+' of':'created')} quotation ${quotation.quoteNumber}. Year 1 Total: ${evalRes.priceIsTBC?'TBC':money(evalRes.finalPrice)}.`,
     remark: evalRes.requiresFounderReview ? 'Founder review required.' : null });
@@ -938,7 +945,7 @@ function openQuotationDetailModal(id){
 
   const html = `
     <div class="modal-head">
-      <div><h3>${q.quoteNumber}</h3><div class="text-muted" style="font-size:12px;margin-top:2px">${escapeHtml(q.clientName)} — ${escapeHtml(q.businessName)} · v${q.version||1}</div></div>
+      <div><h3>${q.quoteNumber}</h3><div class="text-muted" style="font-size:12px;margin-top:2px">${escapeHtml(q.clientName)}${q.businessName?' — '+escapeHtml(q.businessName):''} · v${q.version||1}</div></div>
       <button class="modal-close" id="qdClose">&times;</button>
     </div>
     <div class="modal-body">
@@ -951,7 +958,7 @@ function openQuotationDetailModal(id){
       <div class="two-col" style="margin-top:14px">
         <div>
           ${infoRow('Client', q.clientName)}
-          ${infoRow('Business', q.businessName)}
+          ${infoRow('Business', q.businessName || '— (not provided)')}
           ${infoRow('Industry', q.industry)}
           ${infoRow('Package', q.packageName)}
           ${infoRow('Project Code', q.projectCode||'—')}
@@ -1058,7 +1065,7 @@ function submitForApproval(id){
   const q = DB.find('quotations', id);
   q.status = 'Awaiting Approval';
   DB.upsert('quotations', q);
-  logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
+  logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
     type:'Quotation Submitted for Approval', description:`${CURRENT_USER.name} submitted quotation ${q.quoteNumber} for Founder approval.`,
     fromValue:'Draft', toValue:'Awaiting Approval' });
   toast('Submitted for Founder approval.', 'success');
@@ -1070,7 +1077,7 @@ function markAsSent(id){
   const q = DB.find('quotations', id);
   q.status = 'Sent';
   DB.upsert('quotations', q);
-  logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
+  logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
     type:'Quotation Sent', description:`${CURRENT_USER.name} sent quotation ${q.quoteNumber} / Year 1 Total: ${q.priceIsTBC?'TBC':money(q.year1Total)}`,
     toValue:'Sent' });
   toast('Quotation marked as sent.', 'success');
@@ -1084,7 +1091,7 @@ function openFounderReviewModal(id, mode){
   const html = `
     <div class="modal-head"><h3>${titles[mode]}</h3><button class="modal-close" id="frClose">&times;</button></div>
     <div class="modal-body">
-      <p class="text-muted" style="margin-top:0;font-size:13px">${q.quoteNumber} — ${escapeHtml(q.businessName)}</p>
+      <p class="text-muted" style="margin-top:0;font-size:13px">${q.quoteNumber} — ${escapeHtml(q.businessName||q.clientName)}</p>
       ${mode==='approve' ? `<div class="form-field" style="margin-bottom:12px"><label>Edit Year 1 Total (optional)</label><input type="number" id="fr_price" value="${q.priceIsTBC?'':q.year1Total}" placeholder="Leave blank to approve as quoted"></div>` : ''}
       <div class="form-field"><label class="required">Review Note</label><textarea id="fr_comment" placeholder='e.g. "Price approved at $899." or "Rejected — scope needs revision."'></textarea></div>
     </div>
@@ -1106,14 +1113,14 @@ function openFounderReviewModal(id, mode){
         q.status = 'Approved';
         q.approvedBy = CURRENT_USER.name;
         DB.upsert('quotations', q);
-        logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
+        logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
           type:'Quotation Approved', description:`${CURRENT_USER.name} approved quotation ${q.quoteNumber} at ${money(q.year1Total)}.`,
           fromValue:'Awaiting Approval', toValue:'Approved', remark: comment });
       } else {
         q.approvalStatus = 'Founder Rejected';
         q.status = 'Rejected';
         DB.upsert('quotations', q);
-        logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
+        logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
           type:'Quotation Rejected', description:`${CURRENT_USER.name} rejected quotation ${q.quoteNumber}.`,
           fromValue: q.status, toValue:'Rejected', remark: comment });
       }
@@ -1133,7 +1140,7 @@ function markAsAccepted(id){
   const q = DB.find('quotations', id);
   q.status = 'Accepted';
   DB.upsert('quotations', q);
-  logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
+  logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
     type:'Quotation Accepted', description:`${CURRENT_USER.name} marked quotation ${q.quoteNumber} as Accepted. Value: ${money(q.year1Total)}.`,
     toValue:'Accepted' });
 
@@ -1170,7 +1177,7 @@ function convertQuotationToProject(id){
     DB.upsert('projects', linkedExisting);
     q.projectCode = linkedExisting.id;
     DB.upsert('quotations', q);
-    logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
+    logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
       type:'Quotation Converted to Project', description:`${CURRENT_USER.name} linked quotation ${q.quoteNumber} to existing project ${linkedExisting.id}.`, toValue: linkedExisting.id });
     toast(`Linked to existing project ${linkedExisting.id}.`, 'success');
     openQuotationDetailModal(id);
@@ -1193,7 +1200,7 @@ function convertQuotationToProject(id){
   q.projectCode = proj.id;
   DB.upsert('quotations', q);
 
-  logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName}`,
+  logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
     type:'Quotation Converted to Project', description:`${CURRENT_USER.name} converted quotation ${q.quoteNumber} to project ${proj.id}. Confirmed Value: ${money(proj.confirmedValue)}.`,
     toValue: proj.id });
   logActivity({ userName: CURRENT_USER.name, refType:'project', refId: proj.id, refLabel:`${proj.id} — ${proj.businessName}`,
@@ -1247,8 +1254,51 @@ function bilingualLabel(khmer, english){
   return `<span class="khmer-label">${khmer}</span><span class="en-label">${escapeHtml(english)}</span>`;
 }
 
-function quotationPreviewDocHtml(q){
-  const title = quotationTitleBlock(q.quotationType);
+/* ---------------------------------------------------------------------- */
+/* A4 pagination engine (spec: "A4 preview must be real A4")               */
+/*                                                                          */
+/* One content model, one measuring pass, one packing algorithm — used for */
+/* the live Create/Edit preview, the standalone Preview/Print modal, AND   */
+/* what actually gets printed/saved as PDF. This is the single source of  */
+/* truth spec item 24 asks for: nothing here is duplicated per surface.    */
+/*                                                                          */
+/* Pipeline:                                                                */
+/*   buildQuoteSections(q)      — PURE. Turns a quotation into an ordered  */
+/*                                 list of section descriptors (blocks that */
+/*                                 must never be split, and "groups" like   */
+/*                                 tables/lists that CAN split by row/item, */
+/*                                 repeating their header when they do).    */
+/*   measureQuoteDoc(...)       — the only DOM-touching step. Renders every */
+/*                                 section once in a hidden A4-width host   */
+/*                                 and reads back real pixel heights.       */
+/*   packQuoteSections(...)     — PURE. Greedy bin-packing of the measured  */
+/*                                 sections into pages, never splitting a   */
+/*                                 row/list-item, always keeping a repeated */
+/*                                 table header with the rows that follow.  */
+/*   renderQuotePagesHtml(...)  — PURE. Wraps packed page bodies in real    */
+/*                                 210mm×297mm .quote-page containers with  */
+/*                                 a full header on page 1 and a condensed  */
+/*                                 continuation header + "Page N of M"      */
+/*                                 footer on every page.                    */
+/*   buildQuotePagesHtml(q)     — orchestrates the four steps above.        */
+/*   paintQuotePreview(...)     — renders into a container, on screen.      */
+/*   printQuoteDocFromContainer — prints EXACTLY that already-rendered      */
+/*                                 DOM (see its own comment for why).       */
+/* ---------------------------------------------------------------------- */
+
+const QDOC_MM_TO_PX = 96/25.4;
+const QDOC_PAGE_W_MM = 210, QDOC_PAGE_H_MM = 297, QDOC_MARGIN_MM = 15;
+function qdocMm(n){ return n*QDOC_MM_TO_PX; }
+
+// Every row/list-item of the client-facing document, in document order.
+// `kind:'block'` = never split, never repeated (info table, domain note,
+// bank details, signature). `kind:'group'` = a heading + a repeatable-header
+// wrapper (a <table><thead>...</thead><tbody> or an <ol>) around a list of
+// items that CAN be split across pages — the packer repeats `headingHtml`/
+// `wrapOpenHtml` (which, for real tables, already contains the <thead> —
+// exactly what spec item 8 means by "repeat the table header") on every
+// page a group continues onto, and NEVER splits a single item's own html.
+function buildQuoteSections(q){
   const bank = bankDetails();
   const labels = yearCostLabels(q.quotationType);
   const grouped = {};
@@ -1261,9 +1311,6 @@ function quotationPreviewDocHtml(q){
   // headline amount so it's always clear what the renewal consists of.
   const maint = q.maintenance || { year1Mode:'not_included', year1Cost:0, year2Cost:0, year3Cost:0, year2DisplayMode:'estimated', year3DisplayMode:'estimated' };
   const maintActive = maint.year1Mode && maint.year1Mode!=='not_included';
-  // The system-type Year 1 label already bundles "& Maintenance" into its
-  // base wording (yearCostLabels), so only APPEND it when the label doesn't
-  // already mention maintenance — avoids "...Database & Maintenance & Maintenance".
   const mentionsMaintenance = (label)=> /maintenance/i.test(label);
   const y1Label = (maintActive && !mentionsMaintenance(labels.y1)) ? `${labels.y1} & Maintenance` : labels.y1;
   const y2Label = (Number(maint.year2Cost)>0 && !mentionsMaintenance(labels.y2)) ? `${labels.y2} & Maintenance` : labels.y2;
@@ -1280,107 +1327,340 @@ function quotationPreviewDocHtml(q){
   const y3Breakdown = (q.year3Total!=null && y3Maint>0) ? `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Renewal ${money(y3Base)} + Maintenance ${money(y3Maint)}</div>` : '';
   const visibleExcl = visibleExclusions(q.items, q.exclusions);
 
-  return `
-    <div class="quote-doc" id="quoteDocPrintable">
-      <div class="quote-doc-head">
-        <div class="quote-doc-brand">
-          <img class="quote-doc-logo" src="../assets/branding/bizweb-kh-logo-main-print.png" alt="BizWeb KH">
-          <div class="text-muted" style="font-size:11px">Tel: 017 400 044 | Telegram: @BizWebKH | www.bizwebkh.com</div>
-        </div>
-        <div class="quote-doc-meta">
-          <div class="khmer-text" style="font-size:13px;color:var(--blue)">${title.khmer}</div>
-          <div><b>${title.english}</b></div>
-          <div>Quote No: ${escapeHtml(q.quoteNumber)}</div>
-        </div>
-      </div>
+  const sections = [];
 
-      <table class="quote-doc-infotable">
-        <tr><th>${bilingualLabel('ឈ្មោះអតិថិជន','Client Name')}</th><td>${escapeHtml(q.clientName)}</td></tr>
-        <tr><th>${bilingualLabel('ឈ្មោះអាជីវកម្ម','Business Name')}</th><td>${escapeHtml(q.businessName)}</td></tr>
-        <tr><th>${bilingualLabel('គម្រោង','Project')}</th><td>${escapeHtml(q.packageName)}${q.industry?' — '+escapeHtml(q.industry):''}</td></tr>
-        <tr><th>${bilingualLabel('កាលបរិច្ឆេទ','Date')}</th><td>${fmtDate(q.quotationDate)}</td></tr>
-        <tr><th>${bilingualLabel('សុពលភាព','Valid Until')}</th><td>${fmtDate(q.validUntil)}</td></tr>
-        ${q.demoLink ? `<tr><th>Demo Preview Link</th><td>${escapeHtml(q.demoLink)}</td></tr>` : ''}
-      </table>
+  sections.push({ id:'info', kind:'block',
+    html:`<table class="quote-doc-infotable">${quoteInfoRows(q)}</table>` });
 
-      <h4 class="quote-doc-h">Scope of Work</h4>
-      ${Object.entries(grouped).map(([module,items])=>`
-        <div style="margin-bottom:8px">
-          <div style="font-weight:700;font-size:12.5px;color:var(--navy,#0b2545)">${escapeHtml(module)}</div>
-          <ul style="margin:4px 0 0;padding-left:18px;font-size:12.5px">${items.map(it=>`<li>${escapeHtml(it.name)}${it.price===null||it.price===undefined?' — TBC':''}</li>`).join('')}</ul>
-        </div>
-      `).join('') || `<p class="text-muted" style="font-size:12.5px">Select a package to load scope.</p>`}
+  const moduleEntries = Object.entries(grouped);
+  sections.push({ id:'scope', kind:'group',
+    headingHtml:`<h4 class="quote-doc-h">Scope of Work</h4>`,
+    contHeadingHtml:`<h4 class="quote-doc-h">Scope of Work (continued)</h4>`,
+    wrapOpenHtml:'', wrapCloseHtml:'',
+    items: moduleEntries.length ? moduleEntries.map(([module,items])=>({
+      html:`<div class="quote-doc-scopegroup"><div class="quote-doc-scopegroup-title">${escapeHtml(module)}</div><ul class="quote-doc-scopegroup-list">${items.map(it=>`<li>${escapeHtml(it.name)}${it.price===null||it.price===undefined?' — TBC':''}</li>`).join('')}</ul></div>`
+    })) : [{ html:`<p class="text-muted" style="font-size:12.5px">Select a package to load scope.</p>` }],
+  });
 
-      <h4 class="quote-doc-h">Year-by-Year Budget</h4>
-      <table class="quote-doc-table">
-        <thead><tr><th>Year</th><th>Details</th><th>Amount</th></tr></thead>
-        <tbody>
-          <tr><td>Year 1</td><td>${escapeHtml(y1Label)}</td><td>${y1Amount}</td></tr>
-          <tr><td>Year 2</td><td>${escapeHtml(y2Label)}${y2Breakdown}</td><td>${y2Amount}</td></tr>
-          <tr><td>Year 3</td><td>${escapeHtml(y3Label)}${y3Breakdown}</td><td>${y3Amount}</td></tr>
-        </tbody>
-      </table>
+  sections.push({ id:'yearbudget', kind:'group',
+    headingHtml:`<h4 class="quote-doc-h">Year-by-Year Budget</h4>`,
+    contHeadingHtml:`<h4 class="quote-doc-h">Year-by-Year Budget (continued)</h4>`,
+    wrapOpenHtml:`<table class="quote-doc-table"><thead><tr><th>Year</th><th>Details</th><th>Amount</th></tr></thead><tbody>`,
+    wrapCloseHtml:`</tbody></table>`,
+    items:[
+      { html:`<tr><td>Year 1</td><td>${escapeHtml(y1Label)}</td><td>${y1Amount}</td></tr>` },
+      { html:`<tr><td>Year 2</td><td>${escapeHtml(y2Label)}${y2Breakdown}</td><td>${y2Amount}</td></tr>` },
+      { html:`<tr><td>Year 3</td><td>${escapeHtml(y3Label)}${y3Breakdown}</td><td>${y3Amount}</td></tr>` },
+    ],
+  });
 
-      ${q.domainName || q.domainCost!=null ? `
-      <h4 class="quote-doc-h">Domain</h4>
-      <p style="font-size:12.5px;margin:0">${q.domainName?escapeHtml(q.domainName)+' — ':''}${q.domainIncluded?'included in Year 1':'not included'} (est. ${money(q.domainCost)}); renewal est. ${money(q.domainRenewalEstimate)}/year.</p>
-      ` : ''}
+  if(q.domainName || q.domainCost!=null){
+    sections.push({ id:'domain', kind:'block',
+      html:`<h4 class="quote-doc-h">Domain</h4><p style="font-size:12.5px;margin:0">${q.domainName?escapeHtml(q.domainName)+' — ':''}${q.domainIncluded?'included in Year 1':'not included'} (est. ${money(q.domainCost)}); renewal est. ${money(q.domainRenewalEstimate)}/year.</p>` });
+  }
 
-      <h4 class="quote-doc-h">Payment Schedule</h4>
-      <table class="quote-doc-table qc-mini-table">
-        <thead><tr><th>Stage</th><th>%</th><th>Amount</th></tr></thead>
-        <tbody>${(q.paymentSchedule||[]).map(st=>`<tr><td>${escapeHtml(st.label)}</td><td>${st.pct}%</td><td>${money(st.amount)}</td></tr>`).join('')}</tbody>
-      </table>
-      ${maintActive && y1MaintAddOn>0 ? `<p class="text-muted" style="font-size:11px;margin:4px 0 0">Includes Year 1 maintenance (${money(y1MaintAddOn)}).</p>` : ''}
+  const paymentFootNote = (maintActive && y1MaintAddOn>0) ? `<p class="text-muted" style="font-size:11px;margin:4px 0 0">Includes Year 1 maintenance (${money(y1MaintAddOn)}).</p>` : '';
+  sections.push({ id:'payment', kind:'group',
+    headingHtml:`<h4 class="quote-doc-h">Payment Schedule</h4>`,
+    contHeadingHtml:`<h4 class="quote-doc-h">Payment Schedule (continued)</h4>`,
+    wrapOpenHtml:`<table class="quote-doc-table qc-mini-table"><thead><tr><th>Stage</th><th>%</th><th>Amount</th></tr></thead><tbody>`,
+    wrapCloseHtml:`</tbody></table>${paymentFootNote}`,
+    items:(q.paymentSchedule||[]).map(st=>({ html:`<tr><td>${escapeHtml(st.label)}</td><td>${st.pct}%</td><td>${money(st.amount)}</td></tr>` })),
+  });
 
-      <div class="quote-doc-bottom">
-        <div>
-          <h4 class="quote-doc-h">Important Notes</h4>
-          <ol style="margin:4px 0 0;padding-left:18px;font-size:11.5px;color:var(--muted)">
-            ${(q.importantNotes||[]).map(n=>`<li><b>${escapeHtml(n.title)}:</b> ${escapeHtml(n.text)}</li>`).join('')}
-            ${maintenanceWordingNotes(maint).map(n=>`<li><b>${escapeHtml(n.title)}:</b> ${escapeHtml(n.text)}</li>`).join('')}
-            ${visibleExcl.length ? `<li><b>Not Included:</b> ${visibleExcl.map(escapeHtml).join(', ')}.</li>` : ''}
-          </ol>
-        </div>
-        <div>
-          <h4 class="quote-doc-h">Payment Bank Details</h4>
-          <div style="font-size:12px;line-height:1.9">
-            <div><b>Account Name:</b> ${escapeHtml(bank.accountName)}</div>
-            <div><b>Account Number:</b> ${escapeHtml(bank.accountNumber)}</div>
-            <div><b>Bank Name:</b> ${escapeHtml(bank.bankName)}</div>
-            ${bank.memo?`<div><b>Memo:</b> ${escapeHtml(bank.memo)}</div>`:''}
-            ${bank.qrImageUrl?`<img src="${bank.qrImageUrl}" style="width:90px;margin-top:6px" alt="Payment QR">`:''}
-          </div>
-        </div>
-      </div>
+  const noteItems = [];
+  (q.importantNotes||[]).forEach(n=> noteItems.push({ html:`<li><b>${escapeHtml(n.title)}:</b> ${escapeHtml(n.text)}</li>` }));
+  maintenanceWordingNotes(maint).forEach(n=> noteItems.push({ html:`<li><b>${escapeHtml(n.title)}:</b> ${escapeHtml(n.text)}</li>` }));
+  if(visibleExcl.length) noteItems.push({ html:`<li><b>Not Included:</b> ${visibleExcl.map(escapeHtml).join(', ')}.</li>` });
+  if(!noteItems.length) noteItems.push({ html:`<li>No additional notes.</li>` });
+  sections.push({ id:'notes', kind:'group',
+    headingHtml:`<h4 class="quote-doc-h">Important Notes</h4>`,
+    contHeadingHtml:`<h4 class="quote-doc-h">Important Notes (continued)</h4>`,
+    wrapOpenHtml:`<ol class="quote-doc-notes-list">`, wrapCloseHtml:`</ol>`,
+    items: noteItems,
+  });
 
-      <div class="quote-doc-accept">
-        <div><div class="sig-line"></div><span>Client Signature / Date</span></div>
-        <div><div class="sig-line"></div><span>BizWeb KH Representative / Date</span></div>
-      </div>
+  sections.push({ id:'bank', kind:'block',
+    html:`<h4 class="quote-doc-h">Payment Bank Details</h4><div class="quote-doc-bankbox"><div><b>Account Name:</b> ${escapeHtml(bank.accountName)}</div><div><b>Account Number:</b> ${escapeHtml(bank.accountNumber)}</div><div><b>Bank Name:</b> ${escapeHtml(bank.bankName)}</div>${bank.memo?`<div><b>Memo:</b> ${escapeHtml(bank.memo)}</div>`:''}${bank.qrImageUrl?`<img src="${bank.qrImageUrl}" style="width:90px;margin-top:6px" alt="Payment QR">`:''}</div>` });
+
+  sections.push({ id:'accept', kind:'block',
+    html:`<div class="quote-doc-accept"><div><div class="sig-line"></div><span>Client Signature / Date</span></div><div><div class="sig-line"></div><span>BizWeb KH Representative / Date</span></div></div>` });
+
+  return sections;
+}
+
+// Business Name is OPTIONAL (spec §1): its row is simply omitted from the
+// client-facing document when blank — never shown empty, never silently
+// replaced with Client Name (that substitution only happens in internal,
+// non-client-facing labels like Activity Log entries — see the
+// `businessName||clientName` fallbacks used there, kept deliberately
+// separate from this function).
+function quoteInfoRows(q){
+  const rows = [
+    `<tr><th>${bilingualLabel('ឈ្មោះអតិថិជន','Client Name')}</th><td>${escapeHtml(q.clientName)}</td></tr>`,
+  ];
+  if(q.businessName && String(q.businessName).trim()){
+    rows.push(`<tr><th>${bilingualLabel('ឈ្មោះអាជីវកម្ម','Business Name')}</th><td>${escapeHtml(q.businessName)}</td></tr>`);
+  }
+  rows.push(`<tr><th>${bilingualLabel('គម្រោង','Project')}</th><td>${escapeHtml(q.packageName)}${q.industry?' — '+escapeHtml(q.industry):''}</td></tr>`);
+  rows.push(`<tr><th>${bilingualLabel('កាលបរិច្ឆេទ','Date')}</th><td>${fmtDate(q.quotationDate)}</td></tr>`);
+  rows.push(`<tr><th>${bilingualLabel('សុពលភាព','Valid Until')}</th><td>${fmtDate(q.validUntil)}</td></tr>`);
+  if(q.demoLink) rows.push(`<tr><th>Demo Preview Link</th><td>${escapeHtml(q.demoLink)}</td></tr>`);
+  return rows.join('');
+}
+
+function quoteFullHeaderHtml(q){
+  const title = quotationTitleBlock(q.quotationType);
+  return `<div class="quote-doc-head">
+    <div class="quote-doc-brand">
+      <img class="quote-doc-logo" src="../assets/branding/bizweb-kh-logo-main-print.png" alt="BizWeb KH">
+      <div class="text-muted" style="font-size:11px">Tel: 017 400 044 | Telegram: @BizWebKH | www.bizwebkh.com</div>
     </div>
-  `;
+    <div class="quote-doc-meta">
+      <div class="khmer-text" style="font-size:13px;color:var(--blue)">${title.khmer}</div>
+      <div><b>${title.english}</b></div>
+      <div>Quote No: ${escapeHtml(q.quoteNumber)}</div>
+    </div>
+  </div>`;
+}
+// Condensed continuation header (spec §10): every page after the first gets
+// a small "BizWeb KH — <type> · Quote No: X" line instead of the full
+// logo/header block, so page 2+ isn't wasting A4 real estate on a repeat of
+// the branding block while still always identifying which quotation/page a
+// loose printed sheet belongs to.
+function quoteContHeaderHtml(q){
+  const title = quotationTitleBlock(q.quotationType);
+  return `<div class="quote-doc-cont-head"><b>BizWeb KH</b> — ${escapeHtml(title.english)} · Quote No: ${escapeHtml(q.quoteNumber)}</div>`;
+}
+
+// Flat (non-paginated) concatenation of every section's full content — used
+// by automated tests to assert "nothing entered on the form is missing from
+// the document" (spec §6) without needing a real browser to measure/paginate.
+// Never used for actual rendering.
+function quoteSectionsPlainHtml(q){
+  const sections = buildQuoteSections(q);
+  return quoteFullHeaderHtml(q) + sections.map(sec=>{
+    if(sec.kind==='block') return sec.html;
+    return sec.headingHtml + sec.wrapOpenHtml + sec.items.map(i=>i.html).join('') + sec.wrapCloseHtml;
+  }).join('');
+}
+
+// The only DOM-touching step in the whole pipeline. Renders every block/
+// group once, at the real A4 content width, in a hidden host — and reads
+// back real pixel heights, so the exact same numbers a print engine would
+// use for A4 layout drive the on-screen page split too (spec §16).
+function measureQuoteDoc(sections, headerFullHtml, headerContHtml){
+  const host = document.createElement('div');
+  host.style.cssText = `position:fixed;left:-10000px;top:0;visibility:hidden;width:${QDOC_PAGE_W_MM - 2*QDOC_MARGIN_MM}mm;`;
+  host.className = 'quote-doc quote-doc-measure';
+  document.body.appendChild(host);
+
+  function measureHtml(html){
+    host.innerHTML = html;
+    return host.getBoundingClientRect().height;
+  }
+
+  const headerFullHeight = measureHtml(headerFullHtml);
+  const headerContHeight = measureHtml(headerContHtml);
+
+  const measured = sections.map(sec=>{
+    if(sec.kind==='block'){
+      return { ...sec, height: measureHtml(sec.html) };
+    }
+    const headingHeight = measureHtml(sec.headingHtml);
+    const contHeadingHeight = measureHtml(sec.contHeadingHtml);
+    const wrapOpenHeight = measureHtml(sec.wrapOpenHtml + sec.wrapCloseHtml);
+    // Measure every item's real height together, inside its actual wrapper,
+    // so table-row/list-item borders & padding come out exactly as they'll
+    // render on a page — tag each item's own outer tag so it can be read
+    // back individually after the whole group is rendered once.
+    host.innerHTML = sec.wrapOpenHtml + sec.items.map((it,i)=> it.html.replace(/^(<\w+)/, `$1 data-qi="${i}"`)).join('') + sec.wrapCloseHtml;
+    const items = sec.items.map((it,i)=>{
+      const el = host.querySelector(`[data-qi="${i}"]`);
+      return { html: it.html, height: el ? el.getBoundingClientRect().height : 0 };
+    });
+    return { ...sec, headingHeight, contHeadingHeight, wrapOpenHeight, wrapCloseHeight:0, items };
+  });
+
+  document.body.removeChild(host);
+  return { measured, headerFullHeight, headerContHeight };
+}
+
+// PURE greedy bin-packer: places measured sections into pages, never
+// splitting a plain block, never splitting a single group item, and always
+// re-emitting a group's heading (+ its repeatable wrapper, which for a real
+// table already contains the <thead> — spec §8) whenever that group
+// continues onto a new page. `firstBudget`/`contBudget` are the usable body
+// height (px) of page 1 (larger header) vs. every page after it (smaller
+// continuation header) — see buildQuotePagesHtml for how they're derived.
+function packQuoteSections(measured, opts){
+  const { firstBudget, contBudget } = opts;
+  const pages = [];
+  let curItems, curUsed, curBudget;
+  function startPage(){ curItems = []; curUsed = 0; curBudget = pages.length===0 ? firstBudget : contBudget; pages.push(curItems); }
+  function remaining(){ return curBudget - curUsed; }
+  function place(html, height){ curItems.push(html); curUsed += height; }
+  startPage();
+
+  for(const sec of measured){
+    if(sec.kind==='block'){
+      if(sec.height <= remaining() || curItems.length===0){
+        place(sec.html, sec.height);
+      } else {
+        startPage();
+        place(sec.html, sec.height);
+      }
+      continue;
+    }
+
+    const atomicHeight = sec.headingHeight + sec.wrapOpenHeight + sec.wrapCloseHeight + sec.items.reduce((s,i)=>s+i.height,0);
+    if(atomicHeight <= remaining()){
+      place(sec.headingHtml + sec.wrapOpenHtml + sec.items.map(i=>i.html).join('') + sec.wrapCloseHtml, atomicHeight);
+      continue;
+    }
+    // Doesn't fit in what's left of the current page — if the WHOLE group
+    // would fit cleanly on a fresh page, start one rather than splitting it
+    // unnecessarily (keeps short/typical quotations reading as clean,
+    // unsplit sections — splitting is reserved for genuinely long content).
+    if(curItems.length>0 && atomicHeight <= contBudget){
+      startPage();
+      place(sec.headingHtml + sec.wrapOpenHtml + sec.items.map(i=>i.html).join('') + sec.wrapCloseHtml, atomicHeight);
+      continue;
+    }
+
+    // Must split across pages — never mid-row/mid-item (spec §7/§8).
+    let idx = 0, usingCont = false;
+    while(idx < sec.items.length){
+      const headingHtml = usingCont ? sec.contHeadingHtml : sec.headingHtml;
+      const headingHeight = usingCont ? sec.contHeadingHeight : sec.headingHeight;
+      const overhead = headingHeight + sec.wrapOpenHeight + sec.wrapCloseHeight;
+      if(curItems.length>0 && remaining() < overhead + sec.items[idx].height){
+        startPage();
+      }
+      let segHeight = overhead;
+      const segItems = [];
+      while(idx < sec.items.length){
+        const it = sec.items[idx];
+        // Always place at least one item per page-segment (guarantees
+        // forward progress even if a single item is taller than a full
+        // page's budget) — otherwise only add more while they still fit.
+        if(segItems.length>0 && segHeight + it.height > remaining()) break;
+        segItems.push(it); segHeight += it.height; idx++;
+      }
+      place(headingHtml + sec.wrapOpenHtml + segItems.map(i=>i.html).join('') + sec.wrapCloseHtml, segHeight);
+      usingCont = true;
+      if(idx < sec.items.length) startPage();
+    }
+  }
+  return pages.map(items=>items.join(''));
+}
+
+function renderQuotePagesHtml(pageBodies, q, headerFullHtml, headerContHtml){
+  const total = pageBodies.length;
+  return pageBodies.map((body, i)=>{
+    const pageNum = i+1;
+    const header = i===0 ? headerFullHtml : `<div class="quote-page-cont-head-wrap">${headerContHtml}</div>`;
+    return `<div class="quote-doc quote-page" data-page="${pageNum}">
+      ${header}
+      <div class="quote-page-body">${body}</div>
+      <div class="quote-doc-footer">Page ${pageNum} of ${total}</div>
+    </div>`;
+  }).join('');
+}
+
+// Orchestrates the full pipeline for one quotation. Async only because it
+// waits for webfonts (Khmer) to finish loading before measuring — sizing
+// Khmer text with a fallback font's metrics would produce a page split that
+// stops matching reality the instant the real font swaps in.
+async function buildQuotePagesHtml(q){
+  try{ if(document.fonts && document.fonts.ready) await document.fonts.ready; }catch(e){}
+  const sections = buildQuoteSections(q);
+  const headerFullHtml = quoteFullHeaderHtml(q);
+  const headerContHtml = quoteContHeaderHtml(q);
+  const { measured, headerFullHeight, headerContHeight } = measureQuoteDoc(sections, headerFullHtml, headerContHtml);
+  const pageContentHeightPx = qdocMm(QDOC_PAGE_H_MM - 2*QDOC_MARGIN_MM);
+  const firstBudget = pageContentHeightPx - headerFullHeight;
+  const contBudget = pageContentHeightPx - headerContHeight;
+  const pages = packQuoteSections(measured, { firstBudget, contBudget });
+  const html = `<div class="quote-pages-wrap">${renderQuotePagesHtml(pages, q, headerFullHtml, headerContHtml)}</div>`;
+  return { html, pageCount: pages.length };
+}
+
+// Guards against a slower, now-stale render clobbering a faster, newer one
+// when the user edits several fields in quick succession (each edit kicks
+// off its own async buildQuotePagesHtml — only the LAST one requested
+// should ever reach the DOM).
+let QC_PREVIEW_TOKEN = 0;
+async function paintQuotePreview(containerEl, q, onDone){
+  const token = ++QC_PREVIEW_TOKEN;
+  const { html, pageCount } = await buildQuotePagesHtml(q);
+  if(token !== QC_PREVIEW_TOKEN) return; // superseded by a newer render
+  if(!containerEl || !document.body.contains(containerEl)) return; // modal closed meanwhile
+  containerEl.innerHTML = html;
+  if(onDone) onDone(pageCount);
+}
+
+// Prints EXACTLY the already-rendered `.quote-pages-wrap` the user is
+// looking at, by moving a copy of it to be a direct child of <body> and
+// hiding everything else for the duration of the print — never the old
+// "hide everything, show one flowing element inside the modal" trick.
+// That old approach depended on none of the modal's own ancestors clipping
+// or scroll-constraining the printed node (spec §17/§18's actual root
+// cause: `.modal-box` is a scrollable, height-capped container, so a print
+// target left nested inside it was never guaranteed to lay out at its full
+// natural height). Printing a dedicated body-level copy removes that
+// dependency entirely — nothing about the modal's own layout can clip it.
+function printQuoteDocFromContainer(containerEl){
+  const wrap = containerEl && containerEl.querySelector('.quote-pages-wrap');
+  if(!wrap){ toast('Preview is still rendering — please wait a moment and try again.', 'error'); return; }
+  const existing = document.getElementById('qcPrintRoot');
+  if(existing) existing.remove();
+  const root = document.createElement('div');
+  root.id = 'qcPrintRoot';
+  root.appendChild(wrap.cloneNode(true));
+  document.body.appendChild(root);
+  const cleanup = ()=>{
+    const el = document.getElementById('qcPrintRoot');
+    if(el) el.remove();
+    window.removeEventListener('afterprint', cleanup);
+  };
+  window.addEventListener('afterprint', cleanup);
+  // Fallback in case `afterprint` never fires (some "Save as PDF" flows).
+  setTimeout(cleanup, 20000);
+  printAfterFontsReady();
 }
 
 function openQuotationPreview(id, autoPrint=false){
   const q = DB.find('quotations', id);
   if(!q) return;
   const html = `
-    <div class="modal-head"><h3>Quotation Preview</h3><button class="modal-close" id="qpClose">&times;</button></div>
-    <div class="modal-body" style="background:#eef1f6;padding:20px">${quotationPreviewDocHtml(q)}</div>
+    <div class="modal-head"><h3>Quotation Preview</h3><span id="qpPageCount" class="text-muted" style="font-size:12px;margin-left:8px"></span><button class="modal-close" id="qpClose">&times;</button></div>
+    <div class="modal-body" style="background:#eef1f6;padding:20px" id="qpPreviewBody">
+      <div class="text-muted" style="padding:60px;text-align:center">Rendering preview…</div>
+    </div>
     <div class="modal-foot">
       <button class="btn btn-secondary" id="qpClose2">Close</button>
-      <button class="btn btn-primary" id="qpPrint">Download PDF (Print)</button>
+      <button class="btn btn-primary" id="qpPrint" disabled>Download PDF (Print)</button>
     </div>
   `;
   openModal(html, { large:true, onMount:(overlay)=>{
     overlay.querySelector('#qpClose').onclick = closeModal;
     overlay.querySelector('#qpClose2').onclick = closeModal;
-    overlay.querySelector('#qpPrint').onclick = printAfterFontsReady;
-    // Same font-ready wait as the manual Print button — an auto-triggered
-    // print (e.g. the list page's PDF action) is exactly the case most
-    // likely to fire before the Khmer webfont has finished loading.
-    if(autoPrint) setTimeout(printAfterFontsReady, 200);
+    const body = overlay.querySelector('#qpPreviewBody');
+    const printBtn = overlay.querySelector('#qpPrint');
+    printBtn.onclick = ()=> printQuoteDocFromContainer(body);
+    paintQuotePreview(body, q, (pageCount)=>{
+      if(!document.body.contains(overlay)) return;
+      const badge = overlay.querySelector('#qpPageCount');
+      if(badge) badge.textContent = `${pageCount} page${pageCount===1?'':'s'}`;
+      printBtn.disabled = false;
+      // Same font/paint-ready wait as the manual Print button — an
+      // auto-triggered print (the list page's PDF action) is exactly the
+      // case most likely to fire before the Khmer webfont/pagination has
+      // finished, which is why this now waits for the real page count
+      // instead of a blind setTimeout.
+      if(autoPrint) printQuoteDocFromContainer(body);
+    });
   }});
 }
 

@@ -554,6 +554,33 @@ svg{width:18px;height:18px}
 .form-field textarea{resize:vertical;min-height:70px}
 .form-hint{font-size:11px;color:var(--muted)}
 .required:after{content:" *";color:var(--red)}
+/* Read-only / auto-generated / locked field styling (Quotations spec §2/§3):
+   a field the user cannot type into must look visibly different from one
+   they can, not just behave differently — otherwise it reads as broken
+   ("why won't this field accept my input?"). Applies to native `readonly`
+   text/number/date inputs (used wherever the field's VALUE still needs to
+   stay visible/selectable/copyable — Quote No., Project Code, Year 1 Total,
+   role-locked pricing fields, lead-linked contact fields) and to `disabled`
+   selects (native <select> has no readonly, so permission/system-locked
+   dropdowns stay `disabled` but get the same muted look for consistency).
+   Muted, not faint: uses the same --muted token as every other secondary
+   text in the app, never a low-opacity fade that becomes unreadable. */
+.form-field input[readonly],
+.form-field input:disabled,
+.form-field select:disabled{
+  background:var(--surface-2);color:var(--muted);cursor:not-allowed;
+}
+.form-field input[readonly]{cursor:default}
+/* Small "Auto" pill next to a label for genuinely system-generated/
+   calculated values (Quote No., Project Code, Year 1 Total) — distinct from
+   a plain role-permission lock, which gets the muted background above but
+   no badge (it's still a real value the user typed or picked, just not
+   editable by their current role/step). */
+.field-auto-badge{
+  display:inline-block;font-size:9px;font-weight:800;letter-spacing:.3px;text-transform:uppercase;
+  color:var(--blue);background:#1d7bff1a;border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:middle;
+}
+[data-theme="dark"] .field-auto-badge{background:#1d7bff33;color:#5fa8ff}
 
 /* ---------- Tabs ---------- */
 .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:16px}
@@ -731,7 +758,7 @@ svg{width:18px;height:18px}
    duplicating every rule below with hardcoded colors. */
 .quote-doc{
   --line:#dce8f7; --muted:#526584; --navy:#071c3d;
-  background:#fff;border-radius:10px;max-width:760px;margin:0 auto;padding:32px 36px;box-shadow:0 10px 30px rgba(7,20,45,.12);color:var(--navy);
+  color:var(--navy);
   /* Root-cause Khmer-typography fix: this rule previously declared NO
      font-family at all, so it silently inherited the page's Latin-only
      body stack ('Inter', ... sans-serif) — Inter has no Khmer glyphs, so
@@ -744,9 +771,16 @@ svg{width:18px;height:18px}
      draws any character Inter lacks — i.e. every Khmer code point — using
      the next font in the list. This fixes Khmer everywhere in the
      document (title block, table labels, notes) with one line, and needs
-     no per-element markup. */
+     no per-element markup.
+     NOTE: background/sizing/padding/shadow used to live on this rule when
+     .quote-doc was a single continuous flowing document. Those are now on
+     .quote-page instead (below) — .quote-doc itself is only ever used as a
+     shared typography/var base: applied to each real .quote-page AND to
+     the hidden measureQuoteDoc() host, so both measure and render with
+     identical font metrics. */
   font-family:'Inter','Noto Sans Khmer','Khmer OS',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;
 }
+.quote-doc-loading{padding:60px 20px;text-align:center;color:var(--muted);font-size:13px}
 /* Khmer-specific type tuning (spec §3): Khmer glyphs sit slightly lower/
    taller in their line box than Latin text at the same font-size, so a
    shared line-height that looks fine for English can visually clip or
@@ -777,7 +811,13 @@ svg{width:18px;height:18px}
    which bloats generated PDFs to ~4.9MB; the PNG keeps the same look at a
    fraction of the size for reliable print/PDF output (spec §7). */
 .quote-doc-brand{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
-.quote-doc-logo{display:block;width:150px;max-width:60%;height:auto}
+/* Fixed width AND height (not height:auto) — the real asset is 1200×328px
+   (2400/656 @2x), so 150px wide pins to 41px tall. Without an explicit
+   height, the very first measureQuoteDoc() pass can run before the image
+   has finished loading/decoding, measuring the header at its collapsed
+   (image-less) height and producing a page split that's briefly wrong
+   until the image loads and the layout reflows out from under it. */
+.quote-doc-logo{display:block;width:150px;max-width:60%;height:41px}
 .quote-doc-meta{text-align:right;font-size:12px;line-height:1.7}
 .quote-doc-clientbox{background:#f4f8ff;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.8}
 .quote-doc-h{font-size:12.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--blue);border-bottom:1px solid var(--line);padding-bottom:5px;margin:18px 0 8px}
@@ -798,24 +838,78 @@ svg{width:18px;height:18px}
 .quote-doc-bottom{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:16px}
 @media (max-width:640px){ .quote-doc-bottom{grid-template-columns:1fr} }
 
+/* ---------- A4 pagination engine (real pages, not a flowed document) ----------
+   Replaces the old single continuous .quote-doc sheet. buildQuotePagesHtml()
+   in js/quotations.js measures real content at A4 width and packs it into N
+   discrete .quote-page nodes; this CSS just gives each one true A4 paper
+   dimensions and a stack of them (.quote-pages-wrap) a visible gap so page
+   boundaries are unambiguous both on screen and on paper (spec §4/§15). */
+.quote-pages-wrap{display:flex;flex-direction:column;align-items:center;gap:28px}
+.quote-page{
+  position:relative;box-sizing:border-box;
+  width:210mm;height:297mm;padding:15mm;
+  background:#fff;box-shadow:0 10px 30px rgba(7,20,45,.12);border-radius:2px;overflow:hidden;
+  /* Brand colors (table header bars, blue rule under the logo, etc.) must
+     stay visible even if the browser's "Background graphics" print option
+     is off (spec §12) — Chrome/Edge/Firefox all honor this exact
+     declaration to force those backgrounds through regardless. */
+  print-color-adjust:exact;-webkit-print-color-adjust:exact;
+}
+.quote-page-body{font-size:12.5px}
+.quote-page-cont-head-wrap{margin-bottom:14px}
+.quote-doc-cont-head{
+  font-size:10.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;
+  border-bottom:1px solid var(--line);padding-bottom:8px;
+}
+.quote-doc-footer{
+  position:absolute;left:15mm;right:15mm;bottom:7mm;
+  font-size:9.5px;color:var(--muted);text-align:center;
+  border-top:1px solid var(--line);padding-top:5px;
+}
+
+/* Scope of Work groups (one per module) — each kept whole across a page
+   break wherever it fits (spec §7's "don't split a scope item line"). */
+.quote-doc-scopegroup{margin-bottom:10px;break-inside:avoid;page-break-inside:avoid}
+.quote-doc-scopegroup-title{font-size:12px;font-weight:700;color:var(--navy);margin-bottom:4px}
+.quote-doc-scopegroup-list{margin:0;padding-left:20px;font-size:12.5px;line-height:1.7}
+.quote-doc-scopegroup-list li{break-inside:avoid;page-break-inside:avoid}
+
+/* Important Notes — replaces the old inline-styled <ol>. */
+.quote-doc-notes-list{margin:0;padding-left:20px;font-size:12.5px;line-height:1.75}
+.quote-doc-notes-list li{margin-bottom:6px;break-inside:avoid;page-break-inside:avoid}
+
+/* Bank details box — replaces the old inline-styled <div>; heading and
+   value always travel together (spec §7). */
+.quote-doc-bankbox{
+  background:#f4f8ff;border-radius:8px;padding:12px 14px;font-size:12.5px;line-height:1.9;
+  break-inside:avoid;page-break-inside:avoid;
+}
+
+/* Table rows / signature block must never split mid-row (spec §7). */
+.quote-doc-table tr{break-inside:avoid;page-break-inside:avoid}
+.quote-doc-accept{break-inside:avoid;page-break-inside:avoid}
+
 @media print{
-  body *{visibility:hidden}
-  #quoteDocPrintable, #quoteDocPrintable *{visibility:visible}
-  #quoteDocPrintable{position:absolute;left:0;top:0;width:100%;box-shadow:none;margin:0;padding:0;background:#fff!important}
-  .modal-overlay, .modal-head, .modal-foot{background:none}
-  @page{ size:A4; margin:14mm }
-  #quoteDocPrintable table{page-break-inside:auto}
-  #quoteDocPrintable tr{page-break-inside:avoid;page-break-after:auto}
-  #quoteDocPrintable thead{display:table-header-group}
-  #quoteDocPrintable .quote-doc-h{page-break-after:avoid}
-  /* #quoteDocPrintable is always the standalone preview/print modal's own
-     copy (openQuotationPreview), never the create/edit modal's embedded
-     #qcA4Scale live-preview copy, so the zoom rule below is only a
-     defensive belt-and-braces reset — it guarantees that IF a zoom were
-     ever applied to something inside the printed tree, print/PDF output
-     would still always come out at true 100% scale, per the hard
-     constraint "do not change... PDF content structure." */
-  #quoteDocPrintable, #quoteDocPrintable *{zoom:1!important}
+  /* Hide every ordinary CRM element (nav, modal chrome, zoom controls, the
+     on-screen preview copy, etc.) and print ONLY the dedicated body-level
+     copy that printQuoteDocFromContainer() creates — #qcPrintRoot. This
+     replaces the old "hide everything, absolute-position one flowing node
+     back into view" hack, which depended on that node's ancestors (the
+     preview modal's own scrollable, height-capped .modal-box) never
+     clipping it — the actual root cause of content being lost after part
+     of the Payment Schedule (spec §17/§18). #qcPrintRoot is appended
+     directly to <body>, outside every modal, so nothing about the modal's
+     layout can affect it. */
+  body > *:not(#qcPrintRoot){display:none!important}
+  #qcPrintRoot{display:block!important;position:static;visibility:visible}
+  #qcPrintRoot .quote-pages-wrap{gap:0}
+  #qcPrintRoot .quote-page{
+    box-shadow:none;border-radius:0;margin:0;
+    width:210mm;height:297mm;
+    break-after:page;page-break-after:always;
+  }
+  #qcPrintRoot .quote-page:last-child{break-after:auto;page-break-after:auto}
+  @page{ size:A4 portrait; margin:0 }
 }
 
 /* ---------- Create Quotation: live split-view (Edit | Preview) ---------- */
@@ -865,7 +959,12 @@ svg{width:18px;height:18px}
    scaled page automatically with no manual height math. transform:scale
    was deliberately avoided here for that reason. */
 .qc-a4-scale{width:794px;flex:0 0 auto}
-.qc-preview-col .quote-doc{margin:0 auto;max-width:none;width:100%}
+/* Each real .quote-page is already true A4 width (210mm ≈ 794px, matching
+   .qc-a4-scale above) — .quote-pages-wrap's own align-items:center is what
+   keeps every page centered in the column, so no width override is needed
+   here (unlike the old single-.quote-doc layout, which stretched to fill
+   its container). */
+.qc-preview-col .quote-pages-wrap{width:100%}
 @media (max-width:1150px){
   .qc-tabs{display:flex}
   .qc-split{display:block;height:auto;overflow-y:auto}
