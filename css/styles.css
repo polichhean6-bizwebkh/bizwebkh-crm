@@ -288,6 +288,10 @@ img{max-width:100%;display:block}
 .atp-row:hover{background:var(--surface-2)}
 .atp-row.atp-disabled{cursor:default;opacity:.65}
 .atp-row.atp-disabled:hover{background:transparent}
+/* Keyboard-navigated highlight (Arrow Down/Up) — same visual treatment as
+   :hover so keyboard and mouse users see a consistent "this is what Enter
+   will pick" affordance. */
+.atp-row.atp-active{background:var(--surface-2)}
 .atp-pill{flex:0 0 auto;font-size:10.5px;font-weight:700;padding:4px 9px;border-radius:20px;white-space:nowrap}
 .atp-pill-select{background:rgba(18,167,117,.16);color:#12a775}
 .atp-pill-pipeline{background:rgba(217,138,18,.16);color:#d98a12}

@@ -458,22 +458,45 @@ function openAddToPipelineModal(opts={}){
     // stored without spaces.
     function normalizeQuery(s){ return (s||'').toLowerCase().trim(); }
     function digitsOnly(s){ return (s||'').replace(/\D/g,''); }
+    // Root-cause fix: a query is only eligible for the phone digit-substring
+    // match when it is ITSELF a "digits-ish" query (digits plus phone
+    // punctuation like spaces/dashes/parens/dots — e.g. "012 587", "034"),
+    // never when it contains letters (e.g. "L034"). Previously ANY query
+    // had its digits extracted and compared against every lead's phone
+    // number, so typing a Lead ID like "L034" got silently reduced to just
+    // "034" and matched against the PHONE NUMBER of any unrelated lead that
+    // happened to contain "034" anywhere in it (e.g. a phone number like
+    // 012 034 567) — producing exactly the reported symptom of random-
+    // looking unrelated leads (L012, L002, L015, ...) showing up for an
+    // ID search. Restricting the phone match to genuinely numeric queries
+    // keeps "034" -> phone/ID/project-code matching (spec §1) while an
+    // ID-shaped query like "L034" now ONLY matches id/project code/name/
+    // service — never phone.
+    function isDigitsQuery(s){ return /\d/.test(s) && /^[\d\s\-().]+$/.test(s); }
     function matchesQuery(l, nq){
       if(!nq) return true;
       if(l.id.toLowerCase().includes(nq)) return true;
       if(l.clientName.toLowerCase().includes(nq)) return true;
       if(l.businessName.toLowerCase().includes(nq)) return true;
+      if((l.telegram||'').toLowerCase().includes(nq)) return true;
       if((l.interestedService||'').toLowerCase().includes(nq)) return true;
       if(l.interestedService && serviceDisplayName(l.interestedService).toLowerCase().includes(nq)) return true;
       if(l.projectCode && l.projectCode.toLowerCase().includes(nq)) return true;
-      const qDigits = digitsOnly(nq);
-      if(qDigits && digitsOnly(l.phone).includes(qDigits)) return true;
+      if(isDigitsQuery(nq)){
+        const qDigits = digitsOnly(nq);
+        if(qDigits && digitsOnly(l.phone).includes(qDigits)) return true;
+      }
       return false;
     }
     const RESULT_LIMIT = 10; // spec §5 — "around 8–10 matches", scroll for more
     function eligibilityPill(l){
       if(l.status==='Qualified') return `<span class="atp-pill atp-pill-select">Select</span>`;
       if(PIPELINE_STATUSES.includes(l.status)) return `<span class="atp-pill atp-pill-pipeline">Already in Pipeline</span>`;
+      // Lost gets its own honest label (spec §8) instead of the generic
+      // "Not Qualified Yet", which read oddly for a lead that was actively
+      // disqualified rather than simply not-there-yet — still non-
+      // selectable either way, no change to eligibility logic itself.
+      if(l.status==='Lost') return `<span class="atp-pill atp-pill-notqualified">Lost</span>`;
       return `<span class="atp-pill atp-pill-notqualified">Not Qualified Yet</span>`;
     }
     function suggestionRowHtml(l){
@@ -488,15 +511,35 @@ function openAddToPipelineModal(opts={}){
           ${eligibilityPill(l)}
         </div>`;
     }
+    // Keyboard nav (spec §10): Arrow Down/Up move a highlighted row among
+    // the currently-rendered ELIGIBLE (selectable) rows only — disabled
+    // "Already in Pipeline"/"Not Qualified Yet" rows are shown but can't
+    // be keyboard-selected any more than they can be clicked. Enter picks
+    // whichever row is highlighted (defaulting to the first eligible row
+    // the moment results render, so Enter works immediately without
+    // pressing Down first). Escape closes the dropdown without clearing
+    // the typed query, matching standard autocomplete behavior.
+    let activeIndex = -1;
+    function pickRow(row){
+      selectedLead = DB.find('leads', row.dataset.pick);
+      resultsEl.innerHTML = ''; resultsEl.style.display = 'none';
+      overlay.querySelector('#atpSearch').value = '';
+      codeInput.value = '';
+      activeIndex = -1;
+      renderSelected();
+    }
+    function eligibleRows(){ return [...resultsEl.querySelectorAll('[data-pick]')]; }
+    function applyActiveHighlight(){
+      const rows = eligibleRows();
+      rows.forEach((r,i)=> r.classList.toggle('atp-active', i===activeIndex));
+      const active = rows[activeIndex];
+      if(active && typeof active.scrollIntoView === 'function') active.scrollIntoView({ block:'nearest' });
+    }
     function wireResultRows(){
-      resultsEl.querySelectorAll('[data-pick]').forEach(row=>{
-        row.onclick = ()=>{
-          selectedLead = DB.find('leads', row.dataset.pick);
-          resultsEl.innerHTML = ''; resultsEl.style.display = 'none';
-          overlay.querySelector('#atpSearch').value = '';
-          codeInput.value = '';
-          renderSelected();
-        };
+      activeIndex = eligibleRows().length ? 0 : -1;
+      applyActiveHighlight();
+      eligibleRows().forEach(row=>{
+        row.onclick = ()=> pickRow(row);
       });
     }
     function renderResults(){
@@ -529,10 +572,29 @@ function openAddToPipelineModal(opts={}){
       resultsEl.innerHTML = matches.map(suggestionRowHtml).join('');
       wireResultRows();
     }
-    overlay.querySelector('#atpSearch').oninput = renderResults;
+    const searchInput = overlay.querySelector('#atpSearch');
+    searchInput.oninput = renderResults;
     // Focusing the (possibly still-empty) field also opens the dropdown —
     // a real typeahead shouldn't require typing first (spec §6).
-    overlay.querySelector('#atpSearch').onfocus = renderResults;
+    searchInput.onfocus = renderResults;
+    searchInput.onkeydown = (e)=>{
+      if(resultsEl.style.display==='none' || !resultsEl.innerHTML) return;
+      const rows = eligibleRows();
+      if(e.key==='ArrowDown'){
+        e.preventDefault();
+        if(rows.length){ activeIndex = (activeIndex+1) % rows.length; applyActiveHighlight(); }
+      } else if(e.key==='ArrowUp'){
+        e.preventDefault();
+        if(rows.length){ activeIndex = (activeIndex-1+rows.length) % rows.length; applyActiveHighlight(); }
+      } else if(e.key==='Enter'){
+        e.preventDefault();
+        const row = rows[activeIndex] || rows[0];
+        if(row) pickRow(row);
+      } else if(e.key==='Escape'){
+        e.preventDefault();
+        resultsEl.innerHTML = ''; resultsEl.style.display = 'none';
+      }
+    };
     // And show it immediately on modal open, instead of waiting for any
     // interaction at all.
     if(!selectedLead) renderResults();
