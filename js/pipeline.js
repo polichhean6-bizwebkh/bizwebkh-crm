@@ -652,64 +652,249 @@ function archivedPipelineOpportunities(){
   return DB.all('leads').filter(l=> l.archived && (PIPELINE_STATUSES.includes(l.status) || !!l.projectCode));
 }
 
+/* ---------------------------------------------------------------------- */
+/* Pipeline Archive — large management view (search, filters, sortable    */
+/* full-width table, pagination). State lives at module level (like       */
+/* LEADS_FILTER_STATE in leads.js) so it survives a Restore's reopen       */
+/* (openRestoreToPipelineModal's onDone calls openArchivedPipelineModal()  */
+/* again) without losing whatever the user had searched/filtered/sorted.  */
+/* ---------------------------------------------------------------------- */
+let PA_FILTER_STATE = { search:'', dateRange:'all', stage:'', sales:'', service:'', industry:'' };
+let PA_SORT = { field:'archivedAt', dir:'desc' };
+let PA_PAGE = 1;
+const PA_PAGE_SIZE = 20;
+
+function paMatchesSearch(l, nq){
+  if(!nq) return true;
+  if(l.id.toLowerCase().includes(nq)) return true;
+  if(l.projectCode && l.projectCode.toLowerCase().includes(nq)) return true;
+  if(l.clientName.toLowerCase().includes(nq)) return true;
+  if(l.businessName.toLowerCase().includes(nq)) return true;
+  if(l.interestedService){
+    if(l.interestedService.toLowerCase().includes(nq)) return true;
+    if(serviceDisplayName(l.interestedService).toLowerCase().includes(nq)) return true;
+  }
+  return false;
+}
+// Archived Date range filter — same "all/today/week/month" shape as Lead
+// Records' own date filter (leadMatchesDateRange), but keyed on
+// lead.archivedAt instead of createdAt.
+function paMatchesArchivedDateRange(l, range){
+  if(!range || range==='all') return true;
+  if(!l.archivedAt) return false;
+  const archived = new Date(l.archivedAt);
+  if(isNaN(archived)) return false;
+  const now = new Date();
+  if(range==='today') return archived.toDateString() === now.toDateString();
+  if(range==='week'){
+    const start = new Date(now); start.setHours(0,0,0,0); start.setDate(start.getDate() - start.getDay());
+    const end = new Date(start); end.setDate(end.getDate()+7);
+    return archived>=start && archived<end;
+  }
+  if(range==='month') return archived.getFullYear()===now.getFullYear() && archived.getMonth()===now.getMonth();
+  return true;
+}
+function paSortComparator(){
+  const { field, dir } = PA_SORT;
+  const mul = dir==='asc' ? 1 : -1;
+  return (a,b)=>{
+    let va, vb;
+    if(field==='clientName'){ va=(a.clientName||'').toLowerCase(); vb=(b.clientName||'').toLowerCase(); }
+    else if(field==='estimatedValue'){ va=Number(a.estimatedValue)||0; vb=Number(b.estimatedValue)||0; }
+    else if(field==='status'){ va=(a.status||'').toLowerCase(); vb=(b.status||'').toLowerCase(); }
+    else { va = a.archivedAt ? new Date(a.archivedAt).getTime() : 0; vb = b.archivedAt ? new Date(b.archivedAt).getTime() : 0; }
+    if(va<vb) return -1*mul;
+    if(va>vb) return 1*mul;
+    return 0;
+  };
+}
+function paFilteredSorted(){
+  const nq = PA_FILTER_STATE.search.trim().toLowerCase();
+  const items = archivedPipelineOpportunities().filter(l=>{
+    if(!paMatchesSearch(l, nq)) return false;
+    if(PA_FILTER_STATE.stage && l.status !== PA_FILTER_STATE.stage) return false;
+    if(PA_FILTER_STATE.sales && l.assignedSales !== PA_FILTER_STATE.sales) return false;
+    if(PA_FILTER_STATE.service && l.interestedService !== PA_FILTER_STATE.service) return false;
+    if(PA_FILTER_STATE.industry && l.industry !== PA_FILTER_STATE.industry) return false;
+    if(!paMatchesArchivedDateRange(l, PA_FILTER_STATE.dateRange)) return false;
+    return true;
+  });
+  items.sort(paSortComparator());
+  return items;
+}
+function paSortIndicator(field){
+  if(PA_SORT.field !== field) return '';
+  return ` <span class="sort-indicator">${PA_SORT.dir==='desc' ? '↓' : '↑'}</span>`;
+}
+
 function openArchivedPipelineModal(){
   if(!isFounder()){ toast('Only Founder/Admin can view the Pipeline Archive.', 'error'); return; }
-  const items = archivedPipelineOpportunities().sort((a,b)=> new Date(b.archivedAt||0) - new Date(a.archivedAt||0));
-
+  PA_PAGE = 1;
+  const allOpportunities = archivedPipelineOpportunities();
   const html = `
-    <div class="modal-head"><h3>Pipeline Archive</h3><button class="modal-close" id="apClose">&times;</button></div>
-    <div class="modal-body">
-      ${items.length===0 ? `<div class="text-muted" style="padding:24px 4px;text-align:center">No archived opportunities.</div>` : `
-      <div class="table-wrap scroll-x">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Lead ID</th><th>Project Code</th><th>Client</th><th>Business</th>
-              <th>Service</th><th>Est. Value</th><th>Last Pipeline Stage</th>
-              <th>Archived Date</th><th>Archived By</th><th>Archive Reason</th><th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${items.map(l=>`
-              <tr>
-                <td class="cell-link" data-view="${l.id}">${l.id}</td>
-                <td>${l.projectCode ? escapeHtml(l.projectCode) : '—'}</td>
-                <td class="cell-strong">${escapeHtml(l.clientName)}</td>
-                <td>${escapeHtml(l.businessName)}</td>
-                <td>${escapeHtml(l.interestedService?serviceDisplayName(l.interestedService):'—')}</td>
-                <td class="cell-strong">${money(l.estimatedValue)}</td>
-                <td>${statusBadge(l.status)}</td>
-                <td class="cell-nowrap">${l.archivedAt ? fmtDate(l.archivedAt) : '—'}</td>
-                <td>${escapeHtml(l.archivedBy||'—')}</td>
-                <td class="text-muted" style="max-width:200px">${l.archiveReason ? escapeHtml(l.archiveReason) : '—'}</td>
-                <td>
-                  <div class="flex-row" style="gap:6px;flex-wrap:wrap">
-                    <button class="btn btn-secondary btn-sm" data-view="${l.id}">View</button>
-                    <button class="btn btn-primary btn-sm" data-restore="${l.id}">Restore</button>
-                  </div>
-                </td>
-              </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>`}
+    <div class="modal-head"><h3>Pipeline Archive <span class="text-muted" style="font-size:12px;font-weight:600">(${allOpportunities.length})</span></h3><button class="modal-close" id="apClose">&times;</button></div>
+    <div class="modal-body" style="padding:0;display:flex;flex-direction:column;min-height:0;flex:1 1 auto">
+      <div style="padding:16px 22px 0">
+        <p class="text-muted" style="margin:0 0 14px;font-size:12.5px">View and manage archived opportunities.</p>
+        <div class="filters-bar" style="margin-bottom:14px">
+          <div class="search-box">
+            ${icon('search')}
+            <input type="text" id="paSearch" placeholder="Search Lead ID, Project Code, client, business, or service…" value="${escapeHtml(PA_FILTER_STATE.search)}">
+          </div>
+          <select id="paFltStage" class="sel" title="Last Pipeline Stage"><option value="">All Stages</option>${PIPELINE_STATUSES.map(s=>`<option ${PA_FILTER_STATE.stage===s?'selected':''}>${s}</option>`).join('')}</select>
+          <select id="paFltSales" class="sel" title="Sales Person"><option value="">All Sales</option>${salesOwnersList().map(s=>`<option ${PA_FILTER_STATE.sales===s?'selected':''}>${s}</option>`).join('')}</select>
+          <select id="paFltService" class="sel" title="Service"><option value="">All Services</option>${SERVICE_TYPES.map(s=>`<option value="${escapeHtml(s)}" ${PA_FILTER_STATE.service===s?'selected':''}>${escapeHtml(serviceDisplayName(s))}</option>`).join('')}</select>
+          <select id="paFltIndustry" class="sel" title="Industry"><option value="">All Industries</option>${INDUSTRIES.map(s=>`<option ${PA_FILTER_STATE.industry===s?'selected':''}>${s}</option>`).join('')}</select>
+          <select id="paFltDate" class="sel" title="Archived Date">
+            <option value="all" ${PA_FILTER_STATE.dateRange==='all'?'selected':''}>Any Archived Date</option>
+            <option value="today" ${PA_FILTER_STATE.dateRange==='today'?'selected':''}>Today</option>
+            <option value="week" ${PA_FILTER_STATE.dateRange==='week'?'selected':''}>This Week</option>
+            <option value="month" ${PA_FILTER_STATE.dateRange==='month'?'selected':''}>This Month</option>
+          </select>
+        </div>
+      </div>
+      <div id="paTableWrap" style="flex:1 1 auto;min-height:0;overflow-y:auto;padding:0 22px 6px"></div>
     </div>
     <div class="modal-foot"><button class="btn btn-secondary" id="apClose2">Close</button></div>
   `;
 
-  openModal(html, { large:true, onMount:(overlay)=>{
+  openModal(html, { xl:true, onMount:(overlay)=>{
     overlay.querySelector('#apClose').onclick = closeModal;
     overlay.querySelector('#apClose2').onclick = closeModal;
-    overlay.querySelectorAll('[data-view]').forEach(el=>{
-      el.onclick = ()=>{ closeModal(); openLeadDetailModal(el.dataset.view); };
-    });
-    overlay.querySelectorAll('[data-restore]').forEach(btn=>{
-      btn.onclick = ()=>{
-        const lead = DB.find('leads', btn.dataset.restore);
-        if(!lead) return;
-        openRestoreToPipelineModal(lead, ()=> openArchivedPipelineModal());
-      };
-    });
+
+    const rerender = ()=>{ PA_PAGE = 1; renderPaTable(overlay); };
+    overlay.querySelector('#paSearch').oninput = (e)=>{ PA_FILTER_STATE.search = e.target.value; rerender(); };
+    overlay.querySelector('#paFltStage').onchange = (e)=>{ PA_FILTER_STATE.stage = e.target.value; rerender(); };
+    overlay.querySelector('#paFltSales').onchange = (e)=>{ PA_FILTER_STATE.sales = e.target.value; rerender(); };
+    overlay.querySelector('#paFltService').onchange = (e)=>{ PA_FILTER_STATE.service = e.target.value; rerender(); };
+    overlay.querySelector('#paFltIndustry').onchange = (e)=>{ PA_FILTER_STATE.industry = e.target.value; rerender(); };
+    overlay.querySelector('#paFltDate').onchange = (e)=>{ PA_FILTER_STATE.dateRange = e.target.value; rerender(); };
+
+    renderPaTable(overlay);
   }});
+}
+
+function renderPaTable(overlay){
+  const wrap = overlay.querySelector('#paTableWrap');
+  const allFiltered = paFilteredSorted();
+  const totalPages = Math.max(1, Math.ceil(allFiltered.length / PA_PAGE_SIZE));
+  if(PA_PAGE > totalPages) PA_PAGE = totalPages;
+  if(PA_PAGE < 1) PA_PAGE = 1;
+  const startIdx = (PA_PAGE-1) * PA_PAGE_SIZE;
+  const pageItems = allFiltered.slice(startIdx, startIdx + PA_PAGE_SIZE);
+  const noRecordsAtAll = archivedPipelineOpportunities().length === 0;
+
+  function sortHeader(field, label){
+    return `<th class="th-sortable" data-sort="${field}" title="Click to sort">${label}${paSortIndicator(field)}</th>`;
+  }
+
+  wrap.innerHTML = noRecordsAtAll ? `
+    <div class="empty-row" style="padding:60px 18px">No archived opportunities yet.</div>
+  ` : `
+    <div class="table-wrap scroll-x">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Lead ID</th><th>Project Code</th>
+            ${sortHeader('clientName','Client')}
+            <th>Business</th><th>Service</th>
+            ${sortHeader('estimatedValue','Est. Value')}
+            ${sortHeader('status','Last Pipeline Stage')}
+            ${sortHeader('archivedAt','Archived Date')}
+            <th>Archived By</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${pageItems.length ? pageItems.map(l=>`
+            <tr>
+              <td class="cell-link" data-view="${l.id}">${l.id}</td>
+              <td>${l.projectCode ? escapeHtml(l.projectCode) : '—'}</td>
+              <td class="cell-strong">${escapeHtml(l.clientName)}</td>
+              <td>${escapeHtml(l.businessName)}</td>
+              <td>${escapeHtml(l.interestedService?serviceDisplayName(l.interestedService):'—')}</td>
+              <td class="cell-strong">${money(l.estimatedValue)}</td>
+              <td>${statusBadge(l.status)}</td>
+              <td class="cell-nowrap">${l.archivedAt ? fmtDate(l.archivedAt) : '—'}</td>
+              <td>${escapeHtml(l.archivedBy||'—')}${l.archiveReason ? `<div class="cell-sub" title="${escapeHtml(l.archiveReason)}">${escapeHtml(l.archiveReason)}</div>` : ''}</td>
+              <td>
+                <div class="flex-row" style="gap:6px;flex-wrap:wrap">
+                  <button class="btn btn-secondary btn-sm" data-view="${l.id}">View</button>
+                  <button class="btn btn-primary btn-sm" data-restore="${l.id}">Restore</button>
+                  ${(!l.projectCode) ? `<button class="btn btn-danger btn-sm" data-delete="${l.id}">Delete</button>` : ''}
+                </div>
+              </td>
+            </tr>`).join('') : `<tr><td colspan="9"><div class="empty-row">No matching archived opportunities found.</div></td></tr>`}
+        </tbody>
+      </table>
+    </div>
+    ${renderPaPagination(allFiltered.length, totalPages)}
+  `;
+
+  wrap.querySelectorAll('[data-view]').forEach(el=>{
+    el.onclick = ()=>{ closeModal(); openLeadDetailModal(el.dataset.view); };
+  });
+  wrap.querySelectorAll('[data-restore]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const lead = DB.find('leads', btn.dataset.restore);
+      if(!lead) return;
+      openRestoreToPipelineModal(lead, ()=> openArchivedPipelineModal());
+    };
+  });
+  // Permanent Delete (spec §6, optional) — only ever offered for a Founder/
+  // Admin AND only for a record with no linked Project Code, mirroring the
+  // exact eligibility openDeleteLeadModal() itself already enforces (spec
+  // §12: "do not change unrelated business logic" — this reuses that
+  // existing, unmodified permission/eligibility check rather than adding a
+  // new deletion path).
+  wrap.querySelectorAll('[data-delete]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const lead = DB.find('leads', btn.dataset.delete);
+      if(!lead) return;
+      openDeleteLeadModal(lead);
+    };
+  });
+  wrap.querySelectorAll('[data-sort]').forEach(th=>{
+    th.onclick = ()=>{
+      const field = th.dataset.sort;
+      if(PA_SORT.field === field) PA_SORT.dir = PA_SORT.dir==='desc' ? 'asc' : 'desc';
+      else PA_SORT = { field, dir: field==='clientName' ? 'asc' : 'desc' };
+      renderPaTable(overlay);
+    };
+  });
+  wrap.querySelectorAll('[data-page]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const p = btn.dataset.page;
+      if(p==='prev') PA_PAGE = Math.max(1, PA_PAGE-1);
+      else if(p==='next') PA_PAGE = Math.min(totalPages, PA_PAGE+1);
+      else PA_PAGE = Number(p);
+      renderPaTable(overlay);
+    };
+  });
+}
+
+function renderPaPagination(totalCount, totalPages){
+  if(totalCount===0) return '';
+  const startIdx = (PA_PAGE-1)*PA_PAGE_SIZE;
+  const shownFrom = startIdx+1;
+  const shownTo = Math.min(totalCount, startIdx+PA_PAGE_SIZE);
+  let pageBtns = '';
+  for(let p=1; p<=totalPages; p++){
+    if(totalPages>7 && p!==1 && p!==totalPages && Math.abs(p-PA_PAGE)>2){
+      if(p===2 || p===totalPages-1) pageBtns += `<span style="padding:0 4px;color:var(--muted)">…</span>`;
+      continue;
+    }
+    pageBtns += `<button class="btn ${p===PA_PAGE?'btn-primary':'btn-secondary'} btn-sm" data-page="${p}" style="min-width:34px">${p}</button>`;
+  }
+  return `
+    <div class="flex-row" style="justify-content:space-between;flex-wrap:wrap;gap:10px;margin:12px 0">
+      <p class="text-muted" style="margin:0;font-size:12px">Showing ${shownFrom}–${shownTo} of ${totalCount} archived opportunities</p>
+      <div class="flex-row" style="gap:6px">
+        <button class="btn btn-secondary btn-sm" data-page="prev" ${PA_PAGE<=1?'disabled':''}>Previous</button>
+        ${pageBtns}
+        <button class="btn btn-secondary btn-sm" data-page="next" ${PA_PAGE>=totalPages?'disabled':''}>Next</button>
+      </div>
+    </div>
+  `;
 }
 
 function openRestoreToPipelineModal(lead, onDone){
