@@ -1694,8 +1694,31 @@ function buildQuoteSections(q){
     items: noteItems,
   });
 
+  // Two-column payment card: bank details on the left, KHQR on the right
+  // (stacks on narrow/mobile widths via the .quote-doc-bankbox CSS grid).
+  // Both halves + the heading travel together as one unit (kind:'block'),
+  // and .quote-doc-bankbox itself carries break-inside:avoid so the whole
+  // card is guaranteed never to split across a page — it either fits
+  // whole on the current page or flows entirely onto the next one.
+  const bankDetailRows = [
+    `<div><b>Account Name:</b> ${escapeHtml(bank.accountName)}</div>`,
+    `<div><b>Account Number:</b> ${escapeHtml(bank.accountNumber)}</div>`,
+    `<div><b>Bank Name:</b> ${escapeHtml(bank.bankName)}</div>`,
+    bank.memo ? `<div><b>Memo:</b> ${escapeHtml(bank.memo)}</div>` : '',
+  ].join('');
+  const qrHtml = bank.qrImageUrl ? `
+      <div class="quote-doc-qr-title">KHQR</div>
+      <div class="quote-doc-qr-frame"><img class="quote-doc-qr-img" src="${escapeHtml(bank.qrImageUrl)}" alt="KHQR Payment QR Code" width="180" height="180"></div>
+      <div class="quote-doc-qr-caption">Scan to Pay</div>
+      <div class="quote-doc-qr-help">Scan with your preferred banking app.</div>` : '';
   sections.push({ id:'bank', kind:'block',
-    html:`<h4 class="quote-doc-h">Payment Bank Details</h4><div class="quote-doc-bankbox"><div><b>Account Name:</b> ${escapeHtml(bank.accountName)}</div><div><b>Account Number:</b> ${escapeHtml(bank.accountNumber)}</div><div><b>Bank Name:</b> ${escapeHtml(bank.bankName)}</div>${bank.memo?`<div><b>Memo:</b> ${escapeHtml(bank.memo)}</div>`:''}${bank.qrImageUrl?`<img src="${bank.qrImageUrl}" style="width:90px;margin-top:6px" alt="Payment QR">`:''}</div>` });
+    html:`<h4 class="quote-doc-h">Payment Bank Details</h4><div class="quote-doc-bankbox">
+      <div class="quote-doc-bankbox-details">
+        <div class="quote-doc-bankbox-label">Bank Details</div>
+        ${bankDetailRows}
+      </div>
+      ${qrHtml ? `<div class="quote-doc-bankbox-qr">${qrHtml}</div>` : ''}
+    </div>` });
 
   sections.push({ id:'accept', kind:'block',
     html:`<div class="quote-doc-accept"><div><div class="sig-line"></div><span>Client Signature / Date</span></div><div><div class="sig-line"></div><span>BizWeb KH Representative / Date</span></div></div>` });

@@ -479,6 +479,11 @@ const DEFAULT_QUOTATION_NOTES = {
 // plus an optional Client-Specific Note textarea; Sales never edits this
 // master text (Settings → Quotations → General, Founder/Admin only).
 const DEFAULT_STANDARD_NOTES_TEXT = 'Prices are quoted in USD. Year 1 covers development plus the items shown above; Development is a one-time, Year-1-only cost — Year 2 and Year 3 are renewal/support costs only, never the development price again. Annual renewal and maintenance figures marked "Estimated" may be adjusted slightly at actual renewal time; figures marked "Exact" are fixed. Client provides all content, account access, and approvals needed for development to begin on schedule.';
+// Bundled KHQR payment QR (assets/payment/khqr.jpg), relative to the pages
+// that render quotations (dashboard/, same convention as the print logo at
+// assets/branding/bizweb-kh-logo-main-print.png). Used only as the fallback
+// when Settings → Quotations → General has no override saved.
+const DEFAULT_QR_IMAGE_URL = '../assets/payment/khqr.jpg';
 function quotationDefaults(){
   const db = DB.read();
   const qd = (db && db.settings && db.settings.quotationDefaults) || {};
@@ -491,8 +496,14 @@ function quotationDefaults(){
 }
 function bankDetails(){
   const db = DB.read();
-  return (db && db.settings && db.settings.bankDetails) || {
-    accountName:'POLI CHHEAN', accountNumber:'001 355 592', bankName:'ABA Bank', memo:'', qrImageUrl:''
+  const saved = db && db.settings && db.settings.bankDetails;
+  // qrImageUrl defaults to the bundled KHQR asset (assets/payment/khqr.jpg)
+  // rather than empty, so the payment section always has a real scannable
+  // QR out of the box; Founder/Admin can override it in Settings →
+  // Quotations → General with any other URL/path without touching code.
+  if(saved) return { ...saved, qrImageUrl: (saved.qrImageUrl && saved.qrImageUrl.trim()) ? saved.qrImageUrl : DEFAULT_QR_IMAGE_URL };
+  return {
+    accountName:'POLI CHHEAN', accountNumber:'001 355 592', bankName:'ABA Bank', memo:'', qrImageUrl:DEFAULT_QR_IMAGE_URL
   };
 }
 

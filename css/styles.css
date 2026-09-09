@@ -925,10 +925,41 @@ svg{width:18px;height:18px}
 .quote-doc-notes-list li{margin-bottom:6px;break-inside:avoid;page-break-inside:avoid}
 
 /* Bank details box — replaces the old inline-styled <div>; heading and
-   value always travel together (spec §7). */
+   value always travel together (spec §7). Two-column card: bank details
+   left, KHQR right. break-inside/page-break-inside:avoid (both — Chrome/
+   Edge honor break-inside, Firefox's print engine still wants the legacy
+   page-break-inside alias) keeps the whole card — title, details, QR —
+   together on one page; if it doesn't fit it flows whole onto the next
+   page rather than splitting mid-card. */
 .quote-doc-bankbox{
-  background:#f4f8ff;border-radius:8px;padding:12px 14px;font-size:12.5px;line-height:1.9;
+  display:grid;grid-template-columns:1fr auto;gap:18px;align-items:start;
+  background:#f4f8ff;border:1px solid #dce8f7;border-radius:8px;padding:14px 16px;font-size:12.5px;line-height:1.9;
   break-inside:avoid;page-break-inside:avoid;
+}
+.quote-doc-bankbox-details > div{padding:1px 0}
+.quote-doc-bankbox-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--blue);margin-bottom:4px}
+.quote-doc-bankbox-qr{
+  display:flex;flex-direction:column;align-items:center;text-align:center;
+  min-width:180px;padding-left:16px;border-left:1px solid #dce8f7;
+}
+.quote-doc-qr-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--blue);margin-bottom:6px}
+/* Fixed square frame with its own quiet-zone padding around the QR image —
+   nothing (captions, borders) overlaps the code itself. Real <img> (not a
+   CSS background-image) so it always renders in print/PDF output; explicit
+   width/height attributes on the <img> (see quotations.js) plus
+   aspect-ratio here mean the box occupies its final size immediately, the
+   same fixed-dimensions trick already used for .quote-doc-logo, so no
+   pagination measurement runs against a collapsed/pre-load height. */
+.quote-doc-qr-frame{
+  width:168px;height:168px;aspect-ratio:1/1;background:#fff;border:1px solid #dce8f7;border-radius:6px;
+  padding:14px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;
+}
+.quote-doc-qr-img{display:block;width:100%;height:100%;object-fit:contain}
+.quote-doc-qr-caption{font-size:12px;font-weight:700;color:var(--navy);margin-top:8px}
+.quote-doc-qr-help{font-size:10.5px;color:var(--muted);margin-top:2px;max-width:170px}
+@media (max-width:640px){
+  .quote-doc-bankbox{grid-template-columns:1fr}
+  .quote-doc-bankbox-qr{border-left:none;border-top:1px solid #dce8f7;padding-left:0;padding-top:14px;margin-top:4px}
 }
 
 /* Table rows / signature block must never split mid-row (spec §7). */

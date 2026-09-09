@@ -790,7 +790,7 @@ function qsGeneralTabHtml(editable){
           <div class="form-field"><label>Account Number</label><input id="qs_accountNumber" value="${escapeHtml(bank.accountNumber)}" ${editable?'':'disabled'}></div>
           <div class="form-field"><label>Bank Name</label><input id="qs_bankName" value="${escapeHtml(bank.bankName)}" ${editable?'':'disabled'}></div>
           <div class="form-field"><label>Default Memo</label><input id="qs_memo" value="${escapeHtml(bank.memo)}" ${editable?'':'disabled'}></div>
-          <div class="form-field full"><label>QR Image URL (optional)</label><input id="qs_qr" value="${escapeHtml(bank.qrImageUrl)}" ${editable?'':'disabled'}></div>
+          <div class="form-field full"><label>KHQR Image (path or URL)</label><input id="qs_qr" value="${escapeHtml(bank.qrImageUrl)}" placeholder="${escapeHtml(DEFAULT_QR_IMAGE_URL)}" ${editable?'':'disabled'}><p class="text-muted" style="font-size:11px;margin:4px 0 0">Shown on every quotation's Payment Bank Details section. Defaults to the bundled KHQR image — replace with a new path/URL any time without touching code.</p></div>
         </div>
       </div>
     </div>
