@@ -870,9 +870,24 @@ svg{width:18px;height:18px}
 .quote-doc-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:4px}
 .quote-doc-table th{background:var(--blue);color:#fff;text-align:left;padding:8px 10px;font-weight:700}
 .quote-doc-table td{padding:8px 10px;border-bottom:1px solid var(--line)}
-.quote-doc-accept{display:flex;gap:40px;margin-top:34px}
-.quote-doc-accept .sig-line{border-bottom:1px solid var(--muted);height:36px}
+/* justify-content:space-between (not a plain gap) so the two blocks spread
+   across the full page content width — the Representative block (now
+   carrying the stamp logo+signature group) visually shifts to the right
+   edge instead of sitting cramped right next to the Client block. */
+.quote-doc-accept{display:flex;justify-content:space-between;gap:40px;margin-top:34px;margin-bottom:10px}
+.quote-doc-accept .sig-line{border-bottom:1px solid var(--muted);height:36px;min-width:170px}
 .quote-doc-accept span{font-size:11px;color:var(--muted)}
+.quote-doc-accept-client{display:flex;flex-direction:column}
+.quote-doc-accept-rep{display:flex;flex-direction:column;align-items:flex-start}
+/* Small logo + signature grouped together like an official stamp/approval
+   block, sitting just above that side's own signature line. */
+.quote-doc-accept-stamp{display:flex;flex-direction:column;align-items:flex-start;gap:4px;margin-bottom:6px}
+/* Same fixed-width/height trick as .quote-doc-logo and .quote-doc-qr-img
+   (real <img> tags with explicit width/height attributes in quotations.js)
+   — both dimensions pinned here too so neither image can still be mid-load
+   at the very first measureQuoteDoc() pass and throw off pagination. */
+.quote-doc-accept-logo{display:block;width:84px;height:23px}
+.quote-doc-accept-sig{display:block;width:120px;height:42px;object-fit:contain}
 
 /* Bilingual client-info table (matches the real BizWeb KH quotation layout —
    e.g. C039 Engly Khun / C001 IIA Education reference documents) and the

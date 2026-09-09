@@ -1721,7 +1721,20 @@ function buildQuoteSections(q){
     </div>` });
 
   sections.push({ id:'accept', kind:'block',
-    html:`<div class="quote-doc-accept"><div><div class="sig-line"></div><span>Client Signature / Date</span></div><div><div class="sig-line"></div><span>BizWeb KH Representative / Date</span></div></div>` });
+    html:`<div class="quote-doc-accept">
+      <div class="quote-doc-accept-client">
+        <div class="sig-line"></div>
+        <span>Client Signature</span>
+      </div>
+      <div class="quote-doc-accept-rep">
+        <div class="quote-doc-accept-stamp">
+          <img class="quote-doc-accept-logo" src="../assets/branding/bizweb-kh-logo-main-print.png" alt="BizWeb KH" width="84" height="23">
+          <img class="quote-doc-accept-sig" src="../assets/signature/chhean-poli-signature.png" alt="Authorized Signature" width="120" height="42">
+        </div>
+        <div class="sig-line"></div>
+        <span>BizWeb KH Representative</span>
+      </div>
+    </div>` });
 
   return sections;
 }
