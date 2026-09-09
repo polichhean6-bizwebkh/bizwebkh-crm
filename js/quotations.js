@@ -963,7 +963,7 @@ function annualCostBreakdownHtml(s, svc, totals){
         <div class="form-field"><label>Domain Renewal ($)</label><input type="number" id="cq_y2_domain" value="${y2.domain}"></div>
         <div class="form-field"><label>${escapeHtml(hostingLabel)} ($)</label><input type="number" id="cq_y2_hosting" value="${y2.hosting}"></div>
         <div class="form-field"><label>Maintenance & Support ($)</label><input type="number" id="cq_y2_maint" value="${y2.maintenance}"></div>
-        <div class="form-field"><label>Amount Display</label>
+        <div class="form-field"><label>Amount Display ${y2.displayMode==='tbc'?'<span class="field-tbc-badge">TBC</span>':''}</label>
           <select id="cq_y2_display" class="sel">
             <option value="exact" ${y2.displayMode==='exact'?'selected':''}>Exact Amount</option>
             <option value="estimated" ${y2.displayMode==='estimated'?'selected':''}>Estimated Amount</option>
@@ -979,7 +979,7 @@ function annualCostBreakdownHtml(s, svc, totals){
         <div class="form-field"><label>Domain Renewal ($)</label><input type="number" id="cq_y3_domain" value="${y3.domain}"></div>
         <div class="form-field"><label>${escapeHtml(hostingLabel)} ($)</label><input type="number" id="cq_y3_hosting" value="${y3.hosting}"></div>
         <div class="form-field"><label>Maintenance & Support ($)</label><input type="number" id="cq_y3_maint" value="${y3.maintenance}"></div>
-        <div class="form-field"><label>Amount Display</label>
+        <div class="form-field"><label>Amount Display ${y3.displayMode==='tbc'?'<span class="field-tbc-badge">TBC</span>':''}</label>
           <select id="cq_y3_display" class="sel">
             <option value="exact" ${y3.displayMode==='exact'?'selected':''}>Exact Amount</option>
             <option value="estimated" ${y3.displayMode==='estimated'?'selected':''}>Estimated Amount</option>
