@@ -874,19 +874,33 @@ svg{width:18px;height:18px}
    across the full page content width — the Representative block (now
    carrying the stamp logo+signature group) visually shifts to the right
    edge instead of sitting cramped right next to the Client block. */
-.quote-doc-accept{display:flex;justify-content:space-between;gap:40px;margin-top:34px;margin-bottom:10px}
+/* align-items:flex-end bottom-aligns the two columns. Both columns end in
+   an identical "sig-line + label" pair, so bottom-aligning the columns is
+   sufficient to make the sig-lines AND the labels land at the exact same
+   Y position on both sides — the Representative column's taller stamp
+   group (logo+signature) just pushes its own content up from the top,
+   while the Client column's now-empty top area becomes its natural
+   signing space. No fixed spacer height needed; verified empirically via
+   Playwright bounding-rect diffs (see smoketest/signature_block_test.js). */
+.quote-doc-accept{display:flex;justify-content:space-between;align-items:flex-end;gap:40px;margin-top:34px;margin-bottom:10px}
 .quote-doc-accept .sig-line{border-bottom:1px solid var(--muted);height:36px;min-width:170px}
 .quote-doc-accept span{font-size:11px;color:var(--muted)}
 .quote-doc-accept-client{display:flex;flex-direction:column}
 .quote-doc-accept-rep{display:flex;flex-direction:column;align-items:flex-start}
 /* Small logo + signature grouped together like an official stamp/approval
-   block, sitting just above that side's own signature line. */
-.quote-doc-accept-stamp{display:flex;flex-direction:column;align-items:flex-start;gap:4px;margin-bottom:6px}
+   block, sitting just above that side's own signature line. align-items:
+   center so the narrower logo (84px) sits centered over the wider
+   signature image (120px) instead of both left-edge-aligned. Tight 3px
+   gap so the pair reads as one cohesive stamp, not two separate images. */
+.quote-doc-accept-stamp{display:flex;flex-direction:column;align-items:center;gap:3px;margin-bottom:6px}
 /* Same fixed-width/height trick as .quote-doc-logo and .quote-doc-qr-img
    (real <img> tags with explicit width/height attributes in quotations.js)
    — both dimensions pinned here too so neither image can still be mid-load
-   at the very first measureQuoteDoc() pass and throw off pagination. */
-.quote-doc-accept-logo{display:block;width:84px;height:23px}
+   at the very first measureQuoteDoc() pass and throw off pagination.
+   object-fit:contain on both guards against any future width/height edit
+   introducing distortion (current px sizes already match each PNG's
+   native aspect ratio within <1%, so today this is a no-op safety net). */
+.quote-doc-accept-logo{display:block;width:84px;height:23px;object-fit:contain}
 .quote-doc-accept-sig{display:block;width:120px;height:42px;object-fit:contain}
 
 /* Bilingual client-info table (matches the real BizWeb KH quotation layout —
