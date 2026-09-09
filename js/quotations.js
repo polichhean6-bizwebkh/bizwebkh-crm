@@ -931,13 +931,14 @@ function annualCostBreakdownHtml(s, svc, totals){
     ? `<div class="text-muted" style="font-size:11px;margin-top:4px">Existing / client-owned domain — no domain cost charged.</div>` : '';
   const y1HostingBadge = y1.hostingIncluded ? `<span class="field-included-badge">Included</span>` : '';
   const y1MaintBadge = y1.maintenanceMode==='included' ? `<span class="field-included-badge">Included / Free</span>` : '';
+  const y1DomainBadge = y1.domainMode==='included' ? `<span class="field-included-badge">Included</span>` : '';
   return `
     <div class="qc-year-block">
       <div class="qc-year-head"><h4>Year 1</h4><span class="qc-year-total">${totals.evalRes.priceIsTBC?'TBC':money(totals.year1Total)}</span></div>
       <div class="form-grid">
-        <div class="form-field"><label>Website / System Development <span class="field-auto-badge">Auto</span></label>
+        <div class="form-field full"><label>Website / System Development <span class="field-auto-badge">Auto</span></label>
           <input value="${money(totals.year1Development)}" readonly class="field-locked"></div>
-        <div class="form-field"><label>Domain ($)</label><input type="number" id="cq_y1_domain" value="${y1.domain}" ${y1.domainMode!=='separate'?'readonly class="field-locked"':''}></div>
+        <div class="form-field"><label>Domain ($) ${y1DomainBadge}</label><input type="number" id="cq_y1_domain" value="${y1.domain}" ${y1.domainMode!=='separate'?'readonly class="field-locked"':''}></div>
         <div class="form-field"><label>Domain Status</label>
           <select id="cq_y1_domainMode" class="sel">
             <option value="included" ${y1.domainMode==='included'?'selected':''}>Included</option>
@@ -946,13 +947,13 @@ function annualCostBreakdownHtml(s, svc, totals){
           </select>
           ${y1DomainNote}
         </div>
-        <div class="form-field"><label>${escapeHtml(hostingLabel)} ($) ${y1HostingBadge}</label><input type="number" id="cq_y1_hosting" value="${y1.hosting}" ${y1.hostingIncluded?'readonly class="field-locked"':''}></div>
-        <div class="form-field"><label>&nbsp;</label>
-          <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12.5px;padding-top:8px"><input type="checkbox" id="cq_y1_hostingIncluded" ${y1.hostingIncluded?'checked':''}> Included in package price</label>
+        <div class="form-field"><label>${escapeHtml(hostingLabel)} ($) ${y1HostingBadge}</label>
+          <input type="number" id="cq_y1_hosting" value="${y1.hosting}" ${y1.hostingIncluded?'readonly class="field-locked"':''}>
+          <label class="field-check-row"><input type="checkbox" id="cq_y1_hostingIncluded" ${y1.hostingIncluded?'checked':''}> Included in package price</label>
         </div>
-        <div class="form-field"><label>Maintenance & Support ($) ${y1MaintBadge}</label><input type="number" id="cq_y1_maint" value="${y1.maintenanceMode==='included'?0:y1.maintenance}" ${y1.maintenanceMode==='included'?'readonly class="field-locked"':''}></div>
-        <div class="form-field"><label>&nbsp;</label>
-          <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12.5px;padding-top:8px"><input type="checkbox" id="cq_y1_maintIncluded" ${y1.maintenanceMode==='included'?'checked':''}> Included / Free</label>
+        <div class="form-field"><label>Maintenance & Support ($) ${y1MaintBadge}</label>
+          <input type="number" id="cq_y1_maint" value="${y1.maintenanceMode==='included'?0:y1.maintenance}" ${y1.maintenanceMode==='included'?'readonly class="field-locked"':''}>
+          <label class="field-check-row"><input type="checkbox" id="cq_y1_maintIncluded" ${y1.maintenanceMode==='included'?'checked':''}> Included / Free</label>
         </div>
       </div>
     </div>

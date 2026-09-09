@@ -601,6 +601,11 @@ svg{width:18px;height:18px}
   display:inline-block;font-size:9px;font-weight:800;letter-spacing:.3px;text-transform:uppercase;
   color:var(--muted);background:var(--gray-soft);border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:middle;
 }
+/* Inline checkbox attached directly under its own amount field (Annual Cost
+   Breakdown Year 1 Hosting/Maintenance "Included" toggles) — lives inside
+   the SAME .form-field as the input it governs so it never drifts into its
+   own detached grid column. */
+.field-check-row{display:flex;align-items:center;gap:6px;font-weight:400;font-size:12.5px;color:var(--text);margin-top:2px}
 /* Annual Cost Breakdown year blocks (Quotations §D) — a light bordered
    panel per year so Year 1 / Year 2 / Year 3 read as clearly separate
    groups instead of one long flat field list. */
