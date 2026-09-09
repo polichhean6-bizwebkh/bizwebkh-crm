@@ -813,6 +813,13 @@ function qsGeneralTabHtml(editable){
         <p class="text-muted" style="font-size:11.5px;margin:10px 0 0">Currency and bilingual formatting reflect the CRM's current quotation logic — not separately configurable.</p>
       </div>
     </div>
+    <div class="panel" style="max-width:640px;margin-bottom:16px">
+      <div class="panel-head"><h3>Standard Notes</h3></div>
+      <div class="panel-body pad">
+        <p class="text-muted" style="margin-top:0;font-size:12px">The single master note block shown on every quotation's printed document. Create Quotation only shows Sales a collapsed "Standard Notes Applied ✓" line — edit the actual wording here.</p>
+        <textarea id="qs_standardNotes" style="min-height:120px" ${editable?'':'disabled'}>${escapeHtml(qd.standardNotesText)}</textarea>
+      </div>
+    </div>
     ${editable?`<button class="btn btn-primary" id="qsSaveGeneral">Save Changes</button>`:''}
   `;
 }
@@ -879,7 +886,8 @@ function wireQsCurrentSubtabBody(){
       };
       const qd = quotationDefaults();
       const validityDays = Math.max(1, Number(document.getElementById('qs_validityDays').value)||30);
-      DB.upsert('settings', { bankDetails: newBank, quotationDefaults: { ...qd, validityDays } });
+      const standardNotesText = document.getElementById('qs_standardNotes').value.trim() || DEFAULT_STANDARD_NOTES_TEXT;
+      DB.upsert('settings', { bankDetails: newBank, quotationDefaults: { ...qd, validityDays, standardNotesText } });
       QS_DIRTY = false;
       toast('Quotation settings saved.', 'success');
     };

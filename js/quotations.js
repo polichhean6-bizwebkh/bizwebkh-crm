@@ -187,6 +187,162 @@ function defaultMaintenanceState(){
   return { year1Mode:'included', year1Cost:0, year2Cost:0, year3Cost:0, year2DisplayMode:'estimated', year3DisplayMode:'estimated' };
 }
 
+/* ---------------------------------------------------------------------- */
+/* Annual Cost Breakdown — the ONE canonical Year 1 / Year 2 / Year 3      */
+/* pricing model (Quotations restructure spec). Replaces the old scattered */
+/* "Domain & Infrastructure" / "Maintenance & Support" / "Year-by-Year     */
+/* Cost" sections with a single consolidated data shape:                   */
+/*                                                                          */
+/*   annualCost = {                                                        */
+/*     year1: { domain, domainMode:'included'|'separate'|'client_own',     */
+/*              hosting, hostingIncluded, maintenance, maintenanceMode },   */
+/*     year2: { domain, hosting, maintenance, displayMode },                */
+/*     year3: { domain, hosting, maintenance, displayMode },                */
+/*   }                                                                      */
+/*                                                                          */
+/* `displayMode`/`maintenanceMode`('included'|'paid'|'not_included') reuse  */
+/* the exact same mode strings `qcYearAmountDisplay()`/the legacy           */
+/* `maintenance` object already used (spec §27) — nothing new to learn.    */
+/*                                                                          */
+/* PERSISTENCE — no DB schema/migration was added for this (spec §28: no   */
+/* migration/backfill scripts). The canonical `annualCost` object is        */
+/* stored as a hidden entry inside the quotation's existing `importantNotes`*/
+/* jsonb array (already a free-form per-quotation snapshot column) under a  */
+/* reserved key that every render path filters out of the visible notes    */
+/* list — see visibleImportantNotes()/ANNUAL_COST_HIDDEN_NOTE_KEYS. A       */
+/* legacy-mirror `maintenance` object (+ domainCost/domainIncluded/         */
+/* domainRenewalEstimate/year2Total/year3Total) is ALSO still written on    */
+/* every save, kept in sync with annualCost, purely so every other existing */
+/* consumer (buildQuoteSections' Year 2/3 math, maintenanceWordingNotes(),  */
+/* the dashboard/list-table Year 1 Total reads, etc.) keeps working         */
+/* completely unchanged — Sales/Founder only ever SEE and edit one set of   */
+/* fields (the new Annual Cost Breakdown section); the mirror is invisible  */
+/* plumbing, not a second editable source of truth.                        */
+/* ---------------------------------------------------------------------- */
+const ANNUAL_COST_HIDDEN_NOTE_KEYS = new Set(['__annualCost','__showDetailedBreakdown']);
+
+function defaultAnnualCostState(svc){
+  const d = defaultAnnualCostForService(svc);
+  return { year1:{...d.year1}, year2:{...d.year2}, year3:{...d.year3} };
+}
+
+// Deep-ish clone + shape-guard so a stored/legacy-derived object can never
+// crash the form on a missing sub-key (older/partial saves, hand-edited
+// fixtures in tests, etc.).
+function normalizeAnnualCost(ac){
+  const y1 = (ac && ac.year1) || {};
+  const y2 = (ac && ac.year2) || {};
+  const y3 = (ac && ac.year3) || {};
+  return {
+    year1: { domain:Number(y1.domain)||0, domainMode: y1.domainMode||'included',
+             hosting:Number(y1.hosting)||0, hostingIncluded: y1.hostingIncluded!==false,
+             maintenance:Number(y1.maintenance)||0, maintenanceMode: y1.maintenanceMode||'included' },
+    year2: { domain:Number(y2.domain)||0, hosting:Number(y2.hosting)||0, maintenance:Number(y2.maintenance)||0, displayMode: y2.displayMode||'estimated' },
+    year3: { domain:Number(y3.domain)||0, hosting:Number(y3.hosting)||0, maintenance:Number(y3.maintenance)||0, displayMode: y3.displayMode||'estimated' },
+  };
+}
+
+function extractAnnualCost(importantNotes){
+  const note = (importantNotes||[]).find(n=>n.key==='__annualCost');
+  if(!note) return null;
+  try{ const parsed = JSON.parse(note.text); return normalizeAnnualCost(parsed); }catch(e){ return null; }
+}
+function extractShowDetailedBreakdown(importantNotes){
+  const note = (importantNotes||[]).find(n=>n.key==='__showDetailedBreakdown');
+  return !!(note && note.text==='1');
+}
+// The two hidden bookkeeping notes appended at save time (see saveQuotationFromState).
+function annualCostHiddenNotes(annualCost, showDetailedBreakdown){
+  return [
+    { key:'__annualCost', title:'', text: JSON.stringify(annualCost) },
+    { key:'__showDetailedBreakdown', title:'', text: showDetailedBreakdown ? '1' : '0' },
+  ];
+}
+// Every place that renders `importantNotes` to a human (Create form's H.
+// section, the printed document's Important Notes list) must go through
+// this — never iterate importantNotes directly — so the hidden Annual Cost
+// payload is never accidentally printed as a note.
+function visibleImportantNotes(importantNotes){
+  return (importantNotes||[]).filter(n=> !ANNUAL_COST_HIDDEN_NOTE_KEYS.has(n.key));
+}
+
+// READ-TIME-ONLY legacy migration (spec §28): a quotation saved before this
+// feature existed carries none of the hidden notes above — this derives an
+// equivalent annualCost shape from its old flat fields
+// (domainCost/domainIncluded/domainRenewalEstimate/year2Total/year3Total/
+// maintenance), following the exact same precedent as the pre-existing
+// `maintenance: q.maintenance || {defaults}` fallback. NEVER writes back to
+// the record — purely a display/edit-form convenience so an old quotation
+// can be opened in the new Annual Cost Breakdown editor without silently
+// losing or renumbering anything it already had.
+function annualCostFromLegacy(q){
+  const maint = q.maintenance || { year1Mode:'not_included', year1Cost:0, year2Cost:0, year3Cost:0, year2DisplayMode:'estimated', year3DisplayMode:'estimated' };
+  return normalizeAnnualCost({
+    year1: {
+      domain: Number(q.domainCost)||0,
+      domainMode: q.domainCost==null ? 'included' : (q.domainIncluded===false ? 'separate' : 'included'),
+      hosting: 0, hostingIncluded: true, // legacy quotations never separated hosting out of the base package price
+      maintenance: Number(maint.year1Cost)||0, maintenanceMode: maint.year1Mode || 'not_included',
+    },
+    // Legacy year2Total/year3Total were already a single combined
+    // domain+hosting renewal figure — kept whole in `hosting` here (domain
+    // left at 0) so re-deriving never double-counts or shifts what a
+    // previously-printed document already showed.
+    year2: { domain:0, hosting: Number(q.year2Total)||0, maintenance: Number(maint.year2Cost)||0, displayMode: maint.year2DisplayMode||'estimated' },
+    year3: { domain:0, hosting: Number(q.year3Total)||0, maintenance: Number(maint.year3Cost)||0, displayMode: maint.year3DisplayMode||'estimated' },
+  });
+}
+// The single entry point the Edit-modal loader uses: prefer the new stored
+// model, fall back to deriving one from legacy fields. Never used by
+// buildQuoteSections (which needs to tell the two cases apart — see its own
+// `extractAnnualCost(q.importantNotes)` call — so an already-printed legacy
+// document's numbers never shift).
+function resolvedAnnualCost(q){
+  return extractAnnualCost(q.importantNotes) || annualCostFromLegacy(q);
+}
+
+// Year 1 TOTAL formula (spec §10): Development + scope add-ons + discount/
+// adjustment are already exactly what evaluateQuotation()'s `finalPrice`
+// computes over the package's base item + scope items — this only adds the
+// three NEW Year-1 chargeable components on top. Domain: charged only when
+// "Charged Separately" (Included/Client-Own both mean $0 added — the cost,
+// if any, is either already inside the base package price or genuinely
+// zero for an existing/client-owned domain). Hosting: charged only when NOT
+// bundled/included. Maintenance: charged only when NOT Included/Free.
+function qcAnnualYear1Charge(y1){
+  const domain = y1.domainMode==='separate' ? (Number(y1.domain)||0) : 0;
+  const hosting = y1.hostingIncluded ? 0 : (Number(y1.hosting)||0);
+  const maintenance = y1.maintenanceMode==='paid' ? (Number(y1.maintenance)||0) : 0;
+  return domain + hosting + maintenance;
+}
+// Year 2/3 TOTAL formula (spec §10): Domain + Hosting/Backend/Database +
+// Maintenance — Development is NEVER included again after Year 1.
+function qcAnnualYearTotal(yr){
+  return (Number(yr.domain)||0) + (Number(yr.hosting)||0) + (Number(yr.maintenance)||0);
+}
+
+// The ONE place that turns live Create/Edit form state into every derived
+// number the rest of the form/preview/save path needs — called by
+// renderCreateQuotationModal, refreshQcPreview AND saveQuotationFromState
+// so all three can never drift out of sync with each other (spec §29: "no
+// stale totals").
+function qcComputeQuoteTotals(s){
+  const svc = serviceByProjectType(s.packageKey);
+  const activeItems = s.items.filter(i=>i.included!==false).map(i=>({name:i.name, price:i.price, founderReviewRequired:i.founderReviewRequired}));
+  const evalRes = evaluateQuotation({
+    items: activeItems, basePackage: svc, discountPct: Number(s.discountPct)||0,
+    manualAdjustment: s.adjustment ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
+    discountLimitPct: effectiveDiscountLimit(svc),
+  });
+  const annualCost = normalizeAnnualCost(s.annualCost);
+  const year1Charge = qcAnnualYear1Charge(annualCost.year1);
+  const year1Total = evalRes.priceIsTBC ? null : Math.round((evalRes.finalPrice + year1Charge)*100)/100;
+  const year2Total = qcAnnualYearTotal(annualCost.year2);
+  const year3Total = qcAnnualYearTotal(annualCost.year3);
+  const schedule = computePaymentSchedule(evalRes.priceIsTBC?0:year1Total, s.paymentPreset, s.customStages);
+  return { svc, evalRes, annualCost, year1Development: svc?svc.basePrice:0, year1Charge, year1Total, year2Total, year3Total, schedule };
+}
+
 // The Year-1 PAYMENT SCHEDULE total, additive-only: the stored/displayed
 // scope total (year1ScopeTotal) is never mutated by maintenance — this is
 // computed only at the specific points that need a maintenance-inclusive
@@ -258,7 +414,13 @@ function openCreateQuotationModal(prefill={}){
     assignedSales: CURRENT_USER.name,
     packageKey:'', discountPct:0, adjustment:0, adjustmentReason:'',
     items: [], exclusions: [], notesOverride: null, clientNote:'',
-    domainName:'', domainCost: DEFAULT_DOMAIN_COST_ESTIMATE, domainIncluded:true, domainRenewalEstimate: DEFAULT_DOMAIN_COST_ESTIMATE,
+    domainName:'',
+    // Annual Cost Breakdown (spec §D) — the ONE editable source of Year 1/2/3
+    // pricing; `maintenance` below is kept only as an internal legacy mirror
+    // (see the big comment above defaultAnnualCostState) never shown as its
+    // own form section any more.
+    annualCost: defaultAnnualCostState(null),
+    showDetailedBreakdown: false,
     maintenance: defaultMaintenanceState(),
     paymentPreset: '30/70', customStages:null,
     quotationDate: todayLocalISO(), validUntil: daysFromNow(quotationDefaults().validityDays),
@@ -289,6 +451,12 @@ function selectPackageOnQC(projectType){
   const svc = serviceByProjectType(projectType);
   QC_STATE.packageKey = projectType;
   QC_STATE.quotationType = svc ? quotationTypeForProjectType(svc.projectType) : 'website';
+  // Package selection also drives the Annual Cost Breakdown's default
+  // numbers (spec §16: "Package selection controls ... default yearly
+  // costs") — same reset-on-package-change convention already used for
+  // items/exclusions below, so switching packages never leaves stale
+  // numbers from a different package's pricing shape behind.
+  QC_STATE.annualCost = defaultAnnualCostState(svc);
   if(!svc){ QC_STATE.items = []; QC_STATE.exclusions = []; return; }
   const baseItem = { id: fnId(), module: svc.category, name: `${svc.shortName || svc.name} (Base Package${svc.priceIsStartingFrom?' — starting from':''})`,
     price: svc.basePrice, founderReviewRequired: svc.founderReviewRequired, included: true };
@@ -321,10 +489,9 @@ function renderCreateQuotationModal(){
     manualAdjustment: s.adjustment ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
     discountLimitPct: effectiveDiscountLimit(svc),
   });
-  const year1 = evalRes.finalPrice;
-  const paymentTotal = evalRes.priceIsTBC ? 0 : qcYear1PaymentTotal(s.maintenance, year1);
-  const schedule = computePaymentSchedule(paymentTotal, s.paymentPreset, s.customStages);
-  const notesList = s.notesOverride || (s.packageKey ? (quotationDefaults().notes[quotationTypeForProjectType(s.packageKey)]||[]) : []);
+  const totals = qcComputeQuoteTotals(s);
+  const schedule = totals.schedule;
+  const qd = quotationDefaults();
 
   const html = `
     <div class="modal-head">
@@ -399,67 +566,12 @@ function renderCreateQuotationModal(){
           <ul style="margin:-8px 0 16px;padding-left:18px;font-size:12.5px;color:var(--muted)">${visibleExclusions(s.items.filter(i=>i.included!==false), s.exclusions).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul>
 
           <div class="divider"></div>
-          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">D. Domain & Infrastructure</div>
-          <div class="form-grid">
-            <div class="form-field"><label>Domain Name</label><input id="cq_domainName" value="${escapeHtml(s.domainName)}" placeholder="e.g. example.com"></div>
-            <div class="form-field"><label>Domain Cost ($)</label><input type="number" id="cq_domainCost" value="${s.domainCost}"></div>
-            <div class="form-field"><label>Domain Included in Year 1?</label>
-              <select id="cq_domainIncluded" class="sel"><option value="yes" ${s.domainIncluded?'selected':''}>Yes</option><option value="no" ${!s.domainIncluded?'selected':''}>No</option></select>
-            </div>
-            <div class="form-field"><label>Domain Renewal Estimate ($/yr)</label><input type="number" id="cq_domainRenewal" value="${s.domainRenewalEstimate}"></div>
-          </div>
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">D. Annual Cost Breakdown</div>
+          <div class="form-field" style="margin-bottom:10px"><label>Domain Name</label><input id="cq_domainName" value="${escapeHtml(s.domainName)}" placeholder="e.g. example.com"></div>
+          ${annualCostBreakdownHtml(s, totals.svc, totals)}
 
           <div class="divider"></div>
-          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">E. Maintenance & Support</div>
-          <div class="form-grid">
-            <div class="form-field"><label>Year 1 Maintenance</label>
-              <select id="cq_maintY1Mode" class="sel" ${isFounder()?'':'disabled'}>
-                <option value="included" ${s.maintenance.year1Mode==='included'?'selected':''}>Included / Free</option>
-                <option value="paid" ${s.maintenance.year1Mode==='paid'?'selected':''}>Paid</option>
-                <option value="not_included" ${s.maintenance.year1Mode==='not_included'?'selected':''}>Not Included</option>
-              </select>
-            </div>
-            <div class="form-field"><label>Maintenance Cost — Year 1 ($)</label><input type="number" id="cq_maintY1Cost" value="${s.maintenance.year1Cost}" ${(isFounder() && s.maintenance.year1Mode==='paid')?'':'readonly class="field-locked"'}></div>
-            <div class="form-field"><label>Year 2 Maintenance ($/yr)</label><input type="number" id="cq_maintY2Cost" value="${s.maintenance.year2Cost}" ${isFounder()?'':'readonly class="field-locked"'}></div>
-            <div class="form-field"><label>Year 3 Maintenance ($/yr)</label><input type="number" id="cq_maintY3Cost" value="${s.maintenance.year3Cost}" ${isFounder()?'':'readonly class="field-locked"'}></div>
-            <div class="form-field"><label>Year 2 Amount Display</label>
-              <select id="cq_maintY2Display" class="sel" ${isFounder()?'':'disabled'}>
-                <option value="exact" ${s.maintenance.year2DisplayMode==='exact'?'selected':''}>Exact Amount</option>
-                <option value="estimated" ${s.maintenance.year2DisplayMode==='estimated'?'selected':''}>Estimated Amount</option>
-                <option value="tbc" ${s.maintenance.year2DisplayMode==='tbc'?'selected':''}>To be confirmed</option>
-              </select>
-            </div>
-            <div class="form-field"><label>Year 3 Amount Display</label>
-              <select id="cq_maintY3Display" class="sel" ${isFounder()?'':'disabled'}>
-                <option value="exact" ${s.maintenance.year3DisplayMode==='exact'?'selected':''}>Exact Amount</option>
-                <option value="estimated" ${s.maintenance.year3DisplayMode==='estimated'?'selected':''}>Estimated Amount</option>
-                <option value="tbc" ${s.maintenance.year3DisplayMode==='tbc'?'selected':''}>To be confirmed</option>
-              </select>
-            </div>
-          </div>
-          <p class="text-muted" style="font-size:11.5px;margin:6px 0 0">Standard maintenance covers minor bug fixes, basic CMS/admin guidance, and small support within the existing scope. It does not include new features, major redesign, new integrations, or major workflow changes.</p>
-
-          <div class="divider"></div>
-          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">F. Year-by-Year Cost</div>
-          <div class="form-grid">
-            <div class="form-field"><label>Year 1 Total (auto${s.maintenance.year1Mode==='paid'?' incl. maintenance':''}) <span class="field-auto-badge">Auto</span></label><input value="${evalRes.priceIsTBC?'TBC':money(qcYear1PaymentTotal(s.maintenance, year1))}" readonly></div>
-            <div class="form-field"><label>Year 2 Renewal ($/yr)</label><input type="number" id="cq_year2" value="${s.year2Total!=null?s.year2Total:(svc?svc.year2Price:0)}" ${isFounder()?'':'readonly class="field-locked"'}></div>
-            <div class="form-field"><label>Year 3 Renewal ($/yr)</label><input type="number" id="cq_year3" value="${s.year3Total!=null?s.year3Total:(svc?svc.year3Price:0)}" ${isFounder()?'':'readonly class="field-locked"'}></div>
-          </div>
-
-          <div class="divider"></div>
-          ${isFounder() ? `
-          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Pricing Adjustments (Founder/Admin only)</div>
-          <div class="form-grid">
-            <div class="form-field"><label>Discount %</label><input type="number" id="cq_discount" value="${s.discountPct}" min="0" max="100"></div>
-            <div class="form-field"><label>Manual Price Adjustment ($)</label><input type="number" id="cq_adjust" value="${s.adjustment}"></div>
-            <div class="form-field full"><label>Reason for Price Adjustment ${s.adjustment?'<span class="required"></span>':'(required if adjusting)'}</label><input id="cq_adjustReason" value="${escapeHtml(s.adjustmentReason)}" placeholder='e.g. "Client already has hosting."'></div>
-          </div>
-          <div class="divider"></div>` : `
-          <div class="form-field" style="margin-bottom:12px"><label>Discount %</label><input value="0" readonly class="field-locked"></div>
-          <div class="divider"></div>`}
-
-          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">G. Payment Schedule</div>
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">E. Payment Schedule</div>
           <div class="form-field" style="margin-bottom:12px">
             <label>Preset</label>
             <select id="cq_paymentPreset" class="sel">
@@ -470,15 +582,27 @@ function renderCreateQuotationModal(){
             <table class="data-table qc-mini-table"><thead><tr><th>Stage</th><th>%</th><th>Amount</th></tr></thead>
             <tbody>${schedule.map(st=>`<tr><td>${escapeHtml(st.label)}</td><td>${st.pct}%</td><td>${money(st.amount)}</td></tr>`).join('')}</tbody></table>
           </div>
-          <p class="text-muted" style="font-size:11.5px;margin:6px 0 16px">Stages always sum exactly to the Year 1 Total (${evalRes.priceIsTBC?'TBC':money(qcYear1PaymentTotal(s.maintenance, year1))}${s.maintenance.year1Mode==='paid'?', including Year 1 maintenance':''}).</p>
+          <p class="text-muted" style="font-size:11.5px;margin:6px 0 16px">Stages always sum exactly to the Year 1 Total (${totals.evalRes.priceIsTBC?'TBC':money(totals.year1Total)}) and auto-update whenever any Year 1 cost above changes.</p>
 
           <div class="divider"></div>
-          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">H. Important Notes</div>
-          ${notesList.map(n=>`<div class="mini-row"><div class="mini-main"><div class="mini-title">${escapeHtml(n.title)}</div><div class="mini-sub">${escapeHtml(n.text)}</div></div></div>`).join('')}
-          ${maintenanceWordingNotes(s.maintenance).map(n=>`<div class="mini-row"><div class="mini-main"><div class="mini-title">${escapeHtml(n.title)}</div><div class="mini-sub">${escapeHtml(n.text)}</div></div></div>`).join('')}
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">F. Notes</div>
+          <div class="mini-row"><div class="mini-main"><div class="mini-title">Standard Notes Applied ✓</div><div class="mini-sub">${(s.packageKey?(quotationDefaults().notes[quotationTypeForProjectType(s.packageKey)]||[]).length:0)} standard note(s) for this quotation type will print automatically — managed in Settings → Quotations.</div></div></div>
           <div class="form-field" style="margin:10px 0 16px"><label>Client-Specific Note (optional)</label><textarea id="cq_clientNote" placeholder="Anything specific to this client — never overrides the standard notes above.">${escapeHtml(s.clientNote)}</textarea></div>
 
-          <div id="cq_authorityBanner">${authorityBannerHtml(evalRes)}</div>
+          <div class="divider"></div>
+          <div class="qc-collapsible-head ${s._showAdjustments?'open':''}" id="cq_toggleAdjustments">
+            <span class="car">▸</span> Founder/Admin Pricing Adjustment
+          </div>
+          ${isFounder() ? `
+          <div id="cq_adjustmentsBody" ${s._showAdjustments?'':'hidden'} style="margin-top:10px">
+            <div class="form-grid">
+              <div class="form-field"><label>Discount %</label><input type="number" id="cq_discount" value="${s.discountPct}" min="0" max="100"></div>
+              <div class="form-field"><label>Manual Price Adjustment ($)</label><input type="number" id="cq_adjust" value="${s.adjustment}"></div>
+              <div class="form-field full"><label>Reason for Price Adjustment ${s.adjustment?'<span class="required"></span>':'(required if adjusting)'}</label><input id="cq_adjustReason" value="${escapeHtml(s.adjustmentReason)}" placeholder='e.g. "Client already has hosting."'></div>
+            </div>
+          </div>` : `<div id="cq_adjustmentsBody" ${s._showAdjustments?'':'hidden'} style="margin-top:10px"><input value="Discount 0% — not permitted for your role" readonly class="field-locked"></div>`}
+
+          <div id="cq_authorityBanner">${authorityBannerHtml({...totals.evalRes, finalPrice: totals.year1Total})}</div>
         </div>
 
         <div class="qc-preview-col" ${QC_TAB!=='preview'?'data-hide-narrow="1"':''}>
@@ -568,30 +692,38 @@ function renderCreateQuotationModal(){
     overlay.querySelector('#cq_demoLink').oninput = e=>{ s.demoLink = e.target.value; refreshQcPreview(overlay); };
 
     overlay.querySelector('#cq_domainName').oninput = e=>{ s.domainName = e.target.value; refreshQcPreview(overlay); };
-    overlay.querySelector('#cq_domainCost').oninput = e=>{ s.domainCost = e.target.value; refreshQcPreview(overlay); };
-    overlay.querySelector('#cq_domainIncluded').onchange = e=>{ s.domainIncluded = e.target.value==='yes'; refreshQcPreview(overlay); };
-    overlay.querySelector('#cq_domainRenewal').oninput = e=>{ s.domainRenewalEstimate = e.target.value; refreshQcPreview(overlay); };
 
-    // Maintenance fields (spec §1) — all always rendered (never conditionally
-    // hidden) and always routed through refreshQcPreview (never a full
-    // remount), so no maintenance-mode change ever disturbs left-panel
-    // scroll position, preview zoom, or any other unrelated form state
-    // (spec §12/§13). The one exception is Year 1 Mode itself: switching it
-    // enables/disables the Year 1 Cost input, which does need a remount to
-    // reflect the new disabled/enabled state — still scoped to this single
-    // section, not a parent-form reset.
-    const mY1Mode = overlay.querySelector('#cq_maintY1Mode');
-    if(mY1Mode) mY1Mode.onchange = e=>{ s.maintenance.year1Mode = e.target.value; if(e.target.value!=='paid') s.maintenance.year1Cost = 0; renderCreateQuotationModal(); };
-    const mY1Cost = overlay.querySelector('#cq_maintY1Cost');
-    if(mY1Cost) mY1Cost.oninput = e=>{ s.maintenance.year1Cost = e.target.value; refreshQcPreview(overlay); };
-    const mY2Cost = overlay.querySelector('#cq_maintY2Cost');
-    if(mY2Cost) mY2Cost.oninput = e=>{ s.maintenance.year2Cost = e.target.value; refreshQcPreview(overlay); };
-    const mY3Cost = overlay.querySelector('#cq_maintY3Cost');
-    if(mY3Cost) mY3Cost.oninput = e=>{ s.maintenance.year3Cost = e.target.value; refreshQcPreview(overlay); };
-    const mY2Disp = overlay.querySelector('#cq_maintY2Display');
-    if(mY2Disp) mY2Disp.onchange = e=>{ s.maintenance.year2DisplayMode = e.target.value; refreshQcPreview(overlay); };
-    const mY3Disp = overlay.querySelector('#cq_maintY3Display');
-    if(mY3Disp) mY3Disp.onchange = e=>{ s.maintenance.year3DisplayMode = e.target.value; refreshQcPreview(overlay); };
+    // Annual Cost Breakdown wiring (spec §D) — every Year 1/2/3 field routes
+    // through refreshQcPreview (never a full remount) so editing costs never
+    // disturbs left-panel scroll position or preview zoom (spec §12/§13).
+    // The only fields that need a remount are the ones that change what
+    // OTHER fields on screen look like (a mode toggle enabling/disabling a
+    // sibling input, or the readonly/locked state of the domain amount).
+    const ac = normalizeAnnualCost(s.annualCost);
+    s.annualCost = ac;
+    const y1Domain = overlay.querySelector('#cq_y1_domain'); if(y1Domain) y1Domain.oninput = e=>{ ac.year1.domain = e.target.value; refreshQcPreview(overlay); };
+    const y1DomainMode = overlay.querySelector('#cq_y1_domainMode'); if(y1DomainMode) y1DomainMode.onchange = e=>{ ac.year1.domainMode = e.target.value; renderCreateQuotationModal(); };
+    const y1Hosting = overlay.querySelector('#cq_y1_hosting'); if(y1Hosting) y1Hosting.oninput = e=>{ ac.year1.hosting = e.target.value; refreshQcPreview(overlay); };
+    const y1HostingInc = overlay.querySelector('#cq_y1_hostingIncluded'); if(y1HostingInc) y1HostingInc.onchange = e=>{ ac.year1.hostingIncluded = e.target.checked; renderCreateQuotationModal(); };
+    const y1Maint = overlay.querySelector('#cq_y1_maint'); if(y1Maint) y1Maint.oninput = e=>{ ac.year1.maintenance = e.target.value; refreshQcPreview(overlay); };
+    const y1MaintInc = overlay.querySelector('#cq_y1_maintIncluded'); if(y1MaintInc) y1MaintInc.onchange = e=>{ ac.year1.maintenanceMode = e.target.checked?'included':'paid'; renderCreateQuotationModal(); };
+    const y2Domain = overlay.querySelector('#cq_y2_domain'); if(y2Domain) y2Domain.oninput = e=>{ ac.year2.domain = e.target.value; refreshQcPreview(overlay); };
+    const y2Hosting = overlay.querySelector('#cq_y2_hosting'); if(y2Hosting) y2Hosting.oninput = e=>{ ac.year2.hosting = e.target.value; refreshQcPreview(overlay); };
+    const y2Maint = overlay.querySelector('#cq_y2_maint'); if(y2Maint) y2Maint.oninput = e=>{ ac.year2.maintenance = e.target.value; refreshQcPreview(overlay); };
+    const y2Disp = overlay.querySelector('#cq_y2_display'); if(y2Disp) y2Disp.onchange = e=>{ ac.year2.displayMode = e.target.value; refreshQcPreview(overlay); };
+    const y3Domain = overlay.querySelector('#cq_y3_domain'); if(y3Domain) y3Domain.oninput = e=>{ ac.year3.domain = e.target.value; refreshQcPreview(overlay); };
+    const y3Hosting = overlay.querySelector('#cq_y3_hosting'); if(y3Hosting) y3Hosting.oninput = e=>{ ac.year3.hosting = e.target.value; refreshQcPreview(overlay); };
+    const y3Maint = overlay.querySelector('#cq_y3_maint'); if(y3Maint) y3Maint.oninput = e=>{ ac.year3.maintenance = e.target.value; refreshQcPreview(overlay); };
+    const y3Disp = overlay.querySelector('#cq_y3_display'); if(y3Disp) y3Disp.onchange = e=>{ ac.year3.displayMode = e.target.value; refreshQcPreview(overlay); };
+    const showDetailed = overlay.querySelector('#cq_showDetailed'); if(showDetailed) showDetailed.onchange = e=>{ s.showDetailedBreakdown = e.target.checked; refreshQcPreview(overlay); };
+
+    const toggleAdj = overlay.querySelector('#cq_toggleAdjustments');
+    if(toggleAdj) toggleAdj.onclick = ()=>{
+      s._showAdjustments = !s._showAdjustments;
+      toggleAdj.classList.toggle('open', s._showAdjustments);
+      const body = overlay.querySelector('#cq_adjustmentsBody');
+      if(body) body.hidden = !s._showAdjustments;
+    };
 
     overlay.querySelector('#cq_addFn').onclick = ()=> openAddQuotationFunctionModal((fnDef)=>{
       s.items.push({ id: fnId(), module:'Add-on', name: fnDef.name, price: fnDef.defaultPrice, founderReviewRequired: fnDef.founderReviewRequired, included:true });
@@ -605,8 +737,6 @@ function renderCreateQuotationModal(){
     if(adjustInput) adjustInput.oninput = e=>{ s.adjustment = e.target.value; renderCreateQuotationModal(); };
     const adjustReason = overlay.querySelector('#cq_adjustReason');
     if(adjustReason) adjustReason.oninput = e=>{ s.adjustmentReason = e.target.value; };
-    const y2 = overlay.querySelector('#cq_year2'); if(y2) y2.oninput = e=>{ s.year2Total = e.target.value; refreshQcPreview(overlay); };
-    const y3 = overlay.querySelector('#cq_year3'); if(y3) y3.oninput = e=>{ s.year3Total = e.target.value; refreshQcPreview(overlay); };
 
     overlay.querySelector('#cq_paymentPreset').onchange = e=>{ s.paymentPreset = e.target.value; renderCreateQuotationModal(); };
     overlay.querySelector('#cq_clientNote').oninput = e=>{ s.clientNote = e.target.value; refreshQcPreview(overlay); };
@@ -617,17 +747,19 @@ function renderCreateQuotationModal(){
 
 function refreshQcPreview(overlay){
   const s = QC_STATE;
-  const svc = serviceByProjectType(s.packageKey);
-  const activeItems = s.items.filter(i=>i.included!==false).map(i=>({name:i.name, price:i.price, founderReviewRequired:i.founderReviewRequired}));
-  const evalRes = evaluateQuotation({
-    items: activeItems, basePackage: svc, discountPct: Number(s.discountPct)||0,
-    manualAdjustment: s.adjustment ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
-    discountLimitPct: effectiveDiscountLimit(svc),
-  });
-  const schedule = computePaymentSchedule(evalRes.priceIsTBC?0:qcYear1PaymentTotal(s.maintenance, evalRes.finalPrice), s.paymentPreset, s.customStages);
-  overlay.querySelector('#cq_authorityBanner').innerHTML = authorityBannerHtml(evalRes);
+  const totals = qcComputeQuoteTotals(s);
+  overlay.querySelector('#cq_authorityBanner').innerHTML = authorityBannerHtml({...totals.evalRes, finalPrice: totals.year1Total});
+  // Keep the three per-year mini totals in the Annual Cost Breakdown panel
+  // itself live too (spec §29: "no stale totals") — every other field in
+  // that section already routes through this same function.
+  const y1TotalEl = overlay.querySelector('.qc-year-block:nth-of-type(1) .qc-year-total');
+  if(y1TotalEl) y1TotalEl.textContent = totals.evalRes.priceIsTBC ? 'TBC' : money(totals.year1Total);
+  const y2TotalEl = overlay.querySelector('.qc-year-block:nth-of-type(2) .qc-year-total');
+  if(y2TotalEl) y2TotalEl.textContent = qcYearAmountDisplay(totals.year2Total, totals.annualCost.year2.displayMode);
+  const y3TotalEl = overlay.querySelector('.qc-year-block:nth-of-type(3) .qc-year-total');
+  if(y3TotalEl) y3TotalEl.textContent = qcYearAmountDisplay(totals.year3Total, totals.annualCost.year3.displayMode);
   const preview = overlay.querySelector('#cq_livePreview');
-  if(preview) paintQuotePreview(preview, qcStateToPreviewQuotation(s, evalRes, schedule), ()=>qcApplyZoom(overlay));
+  if(preview) paintQuotePreview(preview, qcStateToPreviewQuotation(s, totals.evalRes, totals.schedule), ()=>qcApplyZoom(overlay));
   else qcApplyZoom(overlay);
 }
 
@@ -785,6 +917,82 @@ function wireQuotationItemsEditor(overlay, s){
 /* Save                                                                    */
 /* ---------------------------------------------------------------------- */
 
+// The consolidated "D. Annual Cost Breakdown" section — replaces the old
+// "Domain & Infrastructure" / "Maintenance & Support" / "Year-by-Year Cost"
+// sections with ONE Year 1 / Year 2 / Year 3 block each (spec §2). Every
+// dollar figure here has exactly one home — no duplicate Domain Cost,
+// Domain Renewal Estimate, or Maintenance Cost fields anywhere else on the
+// form (spec §9).
+function annualCostBreakdownHtml(s, svc, totals){
+  const hostingLabel = hostingLabelForService(svc);
+  const ac = totals.annualCost;
+  const y1 = ac.year1, y2 = ac.year2, y3 = ac.year3;
+  const y1DomainNote = y1.domainMode==='client_own'
+    ? `<div class="text-muted" style="font-size:11px;margin-top:4px">Existing / client-owned domain — no domain cost charged.</div>` : '';
+  const y1HostingBadge = y1.hostingIncluded ? `<span class="field-included-badge">Included</span>` : '';
+  const y1MaintBadge = y1.maintenanceMode==='included' ? `<span class="field-included-badge">Included / Free</span>` : '';
+  return `
+    <div class="qc-year-block">
+      <div class="qc-year-head"><h4>Year 1</h4><span class="qc-year-total">${totals.evalRes.priceIsTBC?'TBC':money(totals.year1Total)}</span></div>
+      <div class="form-grid">
+        <div class="form-field"><label>Website / System Development <span class="field-auto-badge">Auto</span></label>
+          <input value="${money(totals.year1Development)}" readonly class="field-locked"></div>
+        <div class="form-field"><label>Domain ($)</label><input type="number" id="cq_y1_domain" value="${y1.domain}" ${y1.domainMode!=='separate'?'readonly class="field-locked"':''}></div>
+        <div class="form-field"><label>Domain Status</label>
+          <select id="cq_y1_domainMode" class="sel">
+            <option value="included" ${y1.domainMode==='included'?'selected':''}>Included</option>
+            <option value="separate" ${y1.domainMode==='separate'?'selected':''}>Charged Separately</option>
+            <option value="client_own" ${y1.domainMode==='client_own'?'selected':''}>Client Own Domain</option>
+          </select>
+          ${y1DomainNote}
+        </div>
+        <div class="form-field"><label>${escapeHtml(hostingLabel)} ($) ${y1HostingBadge}</label><input type="number" id="cq_y1_hosting" value="${y1.hosting}" ${y1.hostingIncluded?'readonly class="field-locked"':''}></div>
+        <div class="form-field"><label>&nbsp;</label>
+          <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12.5px;padding-top:8px"><input type="checkbox" id="cq_y1_hostingIncluded" ${y1.hostingIncluded?'checked':''}> Included in package price</label>
+        </div>
+        <div class="form-field"><label>Maintenance & Support ($) ${y1MaintBadge}</label><input type="number" id="cq_y1_maint" value="${y1.maintenanceMode==='included'?0:y1.maintenance}" ${y1.maintenanceMode==='included'?'readonly class="field-locked"':''}></div>
+        <div class="form-field"><label>&nbsp;</label>
+          <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12.5px;padding-top:8px"><input type="checkbox" id="cq_y1_maintIncluded" ${y1.maintenanceMode==='included'?'checked':''}> Included / Free</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="qc-year-block">
+      <div class="qc-year-head"><h4>Year 2</h4><span class="qc-year-total">${qcYearAmountDisplay(totals.year2Total, y2.displayMode)}</span></div>
+      <div class="form-grid">
+        <div class="form-field"><label>Domain Renewal ($)</label><input type="number" id="cq_y2_domain" value="${y2.domain}"></div>
+        <div class="form-field"><label>${escapeHtml(hostingLabel)} ($)</label><input type="number" id="cq_y2_hosting" value="${y2.hosting}"></div>
+        <div class="form-field"><label>Maintenance & Support ($)</label><input type="number" id="cq_y2_maint" value="${y2.maintenance}"></div>
+        <div class="form-field"><label>Amount Display</label>
+          <select id="cq_y2_display" class="sel">
+            <option value="exact" ${y2.displayMode==='exact'?'selected':''}>Exact Amount</option>
+            <option value="estimated" ${y2.displayMode==='estimated'?'selected':''}>Estimated Amount</option>
+            <option value="tbc" ${y2.displayMode==='tbc'?'selected':''}>To be confirmed</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="qc-year-block" style="margin-bottom:6px">
+      <div class="qc-year-head"><h4>Year 3</h4><span class="qc-year-total">${qcYearAmountDisplay(totals.year3Total, y3.displayMode)}</span></div>
+      <div class="form-grid">
+        <div class="form-field"><label>Domain Renewal ($)</label><input type="number" id="cq_y3_domain" value="${y3.domain}"></div>
+        <div class="form-field"><label>${escapeHtml(hostingLabel)} ($)</label><input type="number" id="cq_y3_hosting" value="${y3.hosting}"></div>
+        <div class="form-field"><label>Maintenance & Support ($)</label><input type="number" id="cq_y3_maint" value="${y3.maintenance}"></div>
+        <div class="form-field"><label>Amount Display</label>
+          <select id="cq_y3_display" class="sel">
+            <option value="exact" ${y3.displayMode==='exact'?'selected':''}>Exact Amount</option>
+            <option value="estimated" ${y3.displayMode==='estimated'?'selected':''}>Estimated Amount</option>
+            <option value="tbc" ${y3.displayMode==='tbc'?'selected':''}>To be confirmed</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <p class="text-muted" style="font-size:11.5px;margin:0 0 6px">Development is a one-time, Year-1-only cost. Year 2 and Year 3 are renewal/support costs only — Development is never charged again.</p>
+    ${isFounder() ? `<label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12.5px;margin:8px 0 16px"><input type="checkbox" id="cq_showDetailed" ${s.showDetailedBreakdown?'checked':''}> Show Detailed Annual Breakdown on the client-facing document</label>` : ''}
+  `;
+}
+
 function saveQuotationFromState(s){
   // Business Name is OPTIONAL (spec §1) — Client Name alone is enough to
   // create and save a quotation. Business Name still saves/prints if the
@@ -804,9 +1012,28 @@ function saveQuotationFromState(s){
     discountLimitPct: effectiveDiscountLimit(svc),
   });
 
-  const year1Total = evalRes.priceIsTBC ? null : evalRes.finalPrice;
-  const schedule = computePaymentSchedule(evalRes.priceIsTBC?0:qcYear1PaymentTotal(s.maintenance, year1Total), s.paymentPreset, s.customStages);
+  // Annual Cost Breakdown totals (spec §10) — Year 1 Total = development +
+  // scope add-ons − discount + adjustment (already exactly what `evalRes`
+  // above computes) PLUS the chargeable Year 1 domain/hosting/maintenance
+  // amounts. Year 2/3 = domain + hosting/backend/database + maintenance,
+  // never Development again.
+  const annualCost = normalizeAnnualCost(s.annualCost);
+  const year1Charge = qcAnnualYear1Charge(annualCost.year1);
+  const year1Total = evalRes.priceIsTBC ? null : Math.round((evalRes.finalPrice + year1Charge)*100)/100;
+  const year2Total = qcAnnualYearTotal(annualCost.year2);
+  const year3Total = qcAnnualYearTotal(annualCost.year3);
+  const schedule = computePaymentSchedule(evalRes.priceIsTBC?0:year1Total, s.paymentPreset, s.customStages);
   const code = s.projectCode || s.leadId || ('DIRECT'+Date.now().toString().slice(-4));
+  // Legacy-mirror maintenance object — kept in sync with annualCost so every
+  // existing consumer (buildQuoteSections' Year 2/3 math for records not
+  // using the new model, maintenanceWordingNotes(), etc.) keeps working
+  // unchanged. Sales/Founder never edit this directly any more — it's
+  // derived, not a second source of truth.
+  const legacyMaintenance = {
+    year1Mode: annualCost.year1.maintenanceMode, year1Cost: annualCost.year1.maintenance,
+    year2Cost: annualCost.year2.maintenance, year3Cost: annualCost.year3.maintenance,
+    year2DisplayMode: annualCost.year2.displayMode, year3DisplayMode: annualCost.year3.displayMode,
+  };
 
   let existing = s.editingId ? DB.find('quotations', s.editingId) : null;
   let isNewRevision = false;
@@ -836,7 +1063,8 @@ function saveQuotationFromState(s){
   }
 
   const notesList = s.notesOverride || (quotationDefaults().notes[QC_STATE.quotationType]||[]);
-  const finalNotes = s.clientNote ? [...notesList, { key:'clientNote', title:'Client-Specific Note', text:s.clientNote }] : notesList;
+  const withClientNote = s.clientNote ? [...notesList, { key:'clientNote', title:'Client-Specific Note', text:s.clientNote }] : notesList;
+  const finalNotes = [...withClientNote, ...annualCostHiddenNotes(annualCost, !!s.showDetailedBreakdown)];
 
   const quotation = {
     id, quoteNumber, rootQuotationId, version, previousVersionId,
@@ -847,10 +1075,10 @@ function saveQuotationFromState(s){
     quotationType: quotationTypeForProjectType(s.packageKey),
     assignedSales: s.assignedSales,
     currency:'USD',
-    domainName: s.domainName, domainCost: s.domainCost, domainIncluded: s.domainIncluded, domainRenewalEstimate: s.domainRenewalEstimate,
-    maintenance: s.maintenance,
-    year1Total, year2Total: s.year2Total!=null?Number(s.year2Total):(svc?svc.year2Price:null),
-    year3Total: s.year3Total!=null?Number(s.year3Total):(svc?svc.year3Price:null),
+    domainName: s.domainName,
+    domainCost: annualCost.year1.domain, domainIncluded: annualCost.year1.domainMode!=='separate', domainRenewalEstimate: annualCost.year2.domain,
+    maintenance: legacyMaintenance,
+    year1Total, year2Total, year3Total,
     discountPct: isFounder() ? (Number(s.discountPct)||0) : 0,
     manualAdjustment: (isFounder() && s.adjustment) ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
     paymentPreset: s.paymentPreset, quotationDate: s.quotationDate, validUntil: s.validUntil,
@@ -876,7 +1104,7 @@ function saveQuotationFromState(s){
 
   logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId: quotation.id, refLabel:`${quotation.quoteNumber} — ${quotation.businessName||quotation.clientName}`,
     type: (s.editingId && !isNewRevision) ? 'Quotation Updated' : 'Quotation Created',
-    description: `${CURRENT_USER.name} ${(s.editingId && !isNewRevision)?'updated':(isNewRevision?'created revision v'+version+' of':'created')} quotation ${quotation.quoteNumber}. Year 1 Total: ${evalRes.priceIsTBC?'TBC':money(evalRes.finalPrice)}.`,
+    description: `${CURRENT_USER.name} ${(s.editingId && !isNewRevision)?'updated':(isNewRevision?'created revision v'+version+' of':'created')} quotation ${quotation.quoteNumber}. Year 1 Total: ${evalRes.priceIsTBC?'TBC':money(year1Total)}.`,
     remark: evalRes.requiresFounderReview ? 'Founder review required.' : null });
 
   toast(`Quotation ${quotation.quoteNumber} saved as Draft.`, 'success');
@@ -898,15 +1126,22 @@ function loadStateFromQuotation(q, { asDuplicate=false } = {}){
     // carried over as static text — so they're filtered out here the same
     // way the per-client `clientNote` already is, to avoid duplicating them
     // when this quotation is re-edited and re-saved.
-    notesOverride: q.importantNotes && q.importantNotes.length ? q.importantNotes.filter(n=>n.key!=='clientNote' && n.key!=='maintenanceY1' && n.key!=='maintenanceRenewal') : null,
+    notesOverride: q.importantNotes && q.importantNotes.length
+      ? q.importantNotes.filter(n=> n.key!=='clientNote' && n.key!=='maintenanceY1' && n.key!=='maintenanceRenewal' && !ANNUAL_COST_HIDDEN_NOTE_KEYS.has(n.key))
+      : null,
     clientNote:'',
-    domainName: q.domainName, domainCost: q.domainCost, domainIncluded: q.domainIncluded, domainRenewalEstimate: q.domainRenewalEstimate,
+    domainName: q.domainName,
     // Editing an EXISTING quotation defaults to 'not_included' whenever the
     // saved record has no `maintenance` object at all (created before this
     // feature existed), so opening it for editing never silently adds new
     // maintenance terms it never had (spec §16). Compare defaultMaintenanceState()
     // above, used only for BRAND-NEW quotations.
     maintenance: q.maintenance || { year1Mode:'not_included', year1Cost:0, year2Cost:0, year3Cost:0, year2DisplayMode:'estimated', year3DisplayMode:'estimated' },
+    // Annual Cost Breakdown (spec §D/§28): prefer the record's own stored
+    // model; a quotation saved before this feature existed gets one safely
+    // DERIVED from its legacy flat fields, never rewritten in the DB.
+    annualCost: resolvedAnnualCost(q),
+    showDetailedBreakdown: extractShowDetailedBreakdown(q.importantNotes),
     year1Total: null, year2Total: q.year2Total, year3Total: q.year3Total,
     paymentPreset: q.paymentPreset||'30/70', customStages:null,
     quotationDate: asDuplicate ? todayLocalISO() : q.quotationDate,
@@ -1222,6 +1457,20 @@ function convertQuotationToProject(id){
 function qcStateToPreviewQuotation(s, evalRes, schedule){
   const svc = serviceByProjectType(s.packageKey);
   const notesList = s.notesOverride || (s.packageKey ? (quotationDefaults().notes[quotationTypeForProjectType(s.packageKey)]||[]) : []);
+  const ac = normalizeAnnualCost(s.annualCost);
+  const year1Charge = qcAnnualYear1Charge(ac.year1);
+  const year1Total = evalRes.priceIsTBC ? null : Math.round((evalRes.finalPrice + year1Charge)*100)/100;
+  // Legacy-mirror fields (domainCost/domainIncluded/domainRenewalEstimate/
+  // year2Total/year3Total/maintenance) are still populated here too — see
+  // the big comment above defaultAnnualCostState() — purely so
+  // buildQuoteSections' existing Year 2/3 math keeps working unchanged for
+  // this preview the same way it does for a saved quotation.
+  const legacyMaintenance = {
+    year1Mode: ac.year1.maintenanceMode, year1Cost: ac.year1.maintenance,
+    year2Cost: ac.year2.maintenance, year3Cost: ac.year3.maintenance,
+    year2DisplayMode: ac.year2.displayMode, year3DisplayMode: ac.year3.displayMode,
+  };
+  const baseNotes = s.clientNote ? [...notesList, {key:'clientNote',title:'Client-Specific Note',text:s.clientNote}] : notesList;
   return {
     quoteNumber: s.packageKey ? qcQuoteNumberPreview() : 'BW-Q-PREVIEW',
     clientName: s.clientName, businessName: s.businessName, industry: s.industry,
@@ -1230,13 +1479,14 @@ function qcStateToPreviewQuotation(s, evalRes, schedule){
     quotationDate: s.quotationDate, validUntil: s.validUntil, demoLink: s.demoLink,
     items: s.items.filter(i=>i.included!==false),
     exclusions: s.exclusions,
-    domainName: s.domainName, domainCost: s.domainCost, domainIncluded: s.domainIncluded, domainRenewalEstimate: s.domainRenewalEstimate,
-    year1Total: evalRes.finalPrice, priceIsTBC: evalRes.priceIsTBC,
-    year2Total: s.year2Total!=null?Number(s.year2Total):(svc?svc.year2Price:null),
-    year3Total: s.year3Total!=null?Number(s.year3Total):(svc?svc.year3Price:null),
-    maintenance: s.maintenance,
+    domainName: s.domainName,
+    domainCost: ac.year1.domain, domainIncluded: ac.year1.domainMode!=='separate', domainRenewalEstimate: ac.year2.domain,
+    year1Total, priceIsTBC: evalRes.priceIsTBC,
+    year2Total: ac.year2.domain + ac.year2.hosting, // combined figure, matches the legacy field's historical meaning
+    year3Total: ac.year3.domain + ac.year3.hosting,
+    maintenance: legacyMaintenance,
     paymentSchedule: schedule,
-    importantNotes: s.clientNote ? [...notesList, {key:'clientNote',title:'Client-Specific Note',text:s.clientNote}] : notesList,
+    importantNotes: [...baseNotes, ...annualCostHiddenNotes(ac, !!s.showDetailedBreakdown)],
   };
 }
 
@@ -1304,27 +1554,85 @@ function buildQuoteSections(q){
   const grouped = {};
   (q.items||[]).forEach(it=>{ if(!grouped[it.module]) grouped[it.module]=[]; grouped[it.module].push(it); });
 
+  // NEW model (Annual Cost Breakdown) vs LEGACY quotation (spec §28): a
+  // quotation saved under the new consolidated Year 1/2/3 editor carries a
+  // hidden `__annualCost` note (see the big comment above
+  // defaultAnnualCostState in the state-init section) — everything below
+  // branches on its presence so an already-printed LEGACY document's
+  // numbers/wording never shift by even a cent; only quotations actually
+  // created/edited under the new model get the new Year 1 domain/hosting
+  // line-item wording and the Year 2/3 domain-inclusive total.
+  const storedAnnualCost = extractAnnualCost(q.importantNotes);
+  const usingNewModel = !!storedAnnualCost;
+  const showDetailed = usingNewModel && extractShowDetailedBreakdown(q.importantNotes);
+
   // Maintenance-aware Year-by-Year Budget (spec §2/§3): the base
   // year1/2/3 totals never absorb maintenance silently — a Year-1-paid
   // maintenance add-on is shown as its own clearly-labeled line item, and
   // Year 2/3 renewal + maintenance are broken out separately underneath the
   // headline amount so it's always clear what the renewal consists of.
-  const maint = q.maintenance || { year1Mode:'not_included', year1Cost:0, year2Cost:0, year3Cost:0, year2DisplayMode:'estimated', year3DisplayMode:'estimated' };
+  // `q.maintenance` (the legacy-mirror object) is NOT one of the columns
+  // actually persisted to Supabase (pre-existing, unrelated gap — out of
+  // scope here) — so for a NEW-model quotation, after a reload it can be
+  // undefined even though real Year 1/2/3 maintenance data exists. Derive
+  // `maint` from the reliably-persisted `storedAnnualCost` whenever
+  // possible; only fall back to `q.maintenance`/the hard default for a
+  // genuinely LEGACY record.
+  const maint = usingNewModel
+    ? { year1Mode: storedAnnualCost.year1.maintenanceMode, year1Cost: storedAnnualCost.year1.maintenance,
+        year2Cost: storedAnnualCost.year2.maintenance, year3Cost: storedAnnualCost.year3.maintenance,
+        year2DisplayMode: storedAnnualCost.year2.displayMode, year3DisplayMode: storedAnnualCost.year3.displayMode }
+    : (q.maintenance || { year1Mode:'not_included', year1Cost:0, year2Cost:0, year3Cost:0, year2DisplayMode:'estimated', year3DisplayMode:'estimated' });
   const maintActive = maint.year1Mode && maint.year1Mode!=='not_included';
   const mentionsMaintenance = (label)=> /maintenance/i.test(label);
-  const y1Label = (maintActive && !mentionsMaintenance(labels.y1)) ? `${labels.y1} & Maintenance` : labels.y1;
-  const y2Label = (Number(maint.year2Cost)>0 && !mentionsMaintenance(labels.y2)) ? `${labels.y2} & Maintenance` : labels.y2;
-  const y3Label = (Number(maint.year3Cost)>0 && !mentionsMaintenance(labels.y3)) ? `${labels.y3} & Maintenance` : labels.y3;
+  let y1Label = (maintActive && !mentionsMaintenance(labels.y1)) ? `${labels.y1} & Maintenance` : labels.y1;
+  let y2Label = (Number(maint.year2Cost)>0 && !mentionsMaintenance(labels.y2)) ? `${labels.y2} & Maintenance` : labels.y2;
+  let y3Label = (Number(maint.year3Cost)>0 && !mentionsMaintenance(labels.y3)) ? `${labels.y3} & Maintenance` : labels.y3;
   const y1MaintAddOn = maint.year1Mode==='paid' ? (Number(maint.year1Cost)||0) : 0;
-  const y1Amount = q.priceIsTBC ? 'TBC' : money((Number(q.year1Total)||0) + y1MaintAddOn);
-  const y2Base = Number(q.year2Total)||0;
-  const y2Maint = Number(maint.year2Cost)||0;
-  const y3Base = Number(q.year3Total)||0;
-  const y3Maint = Number(maint.year3Cost)||0;
-  const y2Amount = q.year2Total!=null ? qcYearAmountDisplay(y2Base + y2Maint, maint.year2DisplayMode||'estimated') : 'TBC';
-  const y3Amount = q.year3Total!=null ? qcYearAmountDisplay(y3Base + y3Maint, maint.year3DisplayMode||'estimated') : 'TBC';
-  const y2Breakdown = (q.year2Total!=null && y2Maint>0) ? `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Renewal ${money(y2Base)} + Maintenance ${money(y2Maint)}</div>` : '';
-  const y3Breakdown = (q.year3Total!=null && y3Maint>0) ? `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Renewal ${money(y3Base)} + Maintenance ${money(y3Maint)}</div>` : '';
+  // LEGACY: q.year1Total never included Year 1 maintenance — add it here at
+  // display time (unchanged formula). NEW model: q.year1Total already IS
+  // the full chargeable total (development + domain + hosting +
+  // maintenance + add-ons − discount, spec §10) — adding y1MaintAddOn again
+  // would double-count it.
+  const y1Amount = q.priceIsTBC ? 'TBC' : money((Number(q.year1Total)||0) + (usingNewModel?0:y1MaintAddOn));
+  let y2Base, y2Maint, y3Base, y3Maint, y2Amount, y3Amount, y1Breakdown='', y2Breakdown='', y3Breakdown='';
+  if(usingNewModel){
+    const y1 = storedAnnualCost.year1, y2 = storedAnnualCost.year2, y3 = storedAnnualCost.year3;
+    y2Base = y2.domain + y2.hosting; y2Maint = y2.maintenance;
+    y3Base = y3.domain + y3.hosting; y3Maint = y3.maintenance;
+    y2Amount = qcYearAmountDisplay(y2Base + y2Maint, y2.displayMode||'estimated');
+    y3Amount = qcYearAmountDisplay(y3Base + y3Maint, y3.displayMode||'estimated');
+    // Year 1 domain wording (spec §4/§6/§23): Charged Separately shows its
+    // own dollar breakdown line; Client Own Domain says so explicitly
+    // (spec §26 TEST C — this exact phrase must appear); Included stays a
+    // single combined line (no change to y1Label).
+    if(y1.domainMode==='separate' && y1.domain>0 && !/domain/i.test(y1Label)) y1Label = `${y1Label} & Domain`;
+    const domainNameSuffix = q.domainName ? ` (${escapeHtml(q.domainName)})` : '';
+    if(y1.domainMode==='client_own'){
+      y1Breakdown = `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Existing / client-owned domain${domainNameSuffix} — no domain cost charged.</div>`;
+    } else if(y1.domainMode==='separate' && y1.domain>0){
+      y1Breakdown = `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Domain${domainNameSuffix} ${money(y1.domain)}</div>`;
+    } else if(q.domainName){
+      y1Breakdown = `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Domain: ${escapeHtml(q.domainName)}</div>`;
+    }
+    if(showDetailed){
+      const y1Parts = [];
+      if(!y1.hostingIncluded && y1.hosting>0) y1Parts.push(`${hostingLabelForService(serviceByProjectType(q.packageKey))} ${money(y1.hosting)}`);
+      if(y1.maintenanceMode==='paid' && y1.maintenance>0) y1Parts.push(`Maintenance ${money(y1.maintenance)}`);
+      if(y1Parts.length) y1Breakdown += `<div class="text-muted" style="font-size:10.5px;margin-top:2px">${y1Parts.join(' / ')}</div>`;
+      y2Breakdown = `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Domain ${money(y2.domain)} / Hosting ${money(y2.hosting)} / Maintenance ${money(y2.maintenance)}</div>`;
+      y3Breakdown = `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Domain ${money(y3.domain)} / Hosting ${money(y3.hosting)} / Maintenance ${money(y3.maintenance)}</div>`;
+    }
+  } else {
+    y2Base = Number(q.year2Total)||0;
+    y2Maint = Number(maint.year2Cost)||0;
+    y3Base = Number(q.year3Total)||0;
+    y3Maint = Number(maint.year3Cost)||0;
+    y2Amount = q.year2Total!=null ? qcYearAmountDisplay(y2Base + y2Maint, maint.year2DisplayMode||'estimated') : 'TBC';
+    y3Amount = q.year3Total!=null ? qcYearAmountDisplay(y3Base + y3Maint, maint.year3DisplayMode||'estimated') : 'TBC';
+    y2Breakdown = (q.year2Total!=null && y2Maint>0) ? `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Renewal ${money(y2Base)} + Maintenance ${money(y2Maint)}</div>` : '';
+    y3Breakdown = (q.year3Total!=null && y3Maint>0) ? `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Renewal ${money(y3Base)} + Maintenance ${money(y3Maint)}</div>` : '';
+  }
   const visibleExcl = visibleExclusions(q.items, q.exclusions);
 
   const sections = [];
@@ -1348,18 +1656,23 @@ function buildQuoteSections(q){
     wrapOpenHtml:`<table class="quote-doc-table"><thead><tr><th>Year</th><th>Details</th><th>Amount</th></tr></thead><tbody>`,
     wrapCloseHtml:`</tbody></table>`,
     items:[
-      { html:`<tr><td>Year 1</td><td>${escapeHtml(y1Label)}</td><td>${y1Amount}</td></tr>` },
+      { html:`<tr><td>Year 1</td><td>${escapeHtml(y1Label)}${y1Breakdown}</td><td>${y1Amount}</td></tr>` },
       { html:`<tr><td>Year 2</td><td>${escapeHtml(y2Label)}${y2Breakdown}</td><td>${y2Amount}</td></tr>` },
       { html:`<tr><td>Year 3</td><td>${escapeHtml(y3Label)}${y3Breakdown}</td><td>${y3Amount}</td></tr>` },
     ],
   });
 
-  if(q.domainName || q.domainCost!=null){
+  // The old standalone "Domain" block is folded into the Year 1 row above
+  // for any quotation created/edited under the new Annual Cost Breakdown
+  // (spec §9/§23 — one source of truth, no duplicate domain line). Kept
+  // exactly as before for a LEGACY quotation so its already-printed layout
+  // never shifts.
+  if(!usingNewModel && (q.domainName || q.domainCost!=null)){
     sections.push({ id:'domain', kind:'block',
       html:`<h4 class="quote-doc-h">Domain</h4><p style="font-size:12.5px;margin:0">${q.domainName?escapeHtml(q.domainName)+' — ':''}${q.domainIncluded?'included in Year 1':'not included'} (est. ${money(q.domainCost)}); renewal est. ${money(q.domainRenewalEstimate)}/year.</p>` });
   }
 
-  const paymentFootNote = (maintActive && y1MaintAddOn>0) ? `<p class="text-muted" style="font-size:11px;margin:4px 0 0">Includes Year 1 maintenance (${money(y1MaintAddOn)}).</p>` : '';
+  const paymentFootNote = (!usingNewModel && maintActive && y1MaintAddOn>0) ? `<p class="text-muted" style="font-size:11px;margin:4px 0 0">Includes Year 1 maintenance (${money(y1MaintAddOn)}).</p>` : '';
   sections.push({ id:'payment', kind:'group',
     headingHtml:`<h4 class="quote-doc-h">Payment Schedule</h4>`,
     contHeadingHtml:`<h4 class="quote-doc-h">Payment Schedule (continued)</h4>`,
@@ -1369,7 +1682,7 @@ function buildQuoteSections(q){
   });
 
   const noteItems = [];
-  (q.importantNotes||[]).forEach(n=> noteItems.push({ html:`<li><b>${escapeHtml(n.title)}:</b> ${escapeHtml(n.text)}</li>` }));
+  visibleImportantNotes(q.importantNotes).forEach(n=> noteItems.push({ html:`<li><b>${escapeHtml(n.title)}:</b> ${escapeHtml(n.text)}</li>` }));
   maintenanceWordingNotes(maint).forEach(n=> noteItems.push({ html:`<li><b>${escapeHtml(n.title)}:</b> ${escapeHtml(n.text)}</li>` }));
   if(visibleExcl.length) noteItems.push({ html:`<li><b>Not Included:</b> ${visibleExcl.map(escapeHtml).join(', ')}.</li>` });
   if(!noteItems.length) noteItems.push({ html:`<li>No additional notes.</li>` });

@@ -331,6 +331,54 @@ const SERVICE_PRICE_LIST = [
 function serviceByProjectType(projectType){
   return SERVICE_PRICE_LIST.find(s=>s.projectType===projectType) || null;
 }
+
+/* ---------------------------------------------------------------------- */
+/* Annual Cost Breakdown — package-driven defaults (spec: "Package         */
+/* selection controls ... default yearly costs"). A static website        */
+/* package (category 'Website') only ever needs a plain "Hosting" line;    */
+/* every dynamic/system package (CMS, Booking, CRM, E-Commerce, Custom,    */
+/* Mobile) needs the fuller "Hosting / Backend / Database" wording so      */
+/* Sales never has to hand-edit a label — the package decides it.          */
+/* ---------------------------------------------------------------------- */
+function hostingLabelForService(svc){
+  return (svc && svc.category==='Website') ? 'Hosting' : 'Hosting / Backend / Database';
+}
+// Package-specific Year 1/2/3 starting numbers for the new Annual Cost
+// Breakdown (spec item 7). These are only PREFILLED SUGGESTIONS — Sales or
+// Founder/Admin can edit every number per quotation; nothing here is
+// authoritative once a quotation is actually saved (the saved `annualCost`
+// object on the record is always the source of truth after that point,
+// same convention as `quotationDefaults()`'s exclusions/notes templates).
+// Starter/Dynamic CMS numbers below match the spec's own worked examples
+// (item 7); every other package gets a sensible split of its existing
+// year2Price/year3Price (Service Price List, Settings-editable) into a
+// hosting/backend/database share and a maintenance share, so no package
+// is ever left with an un-configured $0 default that looks broken.
+function defaultAnnualCostForService(svc){
+  const base = {
+    year1: { domain:0, domainMode:'included', hosting:0, hostingIncluded:true, maintenance:0, maintenanceMode:'included' },
+    year2: { domain: DEFAULT_DOMAIN_COST_ESTIMATE, hosting:0, maintenance:0, displayMode:'estimated' },
+    year3: { domain: DEFAULT_DOMAIN_COST_ESTIMATE, hosting:0, maintenance:0, displayMode:'estimated' },
+  };
+  if(!svc) return base;
+  if(svc.projectType==='Starter Website'){
+    base.year2.hosting = 30; base.year2.maintenance = 0;
+    base.year3.hosting = 30; base.year3.maintenance = 0;
+    return base;
+  }
+  if(svc.projectType==='Dynamic Website / CMS'){
+    base.year2.hosting = 99; base.year2.maintenance = 150;
+    base.year3.hosting = 99; base.year3.maintenance = 150;
+    return base;
+  }
+  // Generic split for every other package: ~70% of the existing Year 2/3
+  // renewal figure goes to hosting/backend/database, ~30% to maintenance —
+  // adjustable per quotation, never a hard rule.
+  const y2 = Number(svc.year2Price)||0, y3 = Number(svc.year3Price)||0;
+  base.year2.hosting = Math.round(y2*0.7); base.year2.maintenance = Math.round(y2*0.3);
+  base.year3.hosting = Math.round(y3*0.7); base.year3.maintenance = Math.round(y3*0.3);
+  return base;
+}
 // The user-facing label for a stored project-type/interested-service ID.
 // Every lead/project/quotation stores the internal projectType ID (see the
 // SERVICE_TYPES comment above) — this is the ONLY place that should ever
@@ -425,6 +473,12 @@ const DEFAULT_QUOTATION_NOTES = {
     { key:'newFeatures', title:'New Features', text:'New features or major workflow changes requested after acceptance are scoped and quoted separately.' },
   ],
 };
+// Standard Notes (spec §18) — ONE Founder/Admin-editable master text block,
+// separate from the per-quotation-type exclusions/notes templates above.
+// Create Quotation shows only a collapsed "Standard Notes Applied ✓" line
+// plus an optional Client-Specific Note textarea; Sales never edits this
+// master text (Settings → Quotations → General, Founder/Admin only).
+const DEFAULT_STANDARD_NOTES_TEXT = 'Prices are quoted in USD. Year 1 covers development plus the items shown above; Development is a one-time, Year-1-only cost — Year 2 and Year 3 are renewal/support costs only, never the development price again. Annual renewal and maintenance figures marked "Estimated" may be adjusted slightly at actual renewal time; figures marked "Exact" are fixed. Client provides all content, account access, and approvals needed for development to begin on schedule.';
 function quotationDefaults(){
   const db = DB.read();
   const qd = (db && db.settings && db.settings.quotationDefaults) || {};
@@ -432,6 +486,7 @@ function quotationDefaults(){
     exclusions: (qd.exclusions && qd.exclusions.website && qd.exclusions.system) ? qd.exclusions : DEFAULT_QUOTATION_EXCLUSIONS,
     notes: (qd.notes && qd.notes.website && qd.notes.system) ? qd.notes : DEFAULT_QUOTATION_NOTES,
     validityDays: qd.validityDays || 30,
+    standardNotesText: (typeof qd.standardNotesText==='string' && qd.standardNotesText.trim()) ? qd.standardNotesText : DEFAULT_STANDARD_NOTES_TEXT,
   };
 }
 function bankDetails(){
