@@ -949,11 +949,11 @@ function annualCostBreakdownHtml(s, svc, totals){
         </div>
         <div class="form-field"><label>${escapeHtml(hostingLabel)} ($) ${y1HostingBadge}</label>
           <input type="number" id="cq_y1_hosting" value="${y1.hosting}" ${y1.hostingIncluded?'readonly class="field-locked"':''}>
-          <label class="field-check-row"><input type="checkbox" id="cq_y1_hostingIncluded" ${y1.hostingIncluded?'checked':''}> Included in package price</label>
+          <label class="field-toggle-row"><span>Included in package price</span><span class="toggle-switch"><input type="checkbox" id="cq_y1_hostingIncluded" ${y1.hostingIncluded?'checked':''}><span class="toggle-slider"></span></span></label>
         </div>
         <div class="form-field"><label>Maintenance & Support ($) ${y1MaintBadge}</label>
           <input type="number" id="cq_y1_maint" value="${y1.maintenanceMode==='included'?0:y1.maintenance}" ${y1.maintenanceMode==='included'?'readonly class="field-locked"':''}>
-          <label class="field-check-row"><input type="checkbox" id="cq_y1_maintIncluded" ${y1.maintenanceMode==='included'?'checked':''}> Included / Free</label>
+          <label class="field-toggle-row"><span>Included / Free</span><span class="toggle-switch"><input type="checkbox" id="cq_y1_maintIncluded" ${y1.maintenanceMode==='included'?'checked':''}><span class="toggle-slider"></span></span></label>
         </div>
       </div>
     </div>
