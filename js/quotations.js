@@ -1727,7 +1727,7 @@ function buildQuoteSections(q){
         <span>Client Signature</span>
       </div>
       <div class="quote-doc-accept-rep">
-        <img class="quote-doc-accept-sig" src="../assets/signature/chhean-poli-signature.png" alt="Authorized Signature" width="145" height="51">
+        <img class="quote-doc-accept-sig" src="../assets/signature/chhean-poli-signature.png" alt="Authorized Signature" width="194" height="68">
         <div class="sig-line"></div>
         <span>BizWeb KH Representative</span>
       </div>

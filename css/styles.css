@@ -898,10 +898,21 @@ svg{width:18px;height:18px}
    object-fit:contain guards against any future width/height edit
    introducing distortion (current px size already matches the PNG's
    native 219:77 aspect ratio, so today this is a no-op safety net).
-   Small 2px margin-bottom keeps the signature sitting close to its line,
-   like a real signature just above a signing line, rather than floating
-   with the larger gap that used to balance it against the logo above. */
-.quote-doc-accept-sig{display:block;width:145px;height:51px;object-fit:contain;margin-bottom:2px}
+   The trailing .sig-line is a 36px-tall EMPTY box (no fill, just a
+   border-bottom) — that height exists to give the *client* physical room
+   to hand-sign above their line. For the rep column, an image already IS
+   the signature, so without correction that same 36px shows up as dead
+   air between the image and the actual line. A strong negative
+   margin-bottom pulls the (borderless, fill-less) sig-line box up
+   underneath the image — safe to overlap since nothing but its bottom
+   border is ever visible — leaving only ~4px between the image's own
+   bottom edge and the line; the signature PNG's own ~2-3px of internal
+   transparent padding on top of that reads as a small, natural gap
+   rather than the signature floating or touching/crossing the line.
+   Verified via real Chromium bounding-rect renders (see task report /
+   smoketest/signature_block_test.js) that this does not affect the
+   flex-end column-bottom alignment with the client column. */
+.quote-doc-accept-sig{display:block;width:194px;height:68px;object-fit:contain;margin-bottom:-32px}
 
 /* Bilingual client-info table (matches the real BizWeb KH quotation layout —
    e.g. C039 Engly Khun / C001 IIA Education reference documents) and the
