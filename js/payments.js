@@ -253,28 +253,82 @@ function openRecordPaymentModal(projectId, onDone){
       closeModal();
       const newSummary = paymentSummaryFor(projectId);
 
-      // Section 11: never silently change delivery status — offer it instead.
-      if(type==='Deposit' && proj.stage==='Confirmed'){
-        confirmStageOffer(proj, 'Deposit Paid', 'Payment recorded successfully. Update Project Status to "Deposit Paid"?');
-      } else if(newSummary.remaining<=0 && proj.stage==='Final Payment Pending'){
-        confirmStageOffer(proj, 'Completed', 'Payment recorded successfully. Update Project Status to "Completed"?');
-      } else {
-        toast('Payment recorded.', 'success');
-      }
+      // Section 11: never silently change delivery status — offer it instead
+      // (in-app modal, not a native confirm()). The eligibility check below
+      // is unchanged from the original confirm()-based flow — only the UI
+      // that presents the offer has changed.
+      let suggestedStage = null;
+      if(type==='Deposit' && proj.stage==='Confirmed') suggestedStage = 'Deposit Paid';
+      else if(newSummary.remaining<=0 && proj.stage==='Final Payment Pending') suggestedStage = 'Completed';
 
-      if(onDone) onDone();
-      if(currentRoute()==='payments') renderPaymentsPage();
-      if(currentRoute()==='dashboard') router();
+      openPaymentRecordedModal({ proj, amount, summary: newSummary, suggestedStage, onAfterClose: ()=>{
+        if(onDone) onDone();
+        if(currentRoute()==='payments') renderPaymentsPage();
+        if(currentRoute()==='dashboard') router();
+      }});
     };
   }});
 }
 
-// Offers (never forces) a follow-on project-stage change right after a
-// payment is recorded, per the "Confirmed → Deposit Paid → ... → Completed"
-// workflow rule: payments never silently change delivery status.
-function confirmStageOffer(proj, suggestedStage, message){
-  toast('Payment recorded.', 'success');
-  setTimeout(()=>{
-    if(confirm(message)) applyProjectStageChange(proj, suggestedStage);
-  }, 150);
+/* ---------------------------------------------------------------------- */
+/* Payment Recorded confirmation — CRM-styled modal replacing the old      */
+/* native alert()/confirm() pair. Shows the payment summary (same values   */
+/* already computed above — nothing recalculated here) and, only when the  */
+/* exact same eligibility check the old confirm() used is met, offers the  */
+/* follow-on project-stage change as in-app buttons instead of a native    */
+/* confirm() dialog. The stage-change action itself still calls the exact  */
+/* same applyProjectStageChange() used by every other stage-change entry   */
+/* point in the app — only what triggers it (a button, not confirm())      */
+/* changed.                                                                 */
+/* ---------------------------------------------------------------------- */
+function openPaymentRecordedModal({ proj, amount, summary, suggestedStage, onAfterClose }){
+  const checkIcon = `<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+
+  const finish = (message)=>{
+    closeModal();
+    toast(message, 'success');
+    if(onAfterClose) onAfterClose();
+  };
+
+  const html = `
+    <div class="modal-body" style="text-align:center;padding-top:28px">
+      <div style="width:56px;height:56px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center;margin:0 auto 14px">${checkIcon}</div>
+      <h3 style="font-size:17px;font-weight:800;margin-bottom:4px">Payment Recorded Successfully</h3>
+      <p class="text-muted" style="margin:0 0 18px;font-size:13px">${proj.id} — ${escapeHtml(proj.businessName)}</p>
+      <div class="pd-keyinfo" style="grid-template-columns:1fr;text-align:left;margin-bottom:${suggestedStage?'18px':'4px'}">
+        <div>
+          ${infoRow('Payment Amount', money(amount))}
+          ${infoRow('Total Paid', money(summary.totalPaid))}
+          ${infoRow('Remaining Balance', money(summary.remaining))}
+          ${infoRow('Payment Status', summary.status)}
+        </div>
+      </div>
+      ${suggestedStage ? `
+      <div style="text-align:left;border-top:1px solid var(--line);padding-top:16px">
+        <p style="font-size:13.5px;font-weight:600;margin:0 0 12px">Would you like to update the Project Status to "${escapeHtml(suggestedStage)}"?</p>
+      </div>` : ''}
+    </div>
+    <div class="modal-foot ${suggestedStage?'pr-modal-foot':''}">
+      ${suggestedStage ? `
+        <button class="btn btn-secondary" id="prKeep">Keep Current Status</button>
+        <button class="btn btn-primary" id="prUpdate">Update to ${escapeHtml(suggestedStage)}</button>
+      ` : `<button class="btn btn-primary" id="prDone">Done</button>`}
+    </div>
+  `;
+
+  openModal(html, { onMount:(overlay)=>{
+    if(suggestedStage){
+      overlay.querySelector('#prKeep').onclick = ()=> finish('Payment recorded successfully.');
+      overlay.querySelector('#prUpdate').onclick = ()=>{
+        closeModal();
+        // Exact same status-update logic used everywhere else in the app —
+        // only the trigger (this button) differs from the old confirm().
+        applyProjectStageChange(proj, suggestedStage);
+        toast('Payment recorded and project status updated.', 'success');
+        if(onAfterClose) onAfterClose();
+      };
+    } else {
+      overlay.querySelector('#prDone').onclick = ()=> finish('Payment recorded successfully.');
+    }
+  }});
 }
