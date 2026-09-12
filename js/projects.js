@@ -288,6 +288,7 @@ function renderProjectDetail(code){
         ${collapsibleSectionHtml('activity', `Activity (${acts.length})`, leadHistoryTab(acts))}
         ${collapsibleSectionHtml('notes', 'Notes / Additional Details', projectNotesDetailsHtml(proj))}
         ${collapsibleSectionHtml('quotations', 'Quotations', linkedQuotationsHtml(null, proj.id))}
+        ${collapsibleSectionHtml('invoices', 'Invoices', linkedInvoicesHtml(proj.id))}
       </div>
     </div>
     <div class="modal-foot"><button class="btn btn-secondary" id="pdClose2">Close</button></div>
@@ -305,6 +306,7 @@ function renderProjectDetail(code){
     wireCollapsibleSections(overlay);
     wireFunctionsTab(overlay.querySelector('[data-section="scope"]') || overlay, proj);
     wireLinkedQuotations(overlay);
+    wireLinkedInvoices(overlay);
     wirePaymentHistory(overlay, proj);
   }});
 }
@@ -445,6 +447,10 @@ function openEditPaymentModal(paymentId, proj, onDone){
       if(!changes.length){ toast('No changes to save.', 'success'); closeModal(); return; }
 
       updatePaymentEntry(payment.id, { paymentNumber:newNumber, amount:newAmount, date:newDate, method:newMethod, type:newType, reference:newReference, note:newNote });
+      // Keep a linked invoice's Total Paid/Balance/Status in sync with an
+      // edited amount (spec §8) — a no-op for the vast majority of payments,
+      // which have no invoice link at all.
+      if(payment.invoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(payment.invoiceId);
 
       // Build the audit description in the spec's example format:
       // "Payment edited for C017 — 1st Payment: amount changed from $41 to $XX"
@@ -495,6 +501,11 @@ function openVoidPaymentModal(paymentId, proj, onDone){
       const reason = overlay.querySelector('#vp_reason').value.trim();
       if(!reason){ toast('Please provide a reason for voiding this payment.', 'error'); return; }
       voidPaymentEntry(payment.id, { voidedBy: CURRENT_USER.name, reason });
+      // A voided payment no longer counts toward its linked invoice's Total
+      // Paid either (invoicePaymentsFor() already filters out !voided) —
+      // just re-run the status transition so the invoice's stored `status`
+      // reflects that too (e.g. back down from Paid to Partially Paid).
+      if(payment.invoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(payment.invoiceId);
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: proj.id, refLabel:`${proj.id} — ${proj.businessName}`,
         type:'Payment Voided', description:`${CURRENT_USER.name} voided payment ${payment.paymentNumber||payment.id} (${money(payment.amount)}). Reason: ${reason}` });
       toast('Payment voided.', 'success');

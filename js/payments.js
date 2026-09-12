@@ -181,12 +181,20 @@ function renderFinancialTables(){
 /* payments (spec §1/§5).                                                  */
 /* ---------------------------------------------------------------------- */
 
-function openRecordPaymentModal(projectId, onDone){
+// `presetInvoiceId` (optional, spec: Invoices module §8) preselects the
+// Invoice dropdown below — used when "Record Payment" is launched FROM an
+// invoice (list row / detail view). Every pre-existing call site (Project
+// View's own Record Payment button) passes nothing here and the dropdown
+// simply defaults to "— No Invoice —", so an unlinked payment is recorded
+// exactly as before this module existed.
+function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
   const proj = DB.find('projects', projectId);
   if(!proj) return;
   const summary = paymentSummaryFor(projectId);
   const hasDeposit = paymentsForProject(projectId).some(p=>p.type==='Deposit');
   const suggestedNumber = nextPaymentNumberLabel(projectId);
+  const eligibleInvoices = (typeof DB!=='undefined' ? DB.all('invoices') : [])
+    .filter(i=> i.projectCode===projectId && i.status!=='Cancelled');
 
   const html = `
     <div class="modal-head"><h3>Record Payment</h3><button class="modal-close" id="rpClose">&times;</button></div>
@@ -207,6 +215,11 @@ function openRecordPaymentModal(projectId, onDone){
         <div class="form-field"><label class="required">Payment Date</label><input type="date" id="rp_date" value="${new Date().toISOString().slice(0,10)}"></div>
         <div class="form-field"><label class="required">Payment Method</label><select id="rp_method">${PAYMENT_METHODS.map(m=>`<option>${m}</option>`).join('')}</select></div>
         <div class="form-field"><label>Reference</label><input id="rp_ref" placeholder="e.g. bank txn ref, receipt #…"></div>
+        ${eligibleInvoices.length ? `<div class="form-field"><label>Invoice</label>
+          <select id="rp_invoice">
+            <option value="">— No Invoice —</option>
+            ${eligibleInvoices.map(i=>`<option value="${i.id}" ${presetInvoiceId===i.id?'selected':''}>${escapeHtml(i.invoiceNumber)}</option>`).join('')}
+          </select></div>` : ''}
         <div class="form-field full"><label>Note</label><textarea id="rp_notes" placeholder="Optional note…"></textarea></div>
         <div class="form-field full"><label>Recorded By</label><input value="${escapeHtml(CURRENT_USER.name)}" disabled></div>
       </div>
@@ -227,6 +240,8 @@ function openRecordPaymentModal(projectId, onDone){
       const method = overlay.querySelector('#rp_method').value;
       const reference = overlay.querySelector('#rp_ref').value.trim();
       const notes = overlay.querySelector('#rp_notes').value.trim();
+      const invoiceSel = overlay.querySelector('#rp_invoice');
+      const invoiceId = invoiceSel ? (invoiceSel.value || null) : null;
       if(amount<=0 || !date){ toast('Please enter a valid amount and date.', 'error'); return; }
 
       // Never let Total Paid silently exceed Project Value — warn and
@@ -244,7 +259,13 @@ function openRecordPaymentModal(projectId, onDone){
         if(!proceed) return;
       }
 
-      recordPaymentEntry({ projectId, paymentNumber, amount, date, method, type, reference, note: notes, userName: CURRENT_USER.name });
+      recordPaymentEntry({ projectId, paymentNumber, amount, date, method, type, reference, note: notes, userName: CURRENT_USER.name, invoiceId });
+      // Recompute the linked invoice's Total Paid/Balance/Status (spec §8) —
+      // this is a real reference to the SAME payment row just recorded
+      // above, never a duplicate. Unlinked payments (invoiceId===null,
+      // every payment recorded before this module existed included) never
+      // touch this at all.
+      if(invoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(invoiceId);
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: proj.id, refLabel:`${proj.id} — ${proj.businessName}`,
         type: type==='Deposit' ? 'Deposit Recorded' : 'Payment Recorded',
         description:`${CURRENT_USER.name} recorded payment: ${money(amount)} (${type}, ${paymentNumber}) for project ${proj.id}`,

@@ -318,7 +318,7 @@ function renderFollowupsPage(){
       </select>
       <select id="fuStatus" class="sel">
         <option value="">All Statuses</option>
-        ${statusList.map(s=>`<option value="${s}" ${fuFilters.status===s?'selected':''}>${s}</option>`).join('')}
+        ${statusList.map(s=>`<option value="${escapeHtml(s)}" ${fuFilters.status===s?'selected':''}>${escapeHtml(pipelineStageLabel(s))}</option>`).join('')}
       </select>
       <div class="spacer"></div>
       <div class="text-muted" style="font-size:12.5px">${leads.length} lead${leads.length===1?'':'s'} with an upcoming follow-up.</div>
@@ -338,7 +338,7 @@ function renderFollowupsPage(){
                   <td>${escapeHtml(l.businessName)}</td>
                   <td>${escapeHtml(l.phone)}</td>
                   <td><div class="flex-row"><div class="avatar-sm" style="background:${userColor(l.assignedSales)}">${userInitials(l.assignedSales)}</div>${escapeHtml(l.assignedSales)}</div></td>
-                  <td>${statusBadge(l.status)}</td>
+                  <td>${statusBadge(l.status, pipelineStageLabel(l.status))}</td>
                   <td>${fmtDate(l.nextFollowup)}</td>
                   <td>${fmtDate(l.lastContact)}</td>
                   <td>

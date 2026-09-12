@@ -702,7 +702,7 @@ function slug(s){ return String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').repl
 
 const COLLECTION_TABLE = {
   leads: 'leads', projects: 'projects', payments: 'payments', services: 'services',
-  leadActivities: 'lead_activities', quotations: 'quotations',
+  leadActivities: 'lead_activities', quotations: 'quotations', invoices: 'invoices',
 };
 
 function userIdToName(id){
@@ -798,6 +798,11 @@ function rowToPayment(row){
     createdAt: row.created_at,
     voided: !!row.voided, voidedBy: userIdToName(row.voided_by),
     voidedAt: row.voided_at, voidReason: row.void_reason,
+    // Optional link to (at most) one Invoice (spec: Invoices module) — null
+    // for every payment recorded before this column existed, and for any
+    // payment recorded from a project with no invoice. Never duplicated;
+    // always a reference to this SAME row, never a copy.
+    invoiceId: row.invoice_id || null,
   };
 }
 function paymentToRow(p){
@@ -808,6 +813,7 @@ function paymentToRow(p){
     recorded_by: userNameToId(p.recordedBy), voided: !!p.voided,
     voided_by: userNameToId(p.voidedBy), voided_at: p.voidedAt || null,
     void_reason: p.voidReason || null, created_at: p.createdAt || undefined,
+    invoice_id: p.invoiceId || null,
   };
 }
 
@@ -944,6 +950,68 @@ function quotationToRow(q){
   };
 }
 
+// Invoices — same self-contained-snapshot convention as quotations (line
+// items inline as jsonb); Total Paid/Balance Due are NEVER stored on the
+// row, always derived live from linked payments (payments.invoice_id) via
+// invoicePaymentsFor()/invoiceTotalsFor() in invoices.js, same principle as
+// paymentSummaryFor() for projects.
+function rowToInvoice(row){
+  return {
+    id: row.id, invoiceNumber: row.invoice_number,
+    projectCode: row.project_code, leadId: row.lead_id,
+    clientName: row.client_name, businessName: row.business_name || '',
+    websiteLink: row.website_link || '',
+    invoiceDate: row.invoice_date, projectStatus: row.project_status || '',
+    status: row.status || 'Draft', currency: row.currency || 'USD',
+    items: row.items || [], discountAmount: Number(row.discount_amount)||0,
+    summary: row.summary || '', notes: row.notes || '',
+    assignedSales: userIdToName(row.assigned_sales) || 'Unassigned',
+    createdBy: userIdToName(row.created_by) || 'Unassigned',
+    createdAt: row.created_at, updatedAt: row.updated_at,
+  };
+}
+function invoiceToRow(inv){
+  return {
+    id: inv.id, invoice_number: inv.invoiceNumber,
+    project_code: inv.projectCode || null, lead_id: inv.leadId || null,
+    client_name: inv.clientName, business_name: inv.businessName || '',
+    website_link: inv.websiteLink || null,
+    invoice_date: inv.invoiceDate, project_status: inv.projectStatus || null,
+    status: inv.status || 'Draft', currency: inv.currency || 'USD',
+    items: inv.items || [], discount_amount: Number(inv.discountAmount)||0,
+    summary: inv.summary || '', notes: inv.notes || '',
+    assigned_sales: userNameToId(inv.assignedSales),
+    created_by: userNameToId(inv.createdBy),
+    created_at: inv.createdAt || undefined, updated_at: new Date().toISOString(),
+  };
+}
+
+// BW-INV-{PROJECTCODE}-{SHORTNAME}-{YYYYMMDD} (mirrors generateQuoteNumber's
+// convention). SHORTNAME is the first significant word of the business name
+// (falling back to the client name), uppercased and truncated to 10 chars —
+// e.g. "HERO Electrical Appliances" -> "HERO", matching the real BW-INV-
+// C054-HERO-20260912 example this feature is modeled on. A same-day repeat
+// for the same project gets -R{n} appended, same collision-avoidance
+// convention as quotations.
+function invoiceShortName(text){
+  const words = String(text||'').trim().split(/\s+/).filter(Boolean);
+  const stop = new Set(['the','a','an','of','and','co','company']);
+  const w = words.find(x=> !stop.has(x.toLowerCase())) || words[0] || 'CLIENT';
+  return w.replace(/[^a-zA-Z0-9]/g,'').toUpperCase().slice(0,10) || 'CLIENT';
+}
+function generateInvoiceNumber(projectCode, nameForShort, dateStr){
+  const d = dateStr ? new Date(dateStr) : new Date();
+  const ymd = d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
+  const code = projectCode || 'DIRECT';
+  const short = invoiceShortName(nameForShort);
+  const base = `BW-INV-${code}-${short}-${ymd}`;
+  const taken = new Set(DB.all('invoices').map(i=>i.invoiceNumber));
+  if(!taken.has(base)) return base;
+  let n = 1;
+  while(taken.has(`${base}-R${n}`)) n++;
+  return `${base}-R${n}`;
+}
+
 // Local copies of app.js's initialsOf()/avatarColorFor() — DB.init() (and
 // therefore rowToUser) runs during the dashboard bootstrap BEFORE app.js is
 // loaded (see dashboard/index.html), so this file can't rely on those
@@ -965,14 +1033,15 @@ function rowToUser(row){
 
 const DB = {
   _cache: { leads:[], projects:[], payments:[], activities:[], services:[],
-            settings:{}, users:[], quotations:[], followups:[], quotationReviews:[], leadActivities:[] },
+            settings:{}, users:[], quotations:[], followups:[], quotationReviews:[], leadActivities:[],
+            invoices:[] },
   _initialized: false,
 
   // Populates _cache from Supabase. Must be awaited before any UI code runs
   // (see dashboard/index.html's bootstrap script) — every DB.all()/find()
   // call after that point reads synchronously from _cache.
   async init(){
-    const [leadsRes, projectsRes, paymentsRes, activitiesRes, servicesRes, settingsRes, profilesRes, leadActivitiesRes, quotationsRes] = await Promise.all([
+    const [leadsRes, projectsRes, paymentsRes, activitiesRes, servicesRes, settingsRes, profilesRes, leadActivitiesRes, quotationsRes, invoicesRes] = await Promise.all([
       supabaseClient.from('leads').select('*'),
       supabaseClient.from('projects').select('*'),
       supabaseClient.from('payments').select('*'),
@@ -982,9 +1051,10 @@ const DB = {
       supabaseClient.from('profiles').select('*'),
       supabaseClient.from('lead_activities').select('*').order('created_at', { ascending:false }).limit(2000),
       supabaseClient.from('quotations').select('*').order('created_at', { ascending:false }),
+      supabaseClient.from('invoices').select('*').order('created_at', { ascending:false }),
     ]);
 
-    [leadsRes, projectsRes, paymentsRes, activitiesRes, servicesRes, settingsRes, profilesRes, leadActivitiesRes, quotationsRes].forEach(r=>{
+    [leadsRes, projectsRes, paymentsRes, activitiesRes, servicesRes, settingsRes, profilesRes, leadActivitiesRes, quotationsRes, invoicesRes].forEach(r=>{
       if(r && r.error) console.error('Supabase fetch error', r.error);
     });
 
@@ -997,6 +1067,7 @@ const DB = {
     this._cache.services = (servicesRes.data || []).map(rowToService);
     this._cache.leadActivities = (leadActivitiesRes.data || []).map(rowToLeadActivity);
     this._cache.quotations = (quotationsRes.data || []).map(rowToQuotation);
+    this._cache.invoices = (invoicesRes.data || []).map(rowToInvoice);
     this._cache.settings = {
       discountLimitPct: (settingsRes.data && settingsRes.data.discount_limit_pct) || 10,
       bankDetails: (settingsRes.data && settingsRes.data.bank_details) || null,
@@ -1077,7 +1148,7 @@ const DB = {
 
     const table = COLLECTION_TABLE[collection];
     if(!table) return record; // unknown/local-only collection — cache-only, no remote sync
-    const toRow = { leads: leadToRow, projects: projectToRow, payments: paymentToRow, services: serviceToRow, quotations: quotationToRow }[collection];
+    const toRow = { leads: leadToRow, projects: projectToRow, payments: paymentToRow, services: serviceToRow, quotations: quotationToRow, invoices: invoiceToRow }[collection];
     supabaseClient.from(table).upsert(toRow(record))
       .then(({error})=>{ if(error) console.error(`Supabase upsert failed for ${collection}`, error); })
       .catch(e=> console.error(`Supabase upsert failed for ${collection}`, e));
@@ -1234,7 +1305,11 @@ function nextPaymentNumberLabel(projectId){
   const count = DB.all('payments').filter(p=>p.projectId===projectId).length;
   return ordinalLabel(count + 1);
 }
-function recordPaymentEntry({ projectId, paymentNumber, amount, date, method, type, reference, note, userName }){
+// `invoiceId` is OPTIONAL and defaults to null — every existing call site
+// (Project View's Record Payment) that doesn't pass it keeps recording a
+// perfectly ordinary unlinked payment, byte-identical to before the
+// Invoices module existed.
+function recordPaymentEntry({ projectId, paymentNumber, amount, date, method, type, reference, note, userName, invoiceId=null }){
   const rec = {
     id: 'PM' + Date.now() + Math.floor(Math.random()*10000),
     projectId,
@@ -1243,6 +1318,7 @@ function recordPaymentEntry({ projectId, paymentNumber, amount, date, method, ty
     reference: reference || '', note: note||'',
     recordedBy: userName, createdAt: new Date().toISOString(),
     voided: false, voidedBy: null, voidedAt: null, voidReason: null,
+    invoiceId: invoiceId || null,
   };
   DB.upsert('payments', rec);
   return rec;
