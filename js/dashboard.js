@@ -6,8 +6,21 @@
 // Renders one KPI card — pulled out so the three grouped rows below (spec
 // §1) all share exactly the same markup instead of copy-pasting it per row.
 function kpiCardHtml(k){
+  // Two independent, optional click-through wirings a card can carry:
+  //  - k.go        -> plain hash navigation to a module page (data-go, same
+  //                   attribute/handler already used by "See all" links)
+  //  - k.goPipeline -> pre-set Pipeline's Follow-up filter, then jump there
+  //                   (data-go-pipeline, pre-existing mechanism)
+  // A card gets at most one of the two. Neither Pipeline nor Projects has an
+  // existing stage-level filter mechanism reusable from the Dashboard (see
+  // spec §5's "don't over-engineer routing" note), so stage-specific
+  // Financial Performance cards intentionally just navigate to the general
+  // module page rather than a filtered view.
+  const clickAttrs = k.goPipeline ? `data-go-pipeline="${k.goPipeline}" style="cursor:pointer" title="Open in Pipeline"`
+                    : k.go ? `data-go="${k.go}" style="cursor:pointer" title="Open ${escapeHtml(k.goLabel||k.go)}"`
+                    : '';
   return `
-    <div class="kpi-card" ${k.go?`data-go-pipeline="${k.go}" style="cursor:pointer" title="Open in Pipeline"`:''}>
+    <div class="kpi-card" ${clickAttrs}>
       <div class="kpi-top">
         <div class="kpi-icon" style="background:${k.color}1a;color:${k.color}">${icon(k.icon)}</div>
       </div>
@@ -43,7 +56,6 @@ function renderDashboard(){
   // work entirely) — matches the Pipeline "Due" follow-up filter exactly,
   // which is what clicking this KPI card opens (see the `go` wiring below).
   const followupDue = activeLeads().filter(l=> l.nextFollowup && daysUntil(l.nextFollowup)<=0 && !['Lost','Confirmed'].includes(l.status)).length;
-  const quotationsPending = DB.all('quotations').filter(q=>['Draft','Pending Founder Review'].includes(q.quotationStatus)).length;
   const confirmedProjects = projects.length; // every row in Projects, regardless of stage
   const activeProjects = projects.filter(p=>ACTIVE_PROJECT_STAGES.includes(p.stage)).length;
 
@@ -55,6 +67,19 @@ function renderDashboard(){
   // Open Pipeline Value here, or the two would disagree.
   const openLeads = activeLeads().filter(l=>OPEN_PIPELINE_STATUSES.includes(l.status));
   const pipelineValue = openLeads.reduce((s,l)=>s+(l.estimatedValue||0),0);
+
+  // Financial Performance stage breakdown (spec §1/§2, rebuild): each of the
+  // 3 named-stage cards is a thin sum over the exact same `openLeads` set
+  // used for Total Pipeline Value above — just narrowed to one exact stage
+  // string (see data.js for the single source of truth on each stage's
+  // exact wording: QUOTE_AND_DEMO_SENT_STATUS, POTENTIAL_FOLLOWUP_STATUS —
+  // 'Negotiation' has no dedicated constant elsewhere in the codebase either,
+  // so it's matched literally here exactly like every other stage check in
+  // the app does). No new per-lead math — only new grouping of the existing
+  // per-lead estimatedValue already summed for pipelineValue.
+  const quoteDemoSentValue = openLeads.filter(l=>l.status===QUOTE_AND_DEMO_SENT_STATUS).reduce((s,l)=>s+(l.estimatedValue||0),0);
+  const potentialFollowupValue = openLeads.filter(l=>l.status===POTENTIAL_FOLLOWUP_STATUS).reduce((s,l)=>s+(l.estimatedValue||0),0);
+  const negotiationValue = openLeads.filter(l=>l.status==='Negotiation').reduce((s,l)=>s+(l.estimatedValue||0),0);
 
   // Closed Sales Value: every Project's Confirmed Value (projects only ever
   // exist for Confirmed-or-later / non-Lost opportunities).
@@ -68,22 +93,37 @@ function renderDashboard(){
 
   // KPI cards are grouped into three business-meaning rows (spec §1) rather
   // than one flat grid — the calculations above are completely unchanged,
-  // this only changes how the same numbers are laid out.
+  // this only changes how the same numbers are laid out. "Pending
+  // Quotations" has been removed from here (Dashboard-only quotation
+  // widget) — Quotations itself is unaffected, it's still fully reachable
+  // from its own sidebar entry/module exactly as before.
   const pipelineKpis = [
     { label:'Total Leads', value: totalLeads, icon:'users', color:'#1d7bff' },
     { label:'Open Leads', value: openLeadsAll.length, icon:'grid', color:'#18c8ff' },
-    { label:'Follow-ups Due', value: followupDue, icon:'clock', color:'#d98a12', go:'due' },
-    { label:'Pending Quotations', value: quotationsPending, icon:'list', color:'#7c5cff' },
+    { label:'Follow-ups Due', value: followupDue, icon:'clock', color:'#d98a12', goPipeline:'due' },
   ];
   const deliveryKpis = [
     { label:'Confirmed Projects', value: confirmedProjects, icon:'briefcase', color:'#12a775' },
     { label:'Active Projects', value: activeProjects, icon:'columns', color:'#155fcc' },
   ];
-  const financialKpis = [
-    { label:'Open Pipeline Value', value: money(pipelineValue), icon:'columns', color:'#ff8a3d' },
-    { label:'Closed Sales Value', value: money(closedSalesValue), icon:'briefcase', color:'#0d8a5f' },
-    { label:'Collected Revenue', value: money(collectedRevenue), icon:'dollar', color:'#12a775' },
-    { label:'Outstanding Balance', value: money(outstanding), icon:'dollar', color:'#e0473c' },
+  // Financial Performance rebuild (spec §1): 7 metrics in a 4-then-3 layout.
+  // Row 1 mirrors the Pipeline stage breakdown; row 2 is the closed-sales /
+  // collections side. Click-through targets the general module page where
+  // no existing filter mechanism supports a stage/outstanding-specific view
+  // cleanly (spec §5 — Pipeline has no per-stage filter today, only
+  // sales/industry/follow-up; Projects' stage filter is a single exact
+  // PROJECT_STAGES value, not a "closed/confirmed" grouping, since Closed
+  // Sales Value deliberately sums ALL projects regardless of stage).
+  const financialKpisRow1 = [
+    { label:'Total Pipeline Value', value: money(pipelineValue), icon:'columns', color:'#ff8a3d', go:'pipeline', goLabel:'Pipeline' },
+    { label:'Quote & Demo Sent', value: money(quoteDemoSentValue), icon:'list', color:'#1d7bff', go:'pipeline', goLabel:'Pipeline' },
+    { label:'Potential – Need Follow Up', value: money(potentialFollowupValue), icon:'clock', color:'#d98a12', go:'pipeline', goLabel:'Pipeline' },
+    { label:'Negotiation', value: money(negotiationValue), icon:'grid', color:'#7c5cff', go:'pipeline', goLabel:'Pipeline' },
+  ];
+  const financialKpisRow2 = [
+    { label:'Closed Sales Value', value: money(closedSalesValue), icon:'briefcase', color:'#0d8a5f', go:'projects', goLabel:'Projects' },
+    { label:'Collected Revenue', value: money(collectedRevenue), icon:'dollar', color:'#12a775', go:'payments', goLabel:'Payments' },
+    { label:'Outstanding Balance', value: money(outstanding), icon:'dollar', color:'#e0473c', go:'payments', goLabel:'Payments' },
   ];
 
   const recentLeads = [...leads].sort((a,b)=> new Date(b.createdAt)-new Date(a.createdAt)).slice(0,6);
@@ -103,21 +143,14 @@ function renderDashboard(){
   const pipelineByIndustry = groupByIndustry(openLeads, l=>industryLabel(l.industry), l=>l.estimatedValue||0);
   const closedByIndustry = groupByIndustry(projects, p=>industryLabel(p.industry), p=>p.confirmedValue||0);
 
-  // ----- quotation summary (compact — Draft/Awaiting Approval/Sent/Accepted + value) -----
-  // Superseded rows are historical-only (see quotations.js liveQuotations())
-  // and are excluded from every count/total here, same as on the Quotations
-  // list page itself.
-  const quotations = DB.all('quotations').filter(q=>q.status!=='Superseded');
-  const qDraft = quotations.filter(q=>q.status==='Draft').length;
-  const qPending = quotations.filter(q=>q.status==='Awaiting Approval').length;
-  const qSent = quotations.filter(q=>quotationDisplayStatus(q)==='Sent').length;
-  const qAccepted = quotations.filter(q=>q.status==='Accepted').length;
-  const qValue = quotations.reduce((s,q)=>s+(Number(q.year1Total)||0),0);
-
   el.innerHTML = `
     ${kpiGroupHtml('Sales Pipeline', pipelineKpis)}
     ${kpiGroupHtml('Project Delivery', deliveryKpis, 'kpi-grid-2')}
-    ${kpiGroupHtml('Financial Performance', financialKpis)}
+    <div class="kpi-group">
+      <div class="kpi-group-title">Financial Performance</div>
+      <div class="kpi-grid">${financialKpisRow1.map(kpiCardHtml).join('')}</div>
+      <div class="kpi-grid-3">${financialKpisRow2.map(kpiCardHtml).join('')}</div>
+    </div>
     <div class="two-col" style="margin-bottom:16px">
       <div class="panel">
         <div class="panel-head"><h3>Pipeline Value by Industry</h3></div>
@@ -129,19 +162,6 @@ function renderDashboard(){
         <div class="panel-head"><h3>Closed Sales by Industry</h3></div>
         <div class="panel-body pad">
           ${industryBarChartHtml(closedByIndustry, { totalLabel:'Total Closed Sales', emptyText:'No confirmed sales data yet.' })}
-        </div>
-      </div>
-    </div>
-
-    <div class="panel" style="margin-bottom:16px">
-      <div class="panel-head"><h3>Quotations</h3><span class="see-all" data-go="quotations">See all</span></div>
-      <div class="panel-body pad">
-        <div class="kpi-grid summary-cards-5">
-          <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px">${qDraft}</div><div class="kpi-label" style="margin-top:4px">Draft</div></div>
-          <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px;color:var(--amber)">${qPending}</div><div class="kpi-label" style="margin-top:4px">Pending Review</div></div>
-          <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px;color:var(--blue)">${qSent}</div><div class="kpi-label" style="margin-top:4px">Sent</div></div>
-          <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px;color:var(--green)">${qAccepted}</div><div class="kpi-label" style="margin-top:4px">Accepted</div></div>
-          <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px">${money(qValue)}</div><div class="kpi-label" style="margin-top:4px">Quotation Value</div></div>
         </div>
       </div>
     </div>
