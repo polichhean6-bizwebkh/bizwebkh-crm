@@ -19,22 +19,42 @@ function kpiCardHtml(k){
   const clickAttrs = k.goPipeline ? `data-go-pipeline="${k.goPipeline}" style="cursor:pointer" title="Open in Pipeline"`
                     : k.go ? `data-go="${k.go}" style="cursor:pointer" title="Open ${escapeHtml(k.goLabel||k.go)}"`
                     : '';
+  // Optional extras (Sales Pipeline Value cards — dashboard metric-clarity
+  // task): `k.count` is a small "N opportunities" line shown between the
+  // dollar value and the label; `k.sub` is the small subtitle line under the
+  // label; `k.strong` makes the headline "Total Open Pipeline" card read as
+  // visually stronger than its peers (larger value + accent left border +
+  // faint tint) without turning it into a separately-stacked amount.
+  const cardClass = 'kpi-card' + (k.strong ? ' kpi-card-strong' : '');
+  // Same hex+alpha-suffix convention already used for the icon background
+  // above (`${k.color}1a`), just an even fainter tint (05 ≈ 2% opacity) so
+  // the "stronger" card reads as emphasized, not as a separate colored box.
+  const strongStyle = k.strong ? `style="--kpi-accent:${k.color};background:${k.color}0d"` : '';
   return `
-    <div class="kpi-card" ${clickAttrs}>
+    <div class="${cardClass}" ${strongStyle} ${clickAttrs}>
       <div class="kpi-top">
         <div class="kpi-icon" style="background:${k.color}1a;color:${k.color}">${icon(k.icon)}</div>
       </div>
       <div class="kpi-value">${k.value}</div>
+      ${k.count!=null ? `<div class="kpi-count">${escapeHtml(k.count)}</div>` : ''}
       <div class="kpi-label">${k.label}</div>
+      ${k.sub ? `<div class="kpi-sub">${escapeHtml(k.sub)}</div>` : ''}
     </div>`;
 }
-// Renders one labeled KPI row/group (e.g. "Sales Pipeline", "Financial
-// Performance" — spec §1). `gridClass` lets a 2-card row (Project Delivery)
+// Renders one labeled KPI row/group (e.g. "Sales Pipeline", "Project
+// Delivery" — spec §1). `gridClass` lets a 2-card row (Project Delivery)
 // use a matching 2-column grid instead of stretching across 4 columns.
-function kpiGroupHtml(title, items, gridClass='kpi-grid'){
+// `helpText`, when given, adds the same shared "?" help-button/tooltip
+// mechanism already used on the Lead Records summary cards (see
+// wireKpiHelpTooltips in leads.js) next to the group title, instead of
+// inventing a new tooltip pattern.
+function kpiGroupHtml(title, items, gridClass='kpi-grid', helpText=''){
+  const help = helpText
+    ? ` <button type="button" class="kpi-help-btn" data-help-text="${escapeHtml(helpText)}" aria-label="What does ${escapeHtml(title)} mean?">?</button>`
+    : '';
   return `
     <div class="kpi-group">
-      <div class="kpi-group-title">${escapeHtml(title)}</div>
+      <div class="kpi-group-title">${escapeHtml(title)}${help}</div>
       <div class="${gridClass}">${items.map(kpiCardHtml).join('')}</div>
     </div>`;
 }
@@ -77,9 +97,36 @@ function renderDashboard(){
   // so it's matched literally here exactly like every other stage check in
   // the app does). No new per-lead math — only new grouping of the existing
   // per-lead estimatedValue already summed for pipelineValue.
-  const quoteDemoSentValue = openLeads.filter(l=>l.status===QUOTE_AND_DEMO_SENT_STATUS).reduce((s,l)=>s+(l.estimatedValue||0),0);
-  const potentialFollowupValue = openLeads.filter(l=>l.status===POTENTIAL_FOLLOWUP_STATUS).reduce((s,l)=>s+(l.estimatedValue||0),0);
-  const negotiationValue = openLeads.filter(l=>l.status==='Negotiation').reduce((s,l)=>s+(l.estimatedValue||0),0);
+  const quoteDemoSentLeads = openLeads.filter(l=>l.status===QUOTE_AND_DEMO_SENT_STATUS);
+  const potentialFollowupLeads = openLeads.filter(l=>l.status===POTENTIAL_FOLLOWUP_STATUS);
+  const negotiationLeads = openLeads.filter(l=>l.status==='Negotiation');
+  const quoteDemoSentValue = quoteDemoSentLeads.reduce((s,l)=>s+(l.estimatedValue||0),0);
+  const potentialFollowupValue = potentialFollowupLeads.reduce((s,l)=>s+(l.estimatedValue||0),0);
+  const negotiationValue = negotiationLeads.reduce((s,l)=>s+(l.estimatedValue||0),0);
+
+  // "Other Open Pipeline" (dashboard metric-clarity task) — a catch-all for
+  // every OPEN_PIPELINE_STATUSES stage that doesn't get its own named card
+  // above (today that's just ON_HOLD_STATUS, but this stays correct if a
+  // new open stage is ever added to OPEN_PIPELINE_STATUSES without also
+  // getting a dedicated card here). Computed as a DIRECT sum over the
+  // remaining open-stage records — i.e. filtering the same `openLeads` set
+  // OUT of the three named stages — rather than as `pipelineValue minus the
+  // three named totals`, per spec: the two approaches must agree, but a
+  // direct sum can never silently drift out of sync with pipelineValue if
+  // OPEN_PIPELINE_STATUSES ever changes shape.
+  const namedOpenStatuses = [QUOTE_AND_DEMO_SENT_STATUS, POTENTIAL_FOLLOWUP_STATUS, 'Negotiation'];
+  const otherOpenLeads = openLeads.filter(l=>!namedOpenStatuses.includes(l.status));
+  const otherOpenPipelineValue = otherOpenLeads.reduce((s,l)=>s+(l.estimatedValue||0),0);
+
+  // Dev-only sanity check (never shown to users) — the direct sum above must
+  // always equal the total minus the three named stages, or one of the two
+  // calculations has drifted.
+  if(typeof console!=='undefined' && console.assert){
+    console.assert(
+      Math.abs((quoteDemoSentValue+potentialFollowupValue+negotiationValue+otherOpenPipelineValue) - pipelineValue) < 0.005,
+      'Dashboard: Sales Pipeline Value cards do not sum to Total Open Pipeline'
+    );
+  }
 
   // Closed Sales Value: every Project's Confirmed Value (projects only ever
   // exist for Confirmed-or-later / non-Lost opportunities).
@@ -106,21 +153,35 @@ function renderDashboard(){
     { label:'Confirmed Projects', value: confirmedProjects, icon:'briefcase', color:'#12a775' },
     { label:'Active Projects', value: activeProjects, icon:'columns', color:'#155fcc' },
   ];
-  // Financial Performance rebuild (spec §1): 7 metrics in a 4-then-3 layout.
-  // Row 1 mirrors the Pipeline stage breakdown; row 2 is the closed-sales /
-  // collections side. Click-through targets the general module page where
-  // no existing filter mechanism supports a stage/outstanding-specific view
-  // cleanly (spec §5 — Pipeline has no per-stage filter today, only
-  // sales/industry/follow-up; Projects' stage filter is a single exact
-  // PROJECT_STAGES value, not a "closed/confirmed" grouping, since Closed
-  // Sales Value deliberately sums ALL projects regardless of stage).
-  const financialKpisRow1 = [
-    { label:'Total Pipeline Value', value: money(pipelineValue), icon:'columns', color:'#ff8a3d', go:'pipeline', goLabel:'Pipeline' },
-    { label:'Quote & Demo Sent', value: money(quoteDemoSentValue), icon:'list', color:'#1d7bff', go:'pipeline', goLabel:'Pipeline' },
-    { label:'Potential – Need Follow Up', value: money(potentialFollowupValue), icon:'clock', color:'#d98a12', go:'pipeline', goLabel:'Pipeline' },
-    { label:'Negotiation', value: money(negotiationValue), icon:'grid', color:'#7c5cff', go:'pipeline', goLabel:'Pipeline' },
+  // Dashboard metric-clarity task: "Financial Performance" is split into two
+  // clearly separated sections so the numbers visibly sum to the headline
+  // total instead of reading as one undifferentiated wall of money figures.
+  //
+  // A. SALES PIPELINE VALUE — every card here is CURRENT-STAGE-ONLY and
+  //    mutually exclusive (each open lead contributes to exactly one of the
+  //    4 named-stage cards + "Other Open Pipeline"), summing exactly to
+  //    Total Open Pipeline. Each card also shows the underlying opportunity
+  //    count (same filtered array already built above, just `.length`) so
+  //    the current-stage framing is visible at a glance, not just in the
+  //    subtitle/tooltip. Click-through still targets the general Pipeline
+  //    page (no existing per-stage filter mechanism to route to — same
+  //    reasoning as the original Financial Performance rebuild).
+  const oppWord = n => n===1 ? 'opportunity' : 'opportunities';
+  const salesPipelineKpis = [
+    { label:'Total Open Pipeline', value: money(pipelineValue), count:`${openLeads.length} ${oppWord(openLeads.length)}`,
+      sub:'All active opportunities', icon:'columns', color:'#ff8a3d', go:'pipeline', goLabel:'Pipeline', strong:true },
+    { label: pipelineStageLabel(QUOTE_AND_DEMO_SENT_STATUS), value: money(quoteDemoSentValue), count:`${quoteDemoSentLeads.length} ${oppWord(quoteDemoSentLeads.length)}`,
+      sub:'Currently at this stage', icon:'list', color:'#1d7bff', go:'pipeline', goLabel:'Pipeline' },
+    { label: pipelineStageLabel(POTENTIAL_FOLLOWUP_STATUS), value: money(potentialFollowupValue), count:`${potentialFollowupLeads.length} ${oppWord(potentialFollowupLeads.length)}`,
+      sub:'Currently awaiting follow-up', icon:'clock', color:'#d98a12', go:'pipeline', goLabel:'Pipeline' },
+    { label:'Negotiation', value: money(negotiationValue), count:`${negotiationLeads.length} ${oppWord(negotiationLeads.length)}`,
+      sub:'Currently under negotiation', icon:'grid', color:'#7c5cff', go:'pipeline', goLabel:'Pipeline' },
+    { label:'Other Open Pipeline', value: money(otherOpenPipelineValue), count:`${otherOpenLeads.length} ${oppWord(otherOpenLeads.length)}`,
+      sub:'Other active pipeline stages', icon:'grid', color:'#5a6b8c', go:'pipeline', goLabel:'Pipeline' },
   ];
-  const financialKpisRow2 = [
+  // B. REVENUE PERFORMANCE — unchanged definitions/calculations from the
+  //    immediately preceding task, just relabeled as its own section.
+  const revenuePerformanceKpis = [
     { label:'Closed Sales Value', value: money(closedSalesValue), icon:'briefcase', color:'#0d8a5f', go:'projects', goLabel:'Projects' },
     { label:'Collected Revenue', value: money(collectedRevenue), icon:'dollar', color:'#12a775', go:'payments', goLabel:'Payments' },
     { label:'Outstanding Balance', value: money(outstanding), icon:'dollar', color:'#e0473c', go:'payments', goLabel:'Payments' },
@@ -146,11 +207,9 @@ function renderDashboard(){
   el.innerHTML = `
     ${kpiGroupHtml('Sales Pipeline', pipelineKpis)}
     ${kpiGroupHtml('Project Delivery', deliveryKpis, 'kpi-grid-2')}
-    <div class="kpi-group">
-      <div class="kpi-group-title">Financial Performance</div>
-      <div class="kpi-grid">${financialKpisRow1.map(kpiCardHtml).join('')}</div>
-      <div class="kpi-grid-3">${financialKpisRow2.map(kpiCardHtml).join('')}</div>
-    </div>
+    ${kpiGroupHtml('Sales Pipeline Value', salesPipelineKpis, 'kpi-grid-5',
+      'Pipeline stage values represent each opportunity\'s current stage only.')}
+    ${kpiGroupHtml('Revenue Performance', revenuePerformanceKpis, 'kpi-grid-3')}
     <div class="two-col" style="margin-bottom:16px">
       <div class="panel">
         <div class="panel-head"><h3>Pipeline Value by Industry</h3></div>
@@ -184,7 +243,7 @@ function renderDashboard(){
                   <div class="mini-title">${escapeHtml(l.businessName)} <span class="text-muted" style="font-weight:600">— ${escapeHtml(l.clientName)}</span></div>
                   <div class="mini-sub">${l.id} · ${escapeHtml(l.assignedSales)} · ${money(l.estimatedValue)}</div>
                 </div>
-                <div class="mini-right">${statusBadge(l.status)}<div style="margin-top:4px">${fmtDate(l.createdAt)}</div></div>
+                <div class="mini-right">${statusBadge(l.status, pipelineStageLabel(l.status))}<div style="margin-top:4px">${fmtDate(l.createdAt)}</div></div>
               </div>`).join('') : `<div class="empty-row">No leads yet.</div>`}
           </div>
         </div>
@@ -198,7 +257,7 @@ function renderDashboard(){
                   <div class="mini-title">${escapeHtml(l.clientName)} — ${escapeHtml(l.businessName)}</div>
                   <div class="mini-sub">${escapeHtml(l.assignedSales)} · ${escapeHtml(l.phone)}</div>
                 </div>
-                <div class="mini-right">${statusBadge(l.status)}</div>
+                <div class="mini-right">${statusBadge(l.status, pipelineStageLabel(l.status))}</div>
               </div>`).join('') : `<div class="empty-row">Nothing due today. 🎉</div>`}
           </div>
         </div>
@@ -262,6 +321,10 @@ function renderDashboard(){
     PIPELINE_FILTER_STATE.followup = x.dataset.goPipeline;
     window.location.hash = '#pipeline';
   });
+  // Wires the "Sales Pipeline Value" section-header help button — same
+  // shared hover/click/keyboard tooltip mechanism as Lead Records' KPI
+  // cards (leads.js), reused rather than reinvented.
+  if(typeof wireKpiHelpTooltips === 'function') wireKpiHelpTooltips(el);
 }
 
 /* ---------------------------------------------------------------------- */

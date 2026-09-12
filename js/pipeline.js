@@ -198,7 +198,7 @@ function renderPipelinePage(){
         <div class="pipeline-col" data-status="${st}">
           <div class="pipeline-col-head">
             <div>
-              <div class="col-title">${st}</div>
+              <div class="col-title">${escapeHtml(pipelineStageLabel(st))}</div>
               <div class="text-muted" style="font-size:10.5px;margin-top:2px">${money(total)}</div>
             </div>
             <div class="col-count">${cards.length}</div>
@@ -432,7 +432,7 @@ function openAddToPipelineModal(opts={}){
           </div>
           <div class="text-muted" style="margin-top:6px;font-size:12px">
             Interested Service: ${escapeHtml(serviceDisplayName(selectedLead.interestedService))} · Est. Value: ${money(selectedLead.estimatedValue)}<br>
-            Assigned Sales: ${escapeHtml(selectedLead.assignedSales||'—')} · Current Status: ${statusBadge(selectedLead.status)}
+            Assigned Sales: ${escapeHtml(selectedLead.assignedSales||'—')} · Current Status: ${statusBadge(selectedLead.status, pipelineStageLabel(selectedLead.status))}
           </div>
         </div>`;
       overlay.querySelector('#atpUnselect').onclick = ()=>{ selectedLead=null; codeInput.value=''; renderSelected(); if(typeof renderResults==='function') renderResults(); };
@@ -506,7 +506,7 @@ function openAddToPipelineModal(opts={}){
           <div class="mini-main">
             <div class="mini-title">${l.id} — ${escapeHtml(l.businessName)}</div>
             <div class="mini-sub">Client: ${escapeHtml(l.clientName)} · ${escapeHtml(l.interestedService?serviceDisplayName(l.interestedService):'—')}</div>
-            <div class="mini-sub" style="margin-top:3px">${statusBadge(l.status)}</div>
+            <div class="mini-sub" style="margin-top:3px">${statusBadge(l.status, pipelineStageLabel(l.status))}</div>
           </div>
           ${eligibilityPill(l)}
         </div>`;
@@ -741,7 +741,7 @@ function openArchivedPipelineModal(){
             ${icon('search')}
             <input type="text" id="paSearch" placeholder="Search Lead ID, Project Code, client, business, or service…" value="${escapeHtml(PA_FILTER_STATE.search)}">
           </div>
-          <select id="paFltStage" class="sel" title="Last Pipeline Stage"><option value="">All Stages</option>${PIPELINE_STATUSES.map(s=>`<option ${PA_FILTER_STATE.stage===s?'selected':''}>${s}</option>`).join('')}</select>
+          <select id="paFltStage" class="sel" title="Last Pipeline Stage"><option value="">All Stages</option>${PIPELINE_STATUSES.map(s=>`<option value="${escapeHtml(s)}" ${PA_FILTER_STATE.stage===s?'selected':''}>${escapeHtml(pipelineStageLabel(s))}</option>`).join('')}</select>
           <select id="paFltSales" class="sel" title="Sales Person"><option value="">All Sales</option>${salesOwnersList().map(s=>`<option ${PA_FILTER_STATE.sales===s?'selected':''}>${s}</option>`).join('')}</select>
           <select id="paFltService" class="sel" title="Service"><option value="">All Services</option>${SERVICE_TYPES.map(s=>`<option value="${escapeHtml(s)}" ${PA_FILTER_STATE.service===s?'selected':''}>${escapeHtml(serviceDisplayName(s))}</option>`).join('')}</select>
           <select id="paFltIndustry" class="sel" title="Industry"><option value="">All Industries</option>${INDUSTRIES.map(s=>`<option ${PA_FILTER_STATE.industry===s?'selected':''}>${s}</option>`).join('')}</select>
@@ -813,7 +813,7 @@ function renderPaTable(overlay){
               <td>${escapeHtml(l.businessName)}</td>
               <td>${escapeHtml(l.interestedService?serviceDisplayName(l.interestedService):'—')}</td>
               <td class="cell-strong">${money(l.estimatedValue)}</td>
-              <td>${statusBadge(l.status)}</td>
+              <td>${statusBadge(l.status, pipelineStageLabel(l.status))}</td>
               <td class="cell-nowrap">${l.archivedAt ? fmtDate(l.archivedAt) : '—'}</td>
               <td>${escapeHtml(l.archivedBy||'—')}${l.archiveReason ? `<div class="cell-sub" title="${escapeHtml(l.archiveReason)}">${escapeHtml(l.archiveReason)}</div>` : ''}</td>
               <td>
@@ -906,8 +906,8 @@ function openRestoreToPipelineModal(lead, onDone){
     <div class="modal-body">
       <p style="margin-top:0">Restore this opportunity to Pipeline?</p>
       <p class="text-muted" style="font-size:12.5px">
-        <b>${escapeHtml(lead.clientName)} — ${escapeHtml(lead.businessName)}</b> (${lead.id}${lead.projectCode?' · Project '+escapeHtml(lead.projectCode):''}) will be restored to its last valid Pipeline stage: ${statusBadge(targetStage)}
-        ${fallback ? `<br><span style="margin-top:4px;display:inline-block">Its previous stage (${escapeHtml(lead.status)}) no longer exists on the board, so it will fall back to ${QUOTE_AND_DEMO_SENT_STATUS}.</span>` : ''}
+        <b>${escapeHtml(lead.clientName)} — ${escapeHtml(lead.businessName)}</b> (${lead.id}${lead.projectCode?' · Project '+escapeHtml(lead.projectCode):''}) will be restored to its last valid Pipeline stage: ${statusBadge(targetStage, pipelineStageLabel(targetStage))}
+        ${fallback ? `<br><span style="margin-top:4px;display:inline-block">Its previous stage (${escapeHtml(pipelineStageLabel(lead.status))}) no longer exists on the board, so it will fall back to ${escapeHtml(pipelineStageLabel(QUOTE_AND_DEMO_SENT_STATUS))}.</span>` : ''}
       </p>
     </div>
     <div class="modal-foot">

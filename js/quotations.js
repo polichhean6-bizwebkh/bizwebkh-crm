@@ -662,8 +662,8 @@ function renderCreateQuotationModal(){
         resultsEl.style.display = 'block';
         resultsEl.innerHTML = matches.length ? matches.map(l=>`
           <div class="atp-row" data-pick="${l.id}">
-            <div class="mini-main"><div class="mini-title">${escapeHtml(l.id)} — ${escapeHtml(l.clientName)}</div><div class="mini-sub">${escapeHtml(l.businessName)} · ${escapeHtml(l.status)}</div></div>
-            <span class="atp-pill ${PIPELINE_STATUSES.includes(l.status)?'atp-pill-select':'atp-pill-notqualified'}">${PIPELINE_STATUSES.includes(l.status)?'Pipeline':l.status}</span>
+            <div class="mini-main"><div class="mini-title">${escapeHtml(l.id)} — ${escapeHtml(l.clientName)}</div><div class="mini-sub">${escapeHtml(l.businessName)} · ${escapeHtml(pipelineStageLabel(l.status))}</div></div>
+            <span class="atp-pill ${PIPELINE_STATUSES.includes(l.status)?'atp-pill-select':'atp-pill-notqualified'}">${PIPELINE_STATUSES.includes(l.status)?'Pipeline':escapeHtml(pipelineStageLabel(l.status))}</span>
           </div>`).join('') : `<div class="empty-row">No matching Lead Record found.</div>`;
         resultsEl.querySelectorAll('[data-pick]').forEach(r=> r.onclick = ()=>{
           applyLeadToQC(r.dataset.pick);

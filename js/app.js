@@ -104,9 +104,16 @@ function escapeHtml(s){
   return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-function statusBadge(status){
+// `displayText` is an optional override for the visible label only — the
+// CSS class is always derived from the real `status` (slug(status)), so an
+// internal value's badge color/class never changes even when its displayed
+// wording does (see pipelineStageLabel in data.js, used only at LEAD
+// pipeline-stage call sites — never passed for project stage / function
+// status / other domains that happen to share a literal value like
+// 'Confirmed').
+function statusBadge(status, displayText){
   if(!status) return '';
-  return `<span class="badge st-${slug(status)}"><span class="badge-dot"></span>${escapeHtml(status)}</span>`;
+  return `<span class="badge st-${slug(status)}"><span class="badge-dot"></span>${escapeHtml(displayText!=null?displayText:status)}</span>`;
 }
 function paymentBadge(status){
   return `<span class="badge pay-${slug(status)}"><span class="badge-dot"></span>${escapeHtml(status)}</span>`;
@@ -260,9 +267,9 @@ function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus,
     <div class="modal-body">
       <p class="text-muted" style="margin:0 0 6px;font-size:12.5px">${escapeHtml(refLabel)}</p>
       <div class="status-flow">
-        ${statusBadge(fromStatus)}
+        ${statusBadge(fromStatus, refType==='lead' ? pipelineStageLabel(fromStatus) : undefined)}
         <span class="arrow">&rarr;</span>
-        ${statusBadge(toStatus)}
+        ${statusBadge(toStatus, refType==='lead' ? pipelineStageLabel(toStatus) : undefined)}
       </div>
       <div class="form-field" style="margin-bottom:12px">
         <label>Changed by</label>
@@ -280,7 +287,7 @@ function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus,
       <div class="form-field" style="margin-bottom:12px">
         <label class="required">Project Code</label>
         <input type="text" id="scmProjectCode" placeholder="e.g. C046" value="${escapeHtml(suggestNextProjectCode())}" style="text-transform:uppercase">
-        <span class="form-hint">Required from "${escapeHtml(toStatus)}" onward — must be unique (not case-sensitive).</span>
+        <span class="form-hint">Required from "${escapeHtml(pipelineStageLabel(toStatus))}" onward — must be unique (not case-sensitive).</span>
       </div>` : ''}
       ${needsHoldFollowup ? `
       <div class="form-field" style="margin-bottom:12px">
@@ -421,7 +428,9 @@ function renderShell(){
     <div class="app-shell">
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-brand">
-          <img class="brand-logo" src="../assets/branding/bizweb-kh-logo-white.svg" alt="BizWeb KH">
+          <div class="brand-logo-badge">
+            <img class="brand-logo" src="../assets/branding/bizweb-kh-logo-main.svg" alt="BizWeb KH">
+          </div>
           <span class="brand-caption">Internal CRM</span>
         </div>
         <nav class="sidebar-nav" id="sidebarNav"></nav>

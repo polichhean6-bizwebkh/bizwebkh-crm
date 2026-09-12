@@ -55,7 +55,7 @@ function renderLeadsPage(){
         ${icon('search')}
         <input type="text" id="leadSearch" placeholder="Search client, business, phone, or Lead ID…" value="${escapeHtml(LEADS_FILTER_STATE.search)}">
       </div>
-      <select id="fltStatus" class="sel"><option value="">All Statuses</option>${LEAD_STATUSES.map(s=>`<option ${LEADS_FILTER_STATE.status===s?'selected':''}>${s}</option>`).join('')}</select>
+      <select id="fltStatus" class="sel"><option value="">All Statuses</option>${LEAD_STATUSES.map(s=>`<option value="${escapeHtml(s)}" ${LEADS_FILTER_STATE.status===s?'selected':''}>${escapeHtml(pipelineStageLabel(s))}</option>`).join('')}</select>
       <select id="fltIndustry" class="sel"><option value="">All Industries</option>${INDUSTRIES.map(s=>`<option ${LEADS_FILTER_STATE.industry===s?'selected':''}>${s}</option>`).join('')}</select>
       <select id="fltService" class="sel"><option value="">All Services</option>${SERVICE_TYPES.map(s=>`<option value="${escapeHtml(s)}" ${LEADS_FILTER_STATE.service===s?'selected':''}>${escapeHtml(serviceDisplayName(s))}</option>`).join('')}</select>
       <select id="fltSales" class="sel"><option value="">All Sales</option>${salesOwnersList().map(s=>`<option ${LEADS_FILTER_STATE.sales===s?'selected':''}>${s}</option>`).join('')}</select>
@@ -373,7 +373,7 @@ function renderLeadsTable(){
               <td>${escapeHtml(serviceDisplayName(l.interestedService))}</td>
               <td class="cell-strong">${money(l.estimatedValue)}</td>
               <td><div class="flex-row"><div class="avatar-sm" style="background:${userColor(l.assignedSales)}">${userInitials(l.assignedSales)}</div>${escapeHtml(l.assignedSales)}</div></td>
-              <td>${statusBadge(l.status)}${l.archived ? `<div class="cell-sub" style="color:var(--muted)">Archived</div>` : ''}</td>
+              <td>${statusBadge(l.status, pipelineStageLabel(l.status))}${l.archived ? `<div class="cell-sub" style="color:var(--muted)">Archived</div>` : ''}</td>
               <td>${urgencyChip(l.nextFollowup)}</td>
               <td>
                 <div class="flex-row" style="gap:6px;flex-wrap:wrap">
@@ -471,7 +471,7 @@ function openLeadFormModal(leadId){
           <select id="lf_source">${LEAD_SOURCES.map(s=>`<option ${lead?.leadSource===s?'selected':''}>${s}</option>`).join('')}</select></div>
         ${assignedSalesFieldHtml({ id:'lf_sales', currentValue: lead?.assignedSales })}
         <div class="form-field"><label class="required">Current Status</label>
-          <select id="lf_status" ${editing?'disabled':''}>${LEAD_STATUSES.map(s=>`<option ${(lead?.status||'New Lead')===s?'selected':''}>${s}</option>`).join('')}</select>
+          <select id="lf_status" ${editing?'disabled':''}>${LEAD_STATUSES.map(s=>`<option value="${escapeHtml(s)}" ${(lead?.status||'New Lead')===s?'selected':''}>${escapeHtml(pipelineStageLabel(s))}</option>`).join('')}</select>
           ${editing?'<span class="form-hint">Use the status button on the lead detail page to change status (it will be logged).</span>':''}
         </div>
         <div class="form-field"><label>Next Follow-up Date</label><input type="date" id="lf_followup" min="${todayLocalISO()}" value="${lead?.nextFollowup||''}"></div>
@@ -561,7 +561,7 @@ function openLeadFormModal(leadId){
         DB.upsert('leads', newLead);
         logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: id, refLabel:`${clientName} — ${businessName}`,
           type:'Lead Created', description:`${CURRENT_USER.name} created lead ${id} (${businessName}) from ${newLead.leadSource}.`,
-          toValue: newLead.status });
+          toValue: pipelineStageLabel(newLead.status) });
         toast('Lead created.', 'success');
       }
       closeModal();
@@ -602,7 +602,7 @@ function renderLeadDetail(leadId){
         ${isFounder() ? `<button class="btn btn-outline btn-sm" id="ldRestore">Restore</button>` : ''}
       </div>` : ''}
       <div class="flex-row" style="justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-        <div class="flex-row">${statusBadge(lead.status)}${lead.lostReason?`<span class="text-muted" style="font-size:12px">Reason: ${escapeHtml(lead.lostReason)}</span>`:''}${lead.status===ON_HOLD_STATUS && lead.holdReason?`<span class="text-muted" style="font-size:12px">Note: ${escapeHtml(lead.holdReason)}</span>`:''}</div>
+        <div class="flex-row">${statusBadge(lead.status, pipelineStageLabel(lead.status))}${lead.lostReason?`<span class="text-muted" style="font-size:12px">Reason: ${escapeHtml(lead.lostReason)}</span>`:''}${lead.status===ON_HOLD_STATUS && lead.holdReason?`<span class="text-muted" style="font-size:12px">Note: ${escapeHtml(lead.holdReason)}</span>`:''}</div>
         <div class="flex-row" style="flex-wrap:wrap;gap:8px">
           <button class="btn btn-secondary btn-sm" id="ldEdit">Edit</button>
           ${!['Lost','Confirmed'].includes(lead.status) ? `<button class="btn btn-outline btn-sm" id="ldChangeStatus">Change Status</button>`:''}
@@ -773,7 +773,7 @@ function openLeadStatusPicker(lead){
     <div class="modal-head"><h3>Move to which status?</h3><button class="modal-close" id="spClose">&times;</button></div>
     <div class="modal-body">
       <div class="form-field"><label>New Status</label>
-        <select id="spSelect">${options.map(s=>`<option>${s}</option>`).join('')}</select>
+        <select id="spSelect">${options.map(s=>`<option value="${escapeHtml(s)}">${escapeHtml(pipelineStageLabel(s))}</option>`).join('')}</select>
       </div>
     </div>
     <div class="modal-foot">
@@ -860,10 +860,10 @@ function applyLeadStatusChange(lead, newStatus){
       logActivity({
         userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
         type: newStatus==='Lost' ? 'Lead Lost' : 'Status Changed',
-        description:`${CURRENT_USER.name} changed status: ${prevStatus} → ${newStatus}`,
-        fromValue: prevStatus, toValue: newStatus, remark
+        description:`${CURRENT_USER.name} changed status: ${pipelineStageLabel(prevStatus)} → ${pipelineStageLabel(newStatus)}`,
+        fromValue: pipelineStageLabel(prevStatus), toValue: pipelineStageLabel(newStatus), remark
       });
-      toast(`Status changed to "${newStatus}".`, 'success');
+      toast(`Status changed to "${pipelineStageLabel(newStatus)}".`, 'success');
       if(currentRoute()==='leads') renderLeadsTable();
       if(currentRoute()==='pipeline') renderPipelinePage();
       if(currentRoute()==='dashboard') router();
@@ -895,8 +895,8 @@ function advanceLeadToPipeline(lead, projectCode){
   logActivity({
     userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
     type:'Lead Added to Pipeline',
-    description:`${CURRENT_USER.name} added ${lead.id} — ${lead.businessName} to Pipeline: ${prevStatus} → ${QUOTE_AND_DEMO_SENT_STATUS}. Project Code: ${projectCode}.`,
-    fromValue: prevStatus, toValue: QUOTE_AND_DEMO_SENT_STATUS
+    description:`${CURRENT_USER.name} added ${lead.id} — ${lead.businessName} to Pipeline: ${pipelineStageLabel(prevStatus)} → ${pipelineStageLabel(QUOTE_AND_DEMO_SENT_STATUS)}. Project Code: ${projectCode}.`,
+    fromValue: pipelineStageLabel(prevStatus), toValue: pipelineStageLabel(QUOTE_AND_DEMO_SENT_STATUS)
   });
 }
 
@@ -937,7 +937,7 @@ function openEditProjectCodeModal(lead, onDone){
 
       if(!normalized && required){
         codeInput.style.borderColor='var(--red)';
-        toast(`Project Code is required for a lead at "${lead.status}".`, 'error');
+        toast(`Project Code is required for a lead at "${pipelineStageLabel(lead.status)}".`, 'error');
         return;
       }
       if(normalized && isProjectCodeTaken(normalized, { excludeLeadId: lead.id })){
@@ -1040,7 +1040,7 @@ function restoreLead(lead, onDone){
   DB.upsert('leads', lead);
   logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
     type:'Lead Restored',
-    description:`${CURRENT_USER.name} restored opportunity ${lead.id}${lead.projectCode?` (Project Code: ${lead.projectCode})`:''} — Restored Stage: ${lead.status}.` });
+    description:`${CURRENT_USER.name} restored opportunity ${lead.id}${lead.projectCode?` (Project Code: ${lead.projectCode})`:''} — Restored Stage: ${pipelineStageLabel(lead.status)}.` });
   toast('Restored.', 'success');
   if(currentRoute()==='leads') renderLeadsTable();
   if(currentRoute()==='pipeline') renderPipelinePage();
@@ -1071,8 +1071,8 @@ function restoreLeadToPipeline(lead, onDone){
   DB.upsert('leads', fresh);
   logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: fresh.id, refLabel:`${fresh.clientName} — ${fresh.businessName}`,
     type:'Lead Restored',
-    description:`${CURRENT_USER.name} restored opportunity ${fresh.id}${fresh.projectCode?` (Project Code: ${fresh.projectCode})`:''} to Pipeline — Restored Stage: ${fresh.status}.${validStage?'':` (${prevStage} no longer exists on the board, fell back to ${QUOTE_AND_DEMO_SENT_STATUS})`}` });
-  toast(`${fresh.id} restored to ${fresh.status}.`, 'success');
+    description:`${CURRENT_USER.name} restored opportunity ${fresh.id}${fresh.projectCode?` (Project Code: ${fresh.projectCode})`:''} to Pipeline — Restored Stage: ${pipelineStageLabel(fresh.status)}.${validStage?'':` (${pipelineStageLabel(prevStage)} no longer exists on the board, fell back to ${pipelineStageLabel(QUOTE_AND_DEMO_SENT_STATUS)})`}` });
+  toast(`${fresh.id} restored to ${pipelineStageLabel(fresh.status)}.`, 'success');
   if(currentRoute()==='leads') renderLeadsTable();
   if(currentRoute()==='pipeline') renderPipelinePage();
   if(onDone) onDone();
@@ -1119,7 +1119,7 @@ function openDeleteLeadModal(lead){
       <p style="margin-top:0">This will remove the lead from Lead Records, Pipeline and scheduled follow-ups. This action cannot be undone.</p>
       <div class="panel" style="padding:12px 14px;background:var(--red-soft);border:1px solid var(--line)">
         <div class="cell-strong" style="font-size:14px">${escapeHtml(lead.clientName)} — ${escapeHtml(lead.businessName)}</div>
-        <div class="text-muted" style="font-size:12px;margin-top:2px">${lead.id} · ${escapeHtml(lead.status)}</div>
+        <div class="text-muted" style="font-size:12px;margin-top:2px">${lead.id} · ${escapeHtml(pipelineStageLabel(lead.status))}</div>
       </div>
     </div>
     <div class="modal-foot">

@@ -922,9 +922,9 @@ function openConfirmProjectModal(lead){
         lead.updatedAt = new Date().toISOString();
         DB.upsert('leads', lead);
         logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
-          type:'Status Changed', description:`${CURRENT_USER.name} changed status: ${prevStatus} → Confirmed`,
-          fromValue: prevStatus, toValue:'Confirmed', remark: remark || `No new project created — already linked to ${lead.projectCode}.` });
-        toast(`Status changed to "Confirmed". Project ${lead.projectCode} was not duplicated.`, 'success');
+          type:'Status Changed', description:`${CURRENT_USER.name} changed status: ${pipelineStageLabel(prevStatus)} → ${pipelineStageLabel('Confirmed')}`,
+          fromValue: pipelineStageLabel(prevStatus), toValue: pipelineStageLabel('Confirmed'), remark: remark || `No new project created — already linked to ${lead.projectCode}.` });
+        toast(`Status changed to "${pipelineStageLabel('Confirmed')}". Project ${lead.projectCode} was not duplicated.`, 'success');
         refreshAfterLeadOrProjectChange();
       };
     }});
@@ -1001,8 +1001,8 @@ function openConfirmProjectModal(lead){
       lead.updatedAt = new Date().toISOString();
       DB.upsert('leads', lead);
       logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
-        type:'Status Changed', description:`${CURRENT_USER.name} changed status: ${prevStatus} → Confirmed`,
-        fromValue: prevStatus, toValue:'Confirmed', remark });
+        type:'Status Changed', description:`${CURRENT_USER.name} changed status: ${pipelineStageLabel(prevStatus)} → ${pipelineStageLabel('Confirmed')}`,
+        fromValue: pipelineStageLabel(prevStatus), toValue: pipelineStageLabel('Confirmed'), remark });
 
       // 2. auto-create the linked project (no re-entry of client info)
       createProjectRecord({ code, lead, confirmedValue, depositPct, startDate, expectedDelivery });

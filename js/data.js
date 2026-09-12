@@ -113,6 +113,33 @@ function leadStatusRequiresProjectCode(status){
   return idx>=0 && idx>=gateIdx;
 }
 
+// DISPLAY-LABEL-ONLY rename layer (pipeline stage relabel task). The
+// internal stored/compared values above (QUOTE_AND_DEMO_SENT_STATUS,
+// POTENTIAL_FOLLOWUP_STATUS, the literal 'Confirmed' LEAD status) are
+// UNCHANGED — every lead record, filter, comparison (`status===...`) and
+// <option value="..."> keeps using these exact original strings forever.
+// Only what the UI *displays* for a lead's pipeline stage changes, via this
+// lookup. ON_HOLD_STATUS and 'Negotiation' are deliberately absent — their
+// displayed wording is unchanged, so they fall through to the identity
+// default below.
+//
+// IMPORTANT: 'Confirmed' is also used, as the exact same literal string,
+// for Project.stage (delivery workflow) and per-function status
+// (FUNCTION_STATUSES / DEFAULT_FUNCTION_STATUS) — those are a DIFFERENT
+// concept from the lead's pipeline stage and are OUT OF SCOPE for this
+// relabel. This map/helper must therefore only ever be applied where the
+// value being displayed is known to be a LEAD's pipeline stage — never
+// generically to every 'Confirmed' string in the app (see statusBadge()'s
+// optional displayText override in app.js, and each call site below).
+const PIPELINE_STAGE_DISPLAY_LABELS = {
+  [QUOTE_AND_DEMO_SENT_STATUS]: 'Awaiting Client Feedback',
+  [POTENTIAL_FOLLOWUP_STATUS]: 'Follow-Up / Interested',
+  'Confirmed': 'Confirmed / Won'
+};
+function pipelineStageLabel(status){
+  return PIPELINE_STAGE_DISPLAY_LABELS[status] || status;
+}
+
 // PROJECT / DELIVERY STATUS ONLY — completely separate axis from lead
 // status. A project always starts at Confirmed and can move forward through
 // delivery, or sideways into On Hold / Cancelled.
