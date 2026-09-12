@@ -471,6 +471,15 @@ svg{width:18px;height:18px}
 .st-founder-approved{background:var(--green-soft);color:var(--green)}
 .st-founder-rejected{background:var(--red-soft);color:var(--red)}
 
+/* Invoices module — invoice status badges (slug of the `status` field
+   directly, same statusBadge() convention as everywhere else). "Issued"
+   reuses the same blue as quotations' "Sent to Client" (both mean "live,
+   nothing settled yet"); Partially Paid / Paid reuse the palette already
+   established by the Payment Status badges just below. */
+.st-issued{background:#e6f2ff;color:#1d6fe0}
+.st-partially-paid{background:#e5edff;color:#3757d6}
+.st-paid{background:var(--green-soft);color:var(--green)}
+
 .pay-not-paid{background:var(--red-soft);color:var(--red)}
 .pay-deposit-paid{background:var(--amber-soft);color:var(--amber)}
 .pay-partially-paid{background:#e5edff;color:#3757d6}
