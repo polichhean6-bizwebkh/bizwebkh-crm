@@ -229,6 +229,23 @@ function defaultAnnualCostState(svc){
 // Deep-ish clone + shape-guard so a stored/legacy-derived object can never
 // crash the form on a missing sub-key (older/partial saves, hand-edited
 // fixtures in tests, etc.).
+// Year 1 Maintenance REMARK (informational, zero price impact) shape guard.
+// Defaults to DISABLED whenever no remark object is present at all — the
+// deliberate backward-compat rule (spec: "loading an old quotation with no
+// year1MaintenanceRemark field ... default the new control to DISABLED/off").
+// A brand-new quotation instead starts from defaultAnnualCostForService()'s
+// explicit `{enabled:true,...}` object, which passes straight through here
+// unchanged (mr.enabled is already true) — see defaultAnnualCostForService()
+// in data.js for that other half of the distinction.
+const YEAR1_MAINT_REMARK_PERIODS = ['1 Month','2 Months','3 Months','6 Months','1 Year','Custom'];
+function normalizeYear1MaintenanceRemark(mr){
+  const period = (mr && YEAR1_MAINT_REMARK_PERIODS.includes(mr.period)) ? mr.period : '1 Month';
+  return {
+    enabled: !!(mr && mr.enabled),
+    period,
+    customText: (mr && typeof mr.customText==='string') ? mr.customText : '',
+  };
+}
 function normalizeAnnualCost(ac){
   const y1 = (ac && ac.year1) || {};
   const y2 = (ac && ac.year2) || {};
@@ -236,7 +253,8 @@ function normalizeAnnualCost(ac){
   return {
     year1: { domain:Number(y1.domain)||0, domainMode: y1.domainMode||'included',
              hosting:Number(y1.hosting)||0, hostingIncluded: y1.hostingIncluded!==false,
-             maintenance:Number(y1.maintenance)||0, maintenanceMode: y1.maintenanceMode||'included' },
+             maintenance:Number(y1.maintenance)||0, maintenanceMode: y1.maintenanceMode||'included',
+             maintenanceRemark: normalizeYear1MaintenanceRemark(y1.maintenanceRemark) },
     year2: { domain:Number(y2.domain)||0, hosting:Number(y2.hosting)||0, maintenance:Number(y2.maintenance)||0, displayMode: y2.displayMode||'estimated' },
     year3: { domain:Number(y3.domain)||0, hosting:Number(y3.hosting)||0, maintenance:Number(y3.maintenance)||0, displayMode: y3.displayMode||'estimated' },
   };
@@ -365,19 +383,45 @@ function qcYearAmountDisplay(amount, mode){
   return '~'+money(amt)+'/year'; // 'estimated' (default)
 }
 
-// The two maintenance wording notes (spec §14) — regenerated fresh from the
-// live maintenance state every time (never stored as static text), and only
-// added when maintenance was actually mentioned on this quotation at all.
+// The Maintenance Renewal wording note (spec §14) — regenerated fresh from
+// the live maintenance state every time (never stored as static text), and
+// only added when Year 1 maintenance was actually mentioned on this
+// quotation at all. NOTE: this used to also generate a "Year 1 Maintenance"
+// note here (auto-injected purely from the cost/Included-Free toggle) — that
+// note has been REMOVED. The old text ("Basic maintenance and support
+// included for Year 1.") wrongly implied a full year of free coverage, and
+// is now fully replaced by the independent, explicit Year 1 Maintenance
+// Remark control (see year1MaintenanceRemarkNotes() below) — the cost toggle
+// itself never auto-injects any Important Note any more.
 function maintenanceWordingNotes(maintenance){
   const m = maintenance;
   if(!m || m.year1Mode==='not_included') return [];
-  const notes = [
-    { key:'maintenanceY1', title:'Year 1 Maintenance', text: m.year1Mode==='included'
-        ? 'Basic maintenance and support included for Year 1.'
-        : `Year 1 maintenance is billed separately at ${money(Number(m.year1Cost)||0)}. Standard maintenance covers minor bug fixes, basic CMS/admin guidance, and small support within the existing scope — it does not include new features, major redesign, new integrations, or major workflow changes.` },
+  return [
     { key:'maintenanceRenewal', title:'Maintenance Renewal', text:'Annual maintenance and support is billed separately from Year 2 onward at the quoted/confirmed annual rate. Standard maintenance covers minor bug fixes, basic CMS/admin guidance, and small support within the existing scope — it does not include new features, major redesign, new integrations, or major workflow changes.' },
   ];
-  return notes;
+}
+
+// Year 1 Maintenance REMARK (informational, zero price impact) — the exact
+// resulting sentence shown both in the live form preview and (prefixed with
+// "Year 1 Maintenance: " via the standard title+text note renderer) in the
+// printed Important Notes list. Custom wording is used VERBATIM — never
+// wrapped in the template sentence.
+const YEAR1_MAINT_REMARK_PERIOD_TEXT = { '1 Month':'1 month', '2 Months':'2 months', '3 Months':'3 months', '6 Months':'6 months', '1 Year':'1 year' };
+function year1MaintenanceRemarkSentence(mr){
+  if(!mr) return '';
+  if(mr.period==='Custom') return String(mr.customText||'').trim();
+  const periodText = YEAR1_MAINT_REMARK_PERIOD_TEXT[mr.period] || '1 month';
+  return `${periodText} basic maintenance and support is included at no additional cost.`;
+}
+// The ONLY source of any Year-1-maintenance-related Important Note (spec):
+// emits exactly one note, only when the remark is enabled and has non-empty
+// resulting wording (guards against an empty Custom text producing a blank
+// note). Never touches Year 1 Total/Subtotal/Payment Schedule — purely text.
+function year1MaintenanceRemarkNotes(mr){
+  if(!mr || !mr.enabled) return [];
+  const text = year1MaintenanceRemarkSentence(mr);
+  if(!text) return [];
+  return [{ key:'year1MaintenanceRemark', title:'Year 1 Maintenance', text }];
 }
 
 // Non-destructive display filter for spec §15: hides a standard exclusion
@@ -707,6 +751,13 @@ function renderCreateQuotationModal(){
     const y1HostingInc = overlay.querySelector('#cq_y1_hostingIncluded'); if(y1HostingInc) y1HostingInc.onchange = e=>{ ac.year1.hostingIncluded = e.target.checked; renderCreateQuotationModal(); };
     const y1Maint = overlay.querySelector('#cq_y1_maint'); if(y1Maint) y1Maint.oninput = e=>{ ac.year1.maintenance = e.target.value; refreshQcPreview(overlay); };
     const y1MaintInc = overlay.querySelector('#cq_y1_maintIncluded'); if(y1MaintInc) y1MaintInc.onchange = e=>{ ac.year1.maintenanceMode = e.target.checked?'included':'paid'; renderCreateQuotationModal(); };
+    // Year 1 Maintenance Remark (informational, zero price impact) — fully
+    // independent from the cost fields above. Toggling/period/custom text
+    // never touches ac.year1.maintenance/maintenanceMode, so it can never
+    // change Year 1 Total/Subtotal/Payment Schedule.
+    const y1MaintRemarkEnabled = overlay.querySelector('#cq_y1_maintRemarkEnabled'); if(y1MaintRemarkEnabled) y1MaintRemarkEnabled.onchange = e=>{ ac.year1.maintenanceRemark.enabled = e.target.checked; renderCreateQuotationModal(); };
+    const y1MaintRemarkPeriod = overlay.querySelector('#cq_y1_maintRemarkPeriod'); if(y1MaintRemarkPeriod) y1MaintRemarkPeriod.onchange = e=>{ ac.year1.maintenanceRemark.period = e.target.value; renderCreateQuotationModal(); };
+    const y1MaintRemarkCustom = overlay.querySelector('#cq_y1_maintRemarkCustom'); if(y1MaintRemarkCustom) y1MaintRemarkCustom.oninput = e=>{ ac.year1.maintenanceRemark.customText = e.target.value; refreshQcPreview(overlay); };
     const y2Domain = overlay.querySelector('#cq_y2_domain'); if(y2Domain) y2Domain.oninput = e=>{ ac.year2.domain = e.target.value; refreshQcPreview(overlay); };
     const y2Hosting = overlay.querySelector('#cq_y2_hosting'); if(y2Hosting) y2Hosting.oninput = e=>{ ac.year2.hosting = e.target.value; refreshQcPreview(overlay); };
     const y2Maint = overlay.querySelector('#cq_y2_maint'); if(y2Maint) y2Maint.oninput = e=>{ ac.year2.maintenance = e.target.value; refreshQcPreview(overlay); };
@@ -758,6 +809,14 @@ function refreshQcPreview(overlay){
   if(y2TotalEl) y2TotalEl.textContent = qcYearAmountDisplay(totals.year2Total, totals.annualCost.year2.displayMode);
   const y3TotalEl = overlay.querySelector('.qc-year-block:nth-of-type(3) .qc-year-total');
   if(y3TotalEl) y3TotalEl.textContent = qcYearAmountDisplay(totals.year3Total, totals.annualCost.year3.displayMode);
+  // Year 1 Maintenance Remark's own inline "Note preview" text (informational
+  // only — kept live on every keystroke without a full remount, same as the
+  // year totals above).
+  const y1RemarkPreviewEl = overlay.querySelector('#cq_y1_maintRemarkPreview');
+  if(y1RemarkPreviewEl){
+    const mr = totals.annualCost.year1.maintenanceRemark;
+    y1RemarkPreviewEl.textContent = mr.enabled ? (year1MaintenanceRemarkSentence(mr) || '(enter wording above)') : '';
+  }
   const preview = overlay.querySelector('#cq_livePreview');
   if(preview) paintQuotePreview(preview, qcStateToPreviewQuotation(s, totals.evalRes, totals.schedule), ()=>qcApplyZoom(overlay));
   else qcApplyZoom(overlay);
@@ -923,6 +982,39 @@ function wireQuotationItemsEditor(overlay, s){
 // dollar figure here has exactly one home — no duplicate Domain Cost,
 // Domain Renewal Estimate, or Maintenance Cost fields anywhere else on the
 // form (spec §9).
+// Year 1 Maintenance Benefit sub-section — fully independent of the
+// Maintenance & Support cost field above it (task spec: "Separate Year 1
+// Maintenance Cost (financial) from Year 1 Maintenance Remark (informational,
+// zero price impact)"). Visually marked as non-financial with a small
+// uppercase sub-header + a neutral/gray "No Price Impact" pill, reusing the
+// existing `field-tbc-badge` neutral-badge convention (adapted wording) —
+// never a new visual language. This control never writes to annualCost's
+// domain/hosting/maintenance cost fields, so it can never affect Year 1
+// Total/Subtotal/Payment Schedule.
+function year1MaintenanceRemarkSectionHtml(mr){
+  const periodOptions = YEAR1_MAINT_REMARK_PERIODS.map(p=>`<option value="${p}" ${mr.period===p?'selected':''}>${p}</option>`).join('');
+  const previewText = mr.enabled ? escapeHtml(year1MaintenanceRemarkSentence(mr) || '(enter wording above)') : '';
+  return `
+    <div class="form-field full" style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">
+      <div class="text-muted" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;font-weight:800;margin-bottom:6px">
+        Year 1 Maintenance Benefit <span class="field-tbc-badge">No Price Impact</span>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12.5px">
+        <input type="checkbox" id="cq_y1_maintRemarkEnabled" ${mr.enabled?'checked':''}> Show Year 1 Maintenance Note
+      </label>
+      ${mr.enabled ? `
+        <div class="form-grid" style="margin-top:8px">
+          <div class="form-field"><label>Free Period</label>
+            <select id="cq_y1_maintRemarkPeriod" class="sel">${periodOptions}</select>
+          </div>
+          ${mr.period==='Custom' ? `<div class="form-field full"><label>Custom Wording</label><input id="cq_y1_maintRemarkCustom" value="${escapeHtml(mr.customText)}" placeholder="e.g. Free basic support for the first 6 weeks after launch."></div>` : ''}
+        </div>
+        <div class="text-muted" style="font-size:11.5px;margin-top:6px">Note preview: &ldquo;<span id="cq_y1_maintRemarkPreview">${previewText}</span>&rdquo;</div>
+      ` : ''}
+    </div>
+  `;
+}
+
 function annualCostBreakdownHtml(s, svc, totals){
   const hostingLabel = hostingLabelForService(svc);
   const ac = totals.annualCost;
@@ -956,6 +1048,7 @@ function annualCostBreakdownHtml(s, svc, totals){
           <label class="field-toggle-row"><span>Included / Free</span><span class="toggle-switch"><input type="checkbox" id="cq_y1_maintIncluded" ${y1.maintenanceMode==='included'?'checked':''}><span class="toggle-slider"></span></span></label>
         </div>
       </div>
+      ${year1MaintenanceRemarkSectionHtml(y1.maintenanceRemark)}
     </div>
 
     <div class="qc-year-block">
@@ -1128,7 +1221,7 @@ function loadStateFromQuotation(q, { asDuplicate=false } = {}){
     // way the per-client `clientNote` already is, to avoid duplicating them
     // when this quotation is re-edited and re-saved.
     notesOverride: q.importantNotes && q.importantNotes.length
-      ? q.importantNotes.filter(n=> n.key!=='clientNote' && n.key!=='maintenanceY1' && n.key!=='maintenanceRenewal' && !ANNUAL_COST_HIDDEN_NOTE_KEYS.has(n.key))
+      ? q.importantNotes.filter(n=> n.key!=='clientNote' && n.key!=='maintenanceY1' && n.key!=='maintenanceRenewal' && n.key!=='year1MaintenanceRemark' && !ANNUAL_COST_HIDDEN_NOTE_KEYS.has(n.key))
       : null,
     clientNote:'',
     domainName: q.domainName,
@@ -1585,8 +1678,14 @@ function buildQuoteSections(q){
         year2DisplayMode: storedAnnualCost.year2.displayMode, year3DisplayMode: storedAnnualCost.year3.displayMode }
     : (q.maintenance || { year1Mode:'not_included', year1Cost:0, year2Cost:0, year3Cost:0, year2DisplayMode:'estimated', year3DisplayMode:'estimated' });
   const maintActive = maint.year1Mode && maint.year1Mode!=='not_included';
+  // Year 1 Budget line wording: append "& Maintenance" ONLY when a REAL
+  // financial Year 1 maintenance charge is actually included in the Year 1
+  // dollar amount (mode 'paid' with a genuinely non-zero cost) — never for
+  // Included/Free ($0) or remark-only maintenance, which have zero price
+  // impact and must never be implied as a paid line item here.
+  const y1MaintReal = maint.year1Mode==='paid' && (Number(maint.year1Cost)||0) > 0;
   const mentionsMaintenance = (label)=> /maintenance/i.test(label);
-  let y1Label = (maintActive && !mentionsMaintenance(labels.y1)) ? `${labels.y1} & Maintenance` : labels.y1;
+  let y1Label = (y1MaintReal && !mentionsMaintenance(labels.y1)) ? `${labels.y1} & Maintenance` : labels.y1;
   let y2Label = (Number(maint.year2Cost)>0 && !mentionsMaintenance(labels.y2)) ? `${labels.y2} & Maintenance` : labels.y2;
   let y3Label = (Number(maint.year3Cost)>0 && !mentionsMaintenance(labels.y3)) ? `${labels.y3} & Maintenance` : labels.y3;
   const y1MaintAddOn = maint.year1Mode==='paid' ? (Number(maint.year1Cost)||0) : 0;
@@ -1685,6 +1784,12 @@ function buildQuoteSections(q){
   const noteItems = [];
   visibleImportantNotes(q.importantNotes).forEach(n=> noteItems.push({ html:`<li><b>${escapeHtml(n.title)}:</b> ${escapeHtml(n.text)}</li>` }));
   maintenanceWordingNotes(maint).forEach(n=> noteItems.push({ html:`<li><b>${escapeHtml(n.title)}:</b> ${escapeHtml(n.text)}</li>` }));
+  // Year 1 Maintenance Remark (informational, zero price impact) — the ONLY
+  // source of any Year-1-maintenance-related Important Note now. Only
+  // available on a new-model quotation (a LEGACY record never had this
+  // control, so it never gets a remark note either).
+  const y1RemarkForNotes = usingNewModel ? storedAnnualCost.year1.maintenanceRemark : null;
+  year1MaintenanceRemarkNotes(y1RemarkForNotes).forEach(n=> noteItems.push({ html:`<li><b>${escapeHtml(n.title)}:</b> ${escapeHtml(n.text)}</li>` }));
   if(visibleExcl.length) noteItems.push({ html:`<li><b>Not Included:</b> ${visibleExcl.map(escapeHtml).join(', ')}.</li>` });
   if(!noteItems.length) noteItems.push({ html:`<li>No additional notes.</li>` });
   sections.push({ id:'notes', kind:'group',

@@ -383,7 +383,16 @@ function hostingLabelForService(svc){
 // is ever left with an un-configured $0 default that looks broken.
 function defaultAnnualCostForService(svc){
   const base = {
-    year1: { domain:0, domainMode:'included', hosting:0, hostingIncluded:true, maintenance:0, maintenanceMode:'included' },
+    year1: { domain:0, domainMode:'included', hosting:0, hostingIncluded:true, maintenance:0, maintenanceMode:'included',
+             // Year 1 Maintenance REMARK (informational only, zero price
+             // impact — fully independent from `maintenance`/`maintenanceMode`
+             // above, which are the financial cost fields). Defaults ENABLED
+             // for every brand-new quotation regardless of package (task
+             // spec: "default: ENABLED for all NEW quotations"). An EXISTING
+             // quotation with no stored `maintenanceRemark` instead gets a
+             // safe disabled default — see normalizeAnnualCost(), which is
+             // what every loaded/legacy record actually passes through.
+             maintenanceRemark: { enabled:true, period:'1 Month', customText:'' } },
     year2: { domain: DEFAULT_DOMAIN_COST_ESTIMATE, hosting:0, maintenance:0, displayMode:'estimated' },
     year3: { domain: DEFAULT_DOMAIN_COST_ESTIMATE, hosting:0, maintenance:0, displayMode:'estimated' },
   };
