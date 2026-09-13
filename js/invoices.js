@@ -24,6 +24,162 @@ const INVOICE_STATUSES = ['Draft', 'Issued', 'Partially Paid', 'Paid', 'Cancelle
 // status-transition function, not scattered inline logic").
 const INVOICE_CREATE_STATUSES = ['Draft', 'Issued'];
 
+// Invoice Type — which stage of the project's own Payment Schedule (built by
+// Quotations, computePaymentSchedule() in data.js — never recomputed here)
+// this invoice represents. 'Custom' is always available as an escape hatch
+// for anything that doesn't map cleanly to a stage (spec: Create Invoice
+// redesign §4/§5).
+const INVOICE_TYPES = ['Deposit', 'Progress', 'Final', 'Custom'];
+const INVOICE_TYPE_LABELS = { Deposit:'Deposit / First Payment', Progress:'Progress / Second Payment', Final:'Final Payment', Custom:'Custom Invoice' };
+
+/* ---------------------------------------------------------------------- */
+/* Project Payment Schedule lookup (spec §3/§4/§5/§12/§14-16) — an invoice  */
+/* NEVER invents or recomputes a schedule: it reads the exact same          */
+/* `paymentSchedule` (label/pct/amount, already summing to the project's    */
+/* Year 1 Total) already built by computePaymentSchedule() in data.js and   */
+/* stored on the project's own quotation record. A 2-stage (30/70) schedule */
+/* naturally yields Deposit+Final only; a 3-stage (20/40/40 etc.) schedule   */
+/* naturally yields Deposit+Progress+Final — nothing hardcoded per preset.  */
+/* ---------------------------------------------------------------------- */
+function projectQuotationFor(projectCode){
+  if(!projectCode) return null;
+  const quotes = DB.all('quotations').filter(q=> q.projectCode===projectCode && q.status!=='Superseded');
+  return quotes.find(x=>x.status==='Accepted') || quotes.find(x=>x.status==='Sent') || quotes[0] || null;
+}
+// Returns { schedule:[{label,pct,amount}], total } for the project — schedule
+// is [] (Custom-only) when the project has no usable quotation to read a
+// schedule from, e.g. a manually-created project with no quotation on file.
+function projectPaymentScheduleFor(projectCode){
+  const proj = projectCode ? DB.find('projects', projectCode) : null;
+  const q = projectQuotationFor(projectCode);
+  const total = proj ? (Number(proj.confirmedValue)||0) : 0;
+  if(q && Array.isArray(q.paymentSchedule) && q.paymentSchedule.length){
+    return { schedule: q.paymentSchedule.map(s=>({...s})), total };
+  }
+  return { schedule: [], total };
+}
+// Maps each stage in the schedule to an Invoice Type key: first stage is
+// always Deposit, last is always Final, anything in between is Progress —
+// this is what makes a 2-stage schedule show only Deposit+Final (no
+// "Progress" option ever appears) and a 3-stage schedule show all three,
+// with zero hardcoded assumptions about preset names (spec §5).
+function invoiceStageOptionsFor(projectCode){
+  const { schedule } = projectPaymentScheduleFor(projectCode);
+  const n = schedule.length;
+  const opts = schedule.map((st,i)=>{
+    const key = i===0 ? 'Deposit' : (i===n-1 ? 'Final' : 'Progress');
+    return { key, index:i, label: st.label, pct: st.pct, amount: st.amount };
+  });
+  opts.push({ key:'Custom', index:null, label:'Custom Invoice', pct:null, amount:null });
+  return opts;
+}
+function invoiceStageOption(projectCode, typeKey){
+  return invoiceStageOptionsFor(projectCode).find(o=>o.key===typeKey) || null;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Payment-stage-aware wording (spec §10/§22) — small template functions,   */
+/* keyed on Invoice Type + whether a payment is already linked/recorded.    */
+/* Auto-suggested only: always freely editable afterward (icState._summaryTouched */
+/* / _notesTouched guard which fields get re-suggested vs left alone).      */
+/* ---------------------------------------------------------------------- */
+function icDefaultSummary(s, breakdown){
+  const name = s.businessName || s.clientName || 'the client';
+  const amt = money(breakdown.currentAmount);
+  const already = breakdown.thisInvoicePaidActual > 0.004;
+  if(s.invoiceType==='Deposit'){
+    return already
+      ? `This invoice confirms receipt of the deposit payment of ${amt} for the ${name} project, securing the project start as outlined in the item breakdown below.`
+      : `This invoice covers the deposit payment of ${amt} required to begin the ${name} project, as outlined in the item breakdown below.`;
+  }
+  if(s.invoiceType==='Progress'){
+    return `This invoice covers the progress payment of ${amt} for the ${name} project, reflecting work completed to date as outlined in the item breakdown below.`;
+  }
+  if(s.invoiceType==='Final'){
+    return `This invoice covers the final payment of ${amt} for the ${name} project, completing the total project value upon settlement, as outlined in the item breakdown below.`;
+  }
+  const paidSoFar = breakdown.thisInvoicePaidActual;
+  const phrase = paidSoFar > 0.004 ? 'partial payment received' : 'payment due';
+  return `This invoice confirms the ${phrase} for the ${name} project, as outlined in the item breakdown below.`;
+}
+function icDefaultNotes(s){
+  if(s.invoiceType==='Deposit'){
+    return `- This deposit confirms your project booking and secures the start date.\n- Work begins once the deposit payment is received and confirmed.\n- Remaining balance is due per the payment schedule agreed in your quotation.`;
+  }
+  if(s.invoiceType==='Progress'){
+    return `- This progress payment reflects work completed to date on the project.\n- Remaining stage(s) remain due per the payment schedule agreed in your quotation.`;
+  }
+  if(s.invoiceType==='Final'){
+    return `- This is the final payment for the project as agreed in your quotation.\n- Project deliverables are handed over/considered complete once this payment is received and confirmed.`;
+  }
+  return '';
+}
+
+/* ---------------------------------------------------------------------- */
+/* Payment Status (display-only, spec §11) — DERIVED from the real          */
+/* Invoice Status + Invoice Type + real linked-payment totals. Never a      */
+/* stored field, so it can never drift from the real state machine above.  */
+/* ---------------------------------------------------------------------- */
+function invoicePaymentDisplayStatus(inv, totals){
+  const EPS = 0.005;
+  if(inv.status==='Draft') return 'Draft';
+  if(inv.status==='Cancelled') return 'Cancelled';
+  if(totals.totalPaid <= EPS) return 'Payment Pending';
+  if(totals.balance > EPS) return 'Partially Paid';
+  // This invoice's own face amount is fully covered by real payments.
+  const projFullyPaid = inv.projectCode && paymentSummaryFor(inv.projectCode).status==='Fully Paid';
+  if(inv.invoiceType==='Final' || projFullyPaid) return 'Fully Paid';
+  if(inv.invoiceType==='Deposit') return 'Deposit Paid';
+  if(inv.invoiceType==='Progress') return 'Progress Payment Paid';
+  return 'Fully Paid';
+}
+
+/* ---------------------------------------------------------------------- */
+/* Payment breakdown — the ONE computation shared by the live Create form   */
+/* (a PROJECTION — nothing has been saved/paid yet) and a saved invoice's   */
+/* preview/print/detail (REAL numbers from actual linked-payment history).  */
+/* "Total Paid After This Payment" on the form is explicitly a projection   */
+/* label — an issued-but-unpaid invoice is never displayed as already paid. */
+/* ---------------------------------------------------------------------- */
+// `excludeInvoiceId` — when editing/previewing an invoice that may already
+// have real payments linked to IT, its own payments are excluded from
+// "Previously Paid" (they belong in "Current Invoice"/"This Invoice Paid"
+// instead) so nothing is ever double-counted (spec §18/TEST C).
+function projectPreviouslyPaid(projectCode, excludeInvoiceId){
+  if(!projectCode) return 0;
+  return paymentsForProject(projectCode)
+    .filter(p=> !excludeInvoiceId || p.invoiceId !== excludeInvoiceId)
+    .reduce((s,p)=> s + (Number(p.amount)||0), 0);
+}
+// For the live Create/Edit form — s.items/discountAmount may still be
+// unsaved edits, so "Current Invoice Amount" is computed from THOSE, exactly
+// like the existing subtotal/discount math already did, not re-derived from
+// the stage table (auto-calc from a stage just pre-fills those same items).
+function icComputeBreakdown(s){
+  const proj = s.projectCode ? DB.find('projects', s.projectCode) : null;
+  const { schedule } = projectPaymentScheduleFor(s.projectCode);
+  const projectTotal = proj ? (Number(proj.confirmedValue)||0) : 0;
+  const previouslyPaid = projectPreviouslyPaid(s.projectCode, s.editingId);
+  const subtotal = (s.items||[]).reduce((sum,it)=> sum + (Number(it.qty)||1)*(Number(it.amount)||0), 0);
+  const currentAmount = Math.max(0, Math.round((subtotal - (Number(s.discountAmount)||0))*100)/100);
+  const thisInvoicePaidActual = s.editingId ? invoiceTotals({ id:s.editingId, items:s.items, discountAmount:s.discountAmount }).totalPaid : 0;
+  const projectedTotalPaidAfter = Math.round((previouslyPaid + currentAmount)*100)/100;
+  const remainingAfter = Math.max(0, Math.round((projectTotal - projectedTotalPaidAfter)*100)/100);
+  return { proj, schedule, projectTotal, previouslyPaid, currentAmount, thisInvoicePaidActual, projectedTotalPaidAfter, remainingAfter };
+}
+// For a SAVED invoice (detail/preview/PDF/print) — every figure here is real
+// (actual linked payments), never a projection.
+function invoicePaymentBreakdown(inv){
+  const totals = invoiceTotals(inv);
+  const proj = inv.projectCode ? DB.find('projects', inv.projectCode) : null;
+  const { schedule } = projectPaymentScheduleFor(inv.projectCode);
+  const projectTotal = proj ? (Number(proj.confirmedValue)||0) : totals.total;
+  const previouslyPaid = projectPreviouslyPaid(inv.projectCode, inv.id);
+  const totalPaidAfter = Math.round((previouslyPaid + totals.totalPaid)*100)/100;
+  const balanceAfter = Math.max(0, Math.round((projectTotal - totalPaidAfter)*100)/100);
+  return { totals, schedule, projectTotal, previouslyPaid, totalPaidAfter, balanceAfter };
+}
+
 /* ---------------------------------------------------------------------- */
 /* Permissions (mirrors isFounder()/canEditPayments() conventions exactly  */
 /* — no new permission system invented).                                  */
@@ -176,7 +332,7 @@ function renderInvTable(){
           <table class="data-table">
             <thead>
               <tr>
-                <th>Invoice No.</th><th>Date</th><th>Project Code</th><th>Client / Business</th>
+                <th>Invoice No.</th><th>Type</th><th>Date</th><th>Project Code</th><th>Client / Business</th>
                 <th>Project</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Actions</th>
               </tr>
             </thead>
@@ -187,6 +343,7 @@ function renderInvTable(){
                 return `
                 <tr>
                   <td class="cell-link" data-open="${inv.id}">${escapeHtml(inv.invoiceNumber)}</td>
+                  <td>${escapeHtml(INVOICE_TYPE_LABELS[inv.invoiceType]||inv.invoiceType||'Custom Invoice')}</td>
                   <td>${fmtDate(inv.invoiceDate)}</td>
                   <td>${escapeHtml(inv.projectCode||'—')}</td>
                   <td>${escapeHtml(inv.clientName)}<div class="cell-sub">${escapeHtml(inv.businessName||'')}</div></td>
@@ -204,7 +361,7 @@ function renderInvTable(){
                     </div>
                   </td>
                 </tr>`;
-              }).join('') : `<tr><td colspan="10"><div class="empty-row">No invoices match the current filters.</div></td></tr>`}
+              }).join('') : `<tr><td colspan="11"><div class="empty-row">No invoices match the current filters.</div></td></tr>`}
             </tbody>
           </table>
         </div>
@@ -258,15 +415,19 @@ function renderInvPagination(totalCount, totalPages){
 }
 
 /* ---------------------------------------------------------------------- */
-/* Create / Edit Invoice                                                  */
+/* Create / Edit Invoice — split-screen layout matching Create Quotation's  */
+/* Edit/Preview pattern exactly (renderCreateQuotationModal in                */
+/* js/quotations.js is the structural template this mirrors — same          */
+/* .qc-split/.qc-edit-col/.qc-preview-col/.qc-preview-toolbar/.qc-zoom-      */
+/* controls/.qc-preview-canvas/.qc-a4-scale classes, same modal-xl shell,    */
+/* same "remount vs refresh-only" split). Nothing about the underlying       */
+/* invoice data model, status-transition function, or payment-linking below */
+/* this section changed — only the create/edit UI was rebuilt.              */
 /* ---------------------------------------------------------------------- */
 let IC_STATE = null;
-
-function defaultInvoiceSummary(proj, paidSoFar){
-  const name = proj ? (proj.businessName || proj.clientName) : 'the';
-  const phrase = paidSoFar > 0.004 ? 'partial payment received' : 'payment due';
-  return `This invoice confirms the ${phrase} for the ${name} project, as outlined in the item breakdown below.`;
-}
+let IC_TAB = 'edit'; // 'edit' | 'preview' — narrow screens only, mirrors QC_TAB
+let IC_ZOOM = 'fit';  // 'fit' or a literal scale factor — mirrors QC_ZOOM
+const IC_A4_PAGE_WIDTH_PX = 794; // same physical-page-width constant as Quotations
 
 // Best-effort scope prefill from the project's own most relevant quotation
 // (spec §4: "if the linkage isn't straightforward, don't over-engineer") —
@@ -286,20 +447,32 @@ function openCreateInvoiceModal(prefill={}){
   IC_STATE = {
     editingId: null,
     invoiceNumber: null, // assigned on first save
+    projectLocked: !!prefill.projectCode, // entered from Project Detail (spec §20) — skip project search
     projectCode: proj ? proj.id : '',
     clientName: proj ? proj.clientName : '',
     businessName: proj ? proj.businessName : '',
     websiteLink: '',
     invoiceDate: todayLocalISO(),
+    dueDate: '',
     projectStatus: proj ? proj.stage : '',
     status: 'Draft',
     currency: 'USD',
+    invoiceType: 'Custom',
+    paymentStageIndex: null,
     items: proj ? invoiceItemsFromProjectScope(proj.id) : [],
     discountAmount: 0,
-    summary: defaultInvoiceSummary(proj, 0),
+    summary: '',
     notes: '',
     assignedSales: CURRENT_USER.name,
+    _summaryTouched: false,
+    _notesTouched: false,
   };
+  IC_TAB = 'edit';
+  // A project handed in up front (Project Detail's own "+ Create Invoice")
+  // gets the exact same auto-detect-stage treatment as picking it from the
+  // dropdown (spec §20: "preselect that project" means fully applied, not
+  // just filled into the field).
+  if(proj) icApplyProject(proj.id);
   renderCreateInvoiceModal();
 }
 
@@ -307,18 +480,27 @@ function loadInvoiceStateFrom(inv, { asDuplicate=false } = {}){
   return {
     editingId: asDuplicate ? null : inv.id,
     invoiceNumber: asDuplicate ? null : inv.invoiceNumber,
+    projectLocked: false,
     projectCode: inv.projectCode || '',
     clientName: inv.clientName, businessName: inv.businessName || '',
     websiteLink: inv.websiteLink || '',
     invoiceDate: asDuplicate ? todayLocalISO() : inv.invoiceDate,
+    dueDate: asDuplicate ? '' : (inv.dueDate || ''),
     projectStatus: inv.projectStatus || '',
     status: asDuplicate ? 'Draft' : inv.status,
     currency: inv.currency || 'USD',
+    invoiceType: inv.invoiceType || 'Custom',
+    paymentStageIndex: asDuplicate ? null : (inv.paymentStageIndex!=null ? inv.paymentStageIndex : null),
     items: (inv.items||[]).map(it=>({ ...it, id: asDuplicate ? fnId() : (it.id||fnId()) })),
     discountAmount: Number(inv.discountAmount)||0,
     summary: inv.summary || '',
     notes: inv.notes || '',
     assignedSales: inv.assignedSales || CURRENT_USER.name,
+    // Existing text is real content someone wrote — never overwrite it just
+    // because the modal reopened (spec §10/§22 "keep editable... never
+    // clobber user edits").
+    _summaryTouched: !!(inv.summary && inv.summary.trim()),
+    _notesTouched: !!(inv.notes && inv.notes.trim()),
   };
 }
 
@@ -326,6 +508,7 @@ function duplicateInvoice(id){
   const src = DB.find('invoices', id);
   if(!src) return;
   IC_STATE = loadInvoiceStateFrom(src, { asDuplicate:true });
+  IC_TAB = 'edit';
   renderCreateInvoiceModal();
 }
 
@@ -335,6 +518,10 @@ function icAssignableProjects(){
   return all.filter(p=> p.assignedSales===CURRENT_USER.name);
 }
 
+// Applies a selected project AND auto-detects its real payment schedule
+// (spec §3/§4/§5) — Invoice Type resets to whatever the first available
+// stage is (or stays Custom if the project has no usable schedule), so
+// switching projects never leaves a stale/impossible stage selected.
 function icApplyProject(projectCode){
   const proj = DB.find('projects', projectCode);
   if(!proj) return;
@@ -344,6 +531,34 @@ function icApplyProject(projectCode){
   s.businessName = proj.businessName;
   s.projectStatus = proj.stage;
   if(!s.editingId && !s.items.length) s.items = invoiceItemsFromProjectScope(proj.id);
+  const opts = invoiceStageOptionsFor(proj.id).filter(o=>o.key!=='Custom');
+  // Prefer the next stage that doesn't already have a live (non-Cancelled)
+  // invoice against it — a natural "what's next" default, never a hard
+  // requirement (Custom stays freely selectable regardless).
+  const nextOpen = opts.find(o=> !DB.all('invoices').some(i=> i.projectCode===proj.id && i.paymentStageIndex===o.index && i.status!=='Cancelled'));
+  icApplyInvoiceType((nextOpen||opts[0]||{key:'Custom'}).key);
+}
+
+// The core new stage-aware logic (spec §4/§5/§10/§22): selecting a type
+// (or Custom) auto-fills the amount from the project's real schedule via the
+// existing items array — no new "amount" field invented — and auto-suggests
+// wording, without ever clobbering text the user already typed themselves.
+function icApplyInvoiceType(typeKey){
+  const s = IC_STATE;
+  s.invoiceType = typeKey;
+  if(typeKey==='Custom'){
+    s.paymentStageIndex = null;
+  } else {
+    const opt = invoiceStageOption(s.projectCode, typeKey);
+    if(opt && opt.index!=null){
+      s.paymentStageIndex = opt.index;
+      s.items = [{ id: fnId(), description: `${opt.label}${s.businessName?' — '+s.businessName:''}`, period:'', qty:1, amount: opt.amount }];
+      s.discountAmount = 0;
+    }
+  }
+  const breakdown = icComputeBreakdown(s);
+  if(!s._summaryTouched) s.summary = icDefaultSummary(s, breakdown);
+  if(!s._notesTouched && !s.notes.trim()) s.notes = icDefaultNotes(s);
 }
 
 function icInvoiceNumberPreview(s){
@@ -403,90 +618,239 @@ function wireInvoiceItemsEditor(overlay, s){
   });
 }
 
+// Adapts the live Create/Edit form state into an invoice-shaped object so
+// the SAME renderer used for a saved invoice's preview/PDF (buildInvoiceSections
+// / buildInvoicePagesHtml / paintInvoicePreview, all below) can be reused for
+// the live preview pane too — exactly the qcStateToPreviewQuotation pattern
+// (spec §23: one render path, never a second print template).
+function icStateToPreviewInvoice(s){
+  return {
+    id: s.editingId || '__ic_preview__',
+    invoiceNumber: icInvoiceNumberPreview(s),
+    projectCode: s.projectCode, leadId: null,
+    clientName: s.clientName, businessName: s.businessName,
+    websiteLink: s.websiteLink, invoiceDate: s.invoiceDate, dueDate: s.dueDate,
+    projectStatus: s.projectStatus, status: s.status, currency: s.currency,
+    invoiceType: s.invoiceType, paymentStageIndex: s.paymentStageIndex,
+    items: s.items, discountAmount: Number(s.discountAmount)||0,
+    summary: s.summary, notes: s.notes,
+    assignedSales: s.assignedSales, createdBy: CURRENT_USER.name, createdAt: new Date().toISOString(),
+  };
+}
+
 function renderCreateInvoiceModal(){
+  // Mirrors Quotations' own scroll-preserving remount (spec §12/§13 parity):
+  // a handful of edits (project pick, invoice type, add/remove row, tab
+  // switch, zoom) still fully remount, so the left panel's scroll position
+  // is captured here and restored once the new DOM mounts.
+  const prevOverlay = document.getElementById('activeModalOverlay');
+  const prevScrollTop = prevOverlay ? (prevOverlay.querySelector('.qc-edit-col')||{}).scrollTop : null;
+
   const s = IC_STATE;
   const projects = icAssignableProjects();
-  const subtotal = (s.items||[]).reduce((sum,it)=> sum + (Number(it.qty)||1)*(Number(it.amount)||0), 0);
-  const total = Math.max(0, subtotal - (Number(s.discountAmount)||0));
-  const existingPaid = s.editingId ? invoiceTotals({ id:s.editingId, items:s.items, discountAmount:s.discountAmount }).totalPaid : 0;
-  const balance = Math.max(0, Math.round((total-existingPaid)*100)/100);
+  const breakdown = icComputeBreakdown(s);
+  const stageOpts = s.projectCode ? invoiceStageOptionsFor(s.projectCode) : [{ key:'Custom', index:null, label:'Custom Invoice', pct:null, amount:null }];
 
   const html = `
-    <div class="modal-head"><h3>${s.editingId?'Edit Invoice':'Create Invoice'}</h3><button class="modal-close" id="icClose">&times;</button></div>
-    <div class="modal-body">
-      <p class="text-muted" style="margin-top:0;font-size:12.5px">Invoice No: <b>${escapeHtml(icInvoiceNumberPreview(s))}</b></p>
-      <div class="form-grid">
-        <div class="form-field"><label class="required">Project</label>
-          <select id="ic_project">
-            <option value="">— Select a project —</option>
-            ${projects.map(p=>`<option value="${p.id}" ${s.projectCode===p.id?'selected':''}>${p.id} — ${escapeHtml(p.businessName)}</option>`).join('')}
-          </select>
+    <div class="modal-head">
+      <h3>${s.editingId?'Edit Invoice':'Create Invoice'}</h3>
+      <div class="qc-tabs">
+        <div class="tab-btn ${IC_TAB==='edit'?'active':''}" data-ictab="edit">Edit</div>
+        <div class="tab-btn ${IC_TAB==='preview'?'active':''}" data-ictab="preview">Preview</div>
+      </div>
+      <button class="modal-close" id="icClose">&times;</button>
+    </div>
+    <div class="modal-body qc-modal-body">
+      <div class="qc-split">
+        <div class="qc-edit-col" ${IC_TAB!=='edit'?'data-hide-narrow="1"':''}>
+
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">A. Project Information</div>
+          <div class="form-grid">
+            <div class="form-field full"><label class="required">Project</label>
+              ${s.projectLocked
+                ? `<input value="${escapeHtml(s.projectCode)} — ${escapeHtml(s.businessName)}" readonly class="field-locked">`
+                : `<select id="ic_project">
+                    <option value="">— Select a project —</option>
+                    ${projects.map(p=>`<option value="${p.id}" ${s.projectCode===p.id?'selected':''}>${p.id} — ${escapeHtml(p.businessName)}</option>`).join('')}
+                  </select>`}
+            </div>
+            <div class="form-field"><label class="required">Client Name</label><input id="ic_client" value="${escapeHtml(s.clientName)}"></div>
+            <div class="form-field"><label>Business Name</label><input id="ic_business" value="${escapeHtml(s.businessName)}"></div>
+            <div class="form-field full"><label>Website Link</label><input id="ic_website" value="${escapeHtml(s.websiteLink)}" placeholder="https://…"></div>
+            <div class="form-field"><label>Project Value</label><input value="${breakdown.proj?money(breakdown.projectTotal):'—'}" disabled></div>
+            <div class="form-field"><label>Project Status</label>
+              <select id="ic_pstatus">${PROJECT_STAGES.map(st=>`<option ${s.projectStatus===st?'selected':''}>${st}</option>`).join('')}</select>
+            </div>
+            <div class="form-field"><label>Existing Payments</label><input value="${money(breakdown.previouslyPaid)}" disabled></div>
+            <div class="form-field"><label>Outstanding Balance</label><input value="${breakdown.proj?money(Math.max(0,Math.round((breakdown.projectTotal-breakdown.previouslyPaid)*100)/100)):'—'}" disabled></div>
+          </div>
+          ${breakdown.schedule.length ? `
+          <p class="text-muted" style="font-size:11.5px;margin:8px 0 0">Existing Payment Schedule: ${breakdown.schedule.map(st=>`${escapeHtml(st.label)} ${st.pct}% (${money(st.amount)})`).join(' · ')}</p>
+          ` : (s.projectCode ? `<p class="text-muted" style="font-size:11.5px;margin:8px 0 0">No payment schedule found on file for this project — only Custom Invoice is available.</p>` : '')}
+
+          <div class="divider"></div>
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">B. Invoice Type / Payment Stage</div>
+          <div class="form-grid">
+            <div class="form-field full"><label class="required">Invoice Type</label>
+              <select id="ic_type">
+                ${stageOpts.map(o=>`<option value="${o.key}" ${s.invoiceType===o.key?'selected':''}>${escapeHtml(INVOICE_TYPE_LABELS[o.key]||o.label)}${o.amount!=null?` — ${money(o.amount)}`:''}</option>`).join('')}
+              </select>
+            </div>
+            <div class="form-field"><label>Invoice No. <span class="field-auto-badge">Auto</span></label>
+              <input id="ic_invnum" value="${escapeHtml(icInvoiceNumberPreview(s))}" ${(!isFounder() || (s.editingId && !INVOICE_CREATE_STATUSES.includes(s.status)))?'readonly class="field-locked"':''}>
+            </div>
+            <div class="form-field"><label class="required">Invoice Date</label><input type="date" id="ic_date" value="${s.invoiceDate}"></div>
+            <div class="form-field"><label>Payment Due Date <span class="text-muted" style="font-weight:400">(optional)</span></label><input type="date" id="ic_due" value="${s.dueDate||''}"></div>
+            <div class="form-field"><label>Invoice Status</label>
+              <select id="ic_status" ${s.editingId && !INVOICE_CREATE_STATUSES.includes(s.status) ? 'disabled' : ''}>
+                ${INVOICE_CREATE_STATUSES.map(st=>`<option ${s.status===st?'selected':''}>${st}</option>`).join('')}
+              </select>
+              ${s.editingId && !INVOICE_CREATE_STATUSES.includes(s.status) ? `<p class="text-muted" style="font-size:11px;margin:4px 0 0">Current status (${escapeHtml(s.status)}) is driven automatically by recorded payments — issuing never marks an invoice Paid on its own.</p>` : ''}
+            </div>
+            <div class="form-field"><label>Currency</label>
+              <select id="ic_currency"><option ${s.currency==='USD'?'selected':''}>USD</option><option ${s.currency==='KHR'?'selected':''}>KHR</option></select>
+            </div>
+          </div>
+
+          <div class="divider"></div>
+          <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Payment Summary</div>
+          <div class="form-grid">
+            <div class="form-field"><label>Project Total</label><input value="${money(breakdown.projectTotal)}" disabled></div>
+            <div class="form-field"><label>Previously Paid</label><input value="${money(breakdown.previouslyPaid)}" disabled></div>
+            <div class="form-field"><label>Current Invoice Amount</label><input value="${money(breakdown.currentAmount)}" disabled></div>
+            <div class="form-field"><label>Total Paid After This Payment <span class="text-muted" style="font-weight:400">(projected)</span></label><input value="${money(breakdown.projectedTotalPaidAfter)}" disabled></div>
+            <div class="form-field"><label>Remaining Balance</label><input value="${money(breakdown.remainingAfter)}" disabled></div>
+          </div>
+          <p class="text-muted" style="font-size:11px;margin:6px 0 0">"Total Paid After This Payment" is a projection — it assumes this invoice gets paid in full. Only real recorded/linked payments ever count as actually paid.</p>
+
+          <div class="divider"></div>
+          <div class="flex-row" style="justify-content:space-between;margin-bottom:8px">
+            <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:0">C. Invoice Items</div>
+            <span class="cell-link" style="font-size:12px" id="ic_addRow">+ Add Row</span>
+          </div>
+          <div id="ic_itemsWrap">${invoiceItemsEditorHtml(s.items, s.currency)}</div>
+          <div class="form-field" style="margin-top:10px;max-width:220px"><label>Discount / Promotion ($)</label><input type="number" min="0" step="0.01" id="ic_discount" value="${s.discountAmount||0}"></div>
+
+          <div class="divider"></div>
+          <div class="form-field full"><label>Invoice Summary</label><textarea id="ic_summary" rows="3">${escapeHtml(s.summary)}</textarea></div>
+          <div class="form-field full"><label>Notes</label><textarea id="ic_notes" rows="4" placeholder="e.g. Hosting/domain included, remaining balance details, extra features quoted separately…">${escapeHtml(s.notes)}</textarea></div>
         </div>
-        <div class="form-field"><label class="required">Client Name</label><input id="ic_client" value="${escapeHtml(s.clientName)}"></div>
-        <div class="form-field"><label>Business Name</label><input id="ic_business" value="${escapeHtml(s.businessName)}"></div>
-        <div class="form-field"><label>Website Link</label><input id="ic_website" value="${escapeHtml(s.websiteLink)}" placeholder="https://…"></div>
-        <div class="form-field"><label class="required">Invoice Date</label><input type="date" id="ic_date" value="${s.invoiceDate}"></div>
-        <div class="form-field"><label>Project Status</label>
-          <select id="ic_pstatus">${PROJECT_STAGES.map(st=>`<option ${s.projectStatus===st?'selected':''}>${st}</option>`).join('')}</select>
-        </div>
-        <div class="form-field"><label>Payment Status</label>
-          <select id="ic_status" ${s.editingId && !INVOICE_CREATE_STATUSES.includes(s.status) ? 'disabled' : ''}>
-            ${INVOICE_CREATE_STATUSES.map(st=>`<option ${s.status===st?'selected':''}>${st}</option>`).join('')}
-          </select>
-          ${s.editingId && !INVOICE_CREATE_STATUSES.includes(s.status) ? `<p class="text-muted" style="font-size:11px;margin:4px 0 0">Current status (${escapeHtml(s.status)}) is driven automatically by recorded payments.</p>` : ''}
-        </div>
-        <div class="form-field"><label>Currency</label>
-          <select id="ic_currency"><option ${s.currency==='USD'?'selected':''}>USD</option><option ${s.currency==='KHR'?'selected':''}>KHR</option></select>
+
+        <div class="qc-preview-col" ${IC_TAB!=='preview'?'data-hide-narrow="1"':''}>
+          <div class="qc-preview-toolbar">
+            <span class="qc-preview-toolbar-title">Invoice Preview</span>
+            <div class="qc-zoom-controls">
+              <button class="btn btn-ghost btn-sm ${IC_ZOOM==='fit'?'active':''}" data-iczoom="fit" title="Fit to panel width">Fit</button>
+              <button class="btn btn-ghost btn-sm ${IC_ZOOM===1?'active':''}" data-iczoom="100" title="Actual size">100%</button>
+              <button class="btn btn-ghost btn-sm" data-iczoom="out" title="Zoom out">&minus;</button>
+              <button class="btn btn-ghost btn-sm" data-iczoom="in" title="Zoom in">+</button>
+            </div>
+          </div>
+          <div class="qc-preview-canvas" id="icPreviewCanvas">
+            <div class="qc-a4-scale" id="icA4Scale">
+              <div id="ic_livePreview"><div class="quote-doc-loading">Rendering preview…</div></div>
+            </div>
+          </div>
         </div>
       </div>
-
-      <div class="divider"></div>
-      <div class="flex-row" style="justify-content:space-between;margin-bottom:8px">
-        <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:0">Invoice Items</div>
-        <span class="cell-link" style="font-size:12px" id="ic_addRow">+ Add Row</span>
-      </div>
-      <div id="ic_itemsWrap">${invoiceItemsEditorHtml(s.items, s.currency)}</div>
-
-      <div class="divider"></div>
-      <div class="form-grid">
-        <div class="form-field"><label>Discount / Promotion ($)</label><input type="number" min="0" step="0.01" id="ic_discount" value="${s.discountAmount||0}"></div>
-        <div class="form-field"><label>Subtotal</label><input value="${money(subtotal)}" disabled></div>
-        <div class="form-field"><label>Total Amount</label><input value="${money(total)}" disabled></div>
-        <div class="form-field"><label>Total Paid</label><input value="${money(existingPaid)}" disabled></div>
-        <div class="form-field"><label>Balance Due</label><input value="${money(balance)}" disabled></div>
-      </div>
-
-      <div class="divider"></div>
-      <div class="form-field full"><label>Invoice Summary</label><textarea id="ic_summary" rows="3">${escapeHtml(s.summary)}</textarea></div>
-      <div class="form-field full"><label>Notes</label><textarea id="ic_notes" rows="4" placeholder="e.g. Hosting/domain included, remaining balance details, extra features quoted separately…">${escapeHtml(s.notes)}</textarea></div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-secondary" id="icCancel">Cancel</button>
-      <button class="btn btn-primary" id="icSave">Save Invoice</button>
+      <button class="btn btn-outline" id="icSaveDraft">Save as Draft</button>
+      <button class="btn btn-primary" id="icIssue">${s.editingId && !INVOICE_CREATE_STATUSES.includes(s.status) ? 'Save Changes' : 'Issue Invoice'}</button>
     </div>
   `;
+
   openModal(html, { xl:true, onMount:(overlay)=>{
+    const editCol = overlay.querySelector('.qc-edit-col');
+    if(editCol && prevScrollTop!=null) editCol.scrollTop = prevScrollTop;
     overlay.querySelector('#icClose').onclick = closeModal;
     overlay.querySelector('#icCancel').onclick = closeModal;
-    overlay.querySelector('#ic_project').onchange = (e)=>{ icApplyProject(e.target.value); renderCreateInvoiceModal(); };
-    overlay.querySelector('#ic_client').onchange = (e)=> s.clientName = e.target.value;
-    overlay.querySelector('#ic_business').onchange = (e)=> s.businessName = e.target.value;
-    overlay.querySelector('#ic_website').onchange = (e)=> s.websiteLink = e.target.value;
-    overlay.querySelector('#ic_date').onchange = (e)=> s.invoiceDate = e.target.value;
-    overlay.querySelector('#ic_pstatus').onchange = (e)=> s.projectStatus = e.target.value;
+    overlay.querySelectorAll('[data-ictab]').forEach(t=> t.onclick = ()=>{ IC_TAB = t.dataset.ictab; renderCreateInvoiceModal(); });
+    overlay.querySelectorAll('[data-iczoom]').forEach(b=> b.onclick = ()=>{
+      const z = b.dataset.iczoom;
+      if(z==='fit') IC_ZOOM = 'fit';
+      else if(z==='100') IC_ZOOM = 1;
+      else if(z==='in') IC_ZOOM = Math.min(2, (IC_ZOOM==='fit'?icCurrentFitZoom(overlay):IC_ZOOM) + 0.1);
+      else if(z==='out') IC_ZOOM = Math.max(0.3, (IC_ZOOM==='fit'?icCurrentFitZoom(overlay):IC_ZOOM) - 0.1);
+      renderCreateInvoiceModal();
+    });
+    icApplyZoom(overlay);
+    icWireResize(overlay);
+    const livePreviewEl = overlay.querySelector('#ic_livePreview');
+    if(livePreviewEl) paintInvoicePreview(livePreviewEl, icStateToPreviewInvoice(s), ()=>icApplyZoom(overlay));
+
+    const projectSel = overlay.querySelector('#ic_project');
+    if(projectSel) projectSel.onchange = (e)=>{ icApplyProject(e.target.value); renderCreateInvoiceModal(); };
+    overlay.querySelector('#ic_client').onchange = (e)=>{ s.clientName = e.target.value; refreshIcPreview(overlay); };
+    overlay.querySelector('#ic_business').onchange = (e)=>{ s.businessName = e.target.value; refreshIcPreview(overlay); };
+    overlay.querySelector('#ic_website').onchange = (e)=>{ s.websiteLink = e.target.value; refreshIcPreview(overlay); };
+    overlay.querySelector('#ic_type').onchange = (e)=>{ icApplyInvoiceType(e.target.value); renderCreateInvoiceModal(); };
+    const invnumInput = overlay.querySelector('#ic_invnum');
+    if(invnumInput && !invnumInput.readOnly) invnumInput.onchange = (e)=>{ s.invoiceNumber = e.target.value.trim() || null; refreshIcPreview(overlay); };
+    overlay.querySelector('#ic_date').onchange = (e)=>{ s.invoiceDate = e.target.value; renderCreateInvoiceModal(); };
+    overlay.querySelector('#ic_due').onchange = (e)=>{ s.dueDate = e.target.value; refreshIcPreview(overlay); };
+    overlay.querySelector('#ic_pstatus').onchange = (e)=>{ s.projectStatus = e.target.value; refreshIcPreview(overlay); };
     const statusSel = overlay.querySelector('#ic_status');
-    if(statusSel) statusSel.onchange = (e)=> s.status = e.target.value;
-    overlay.querySelector('#ic_currency').onchange = (e)=> s.currency = e.target.value;
+    if(statusSel) statusSel.onchange = (e)=>{ s.status = e.target.value; refreshIcPreview(overlay); };
+    overlay.querySelector('#ic_currency').onchange = (e)=>{ s.currency = e.target.value; refreshIcPreview(overlay); };
     overlay.querySelector('#ic_discount').onchange = (e)=>{ s.discountAmount = Number(e.target.value)||0; renderCreateInvoiceModal(); };
-    overlay.querySelector('#ic_summary').onchange = (e)=> s.summary = e.target.value;
-    overlay.querySelector('#ic_notes').onchange = (e)=> s.notes = e.target.value;
+    overlay.querySelector('#ic_summary').onchange = (e)=>{ s.summary = e.target.value; s._summaryTouched = true; refreshIcPreview(overlay); };
+    overlay.querySelector('#ic_notes').onchange = (e)=>{ s.notes = e.target.value; s._notesTouched = true; refreshIcPreview(overlay); };
     overlay.querySelector('#ic_addRow').onclick = ()=>{ s.items.push({ id:fnId(), description:'', period:'', qty:1, amount:0 }); renderCreateInvoiceModal(); };
     wireInvoiceItemsEditor(overlay, s);
-    overlay.querySelector('#icSave').onclick = ()=> saveInvoiceFromState();
+
+    overlay.querySelector('#icSaveDraft').onclick = ()=> saveInvoiceFromState('Draft');
+    overlay.querySelector('#icIssue').onclick = ()=> saveInvoiceFromState(s.editingId && !INVOICE_CREATE_STATUSES.includes(s.status) ? null : 'Issued');
   }});
 }
 
-function saveInvoiceFromState(){
+// Lighter-weight refresh (spec §12/§13 parity with refreshQcPreview) — used
+// by every field that only changes preview CONTENT, never what other fields
+// on screen look like, so editing text never disturbs scroll position or zoom.
+function refreshIcPreview(overlay){
+  const s = IC_STATE;
+  const preview = overlay.querySelector('#ic_livePreview');
+  if(preview) paintInvoicePreview(preview, icStateToPreviewInvoice(s), ()=>icApplyZoom(overlay));
+  else icApplyZoom(overlay);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Live preview zoom (screen-only) — same pattern as Quotations'            */
+/* qcCurrentFitZoom/qcApplyZoom/qcWireResize, kept as its own small copy    */
+/* (own ids/state) rather than sharing QC_ZOOM/QC_TAB, since the two modals */
+/* are conceptually independent screens even though they never open at the */
+/* same time.                                                               */
+/* ---------------------------------------------------------------------- */
+function icCurrentFitZoom(overlay){
+  const canvas = overlay.querySelector('#icPreviewCanvas');
+  if(!canvas) return 1;
+  const available = canvas.clientWidth - 32;
+  if(!available || available<=0) return 1;
+  return Math.max(0.3, Math.min(1.5, available / IC_A4_PAGE_WIDTH_PX));
+}
+function icApplyZoom(overlay){
+  const canvas = overlay.querySelector('#icPreviewCanvas');
+  const scaleEl = overlay.querySelector('#icA4Scale');
+  if(!canvas || !scaleEl) return;
+  const z = IC_ZOOM==='fit' ? icCurrentFitZoom(overlay) : IC_ZOOM;
+  scaleEl.style.zoom = z;
+}
+let IC_RESIZE_HANDLER = null;
+function icWireResize(overlay){
+  if(IC_RESIZE_HANDLER) window.removeEventListener('resize', IC_RESIZE_HANDLER);
+  IC_RESIZE_HANDLER = ()=>{
+    if(!document.body.contains(overlay)){ window.removeEventListener('resize', IC_RESIZE_HANDLER); IC_RESIZE_HANDLER = null; return; }
+    if(IC_ZOOM==='fit') icApplyZoom(overlay);
+  };
+  window.addEventListener('resize', IC_RESIZE_HANDLER);
+}
+
+// `forceStatus` — 'Draft' (Save as Draft button), 'Issued' (Issue Invoice,
+// first time only), or null (Save Changes on an already-Issued+ invoice,
+// where status stays exactly what the real payment-driven state machine
+// says — issuing/editing NEVER marks an invoice Paid by itself, spec §11/§17).
+function saveInvoiceFromState(forceStatus){
   const s = IC_STATE;
   if(!s.projectCode){ toast('Please select a project.', 'error'); return; }
   if(!s.clientName.trim()){ toast('Please enter a client name.', 'error'); return; }
@@ -498,13 +862,15 @@ function saveInvoiceFromState(){
   if(existing && !canEditInvoice(existing)){ toast('You do not have permission to edit this invoice.', 'error'); return; }
 
   const invoiceNumber = s.invoiceNumber || existing?.invoiceNumber || generateInvoiceNumber(s.projectCode, s.businessName||s.clientName, s.invoiceDate);
+  const status = forceStatus || s.status || 'Draft';
   const record = {
     id: existing ? existing.id : 'INV' + Date.now() + Math.floor(Math.random()*10000),
     invoiceNumber,
     projectCode: s.projectCode, leadId: proj ? proj.leadId : null,
     clientName: s.clientName.trim(), businessName: s.businessName.trim(),
-    websiteLink: s.websiteLink.trim(), invoiceDate: s.invoiceDate,
-    projectStatus: s.projectStatus, status: s.status, currency: s.currency,
+    websiteLink: s.websiteLink.trim(), invoiceDate: s.invoiceDate, dueDate: s.dueDate || '',
+    projectStatus: s.projectStatus, status, currency: s.currency,
+    invoiceType: s.invoiceType || 'Custom', paymentStageIndex: s.paymentStageIndex!=null ? s.paymentStageIndex : null,
     items: s.items, discountAmount: Number(s.discountAmount)||0,
     summary: s.summary, notes: s.notes,
     assignedSales: s.assignedSales || CURRENT_USER.name,
@@ -537,7 +903,7 @@ function openInvoiceDetailModal(id){
     <div class="modal-head">
       <div><h3>${escapeHtml(inv.invoiceNumber)}</h3>
         <div class="text-muted" style="font-size:12px;margin-top:4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          ${statusBadge(inv.status)}<span>${escapeHtml(inv.clientName)}${inv.businessName?' — '+escapeHtml(inv.businessName):''}</span>
+          ${statusBadge(inv.status)}<span class="text-muted" style="font-weight:600">${escapeHtml(invoicePaymentDisplayStatus(inv, totals))}</span><span>${escapeHtml(inv.clientName)}${inv.businessName?' — '+escapeHtml(inv.businessName):''}</span>
         </div>
       </div>
       <button class="modal-close" id="idClose">&times;</button>
@@ -548,7 +914,9 @@ function openInvoiceDetailModal(id){
       <div class="pd-keyinfo">
         <div>
           ${infoRow('Project', proj ? `${proj.id} — ${escapeHtml(proj.businessName)}` : (inv.projectCode||'—'))}
+          ${infoRow('Invoice Type', escapeHtml(INVOICE_TYPE_LABELS[inv.invoiceType]||inv.invoiceType||'Custom Invoice'))}
           ${infoRow('Invoice Date', fmtDate(inv.invoiceDate))}
+          ${infoRow('Payment Due Date', inv.dueDate?fmtDate(inv.dueDate):'—')}
           ${infoRow('Website Link', inv.websiteLink||'—')}
         </div>
         <div>
@@ -679,20 +1047,23 @@ function linkedInvoicesHtml(projectId){
     ${list.length ? `
     <div class="table-wrap scroll-x">
       <table class="data-table qc-mini-table">
-        <thead><tr><th>Invoice No.</th><th>Date</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Action</th></tr></thead>
+        <thead><tr><th>Invoice No.</th><th>Type</th><th>Date</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Action</th></tr></thead>
         <tbody>
           ${list.map(inv=>{
             const t = invoiceTotals(inv);
             return `<tr>
               <td class="cell-strong">${escapeHtml(inv.invoiceNumber)}</td>
+              <td>${escapeHtml(INVOICE_TYPE_LABELS[inv.invoiceType]||inv.invoiceType||'Custom Invoice')}</td>
               <td>${fmtDate(inv.invoiceDate)}</td>
               <td>${money(t.total)}</td>
               <td>${money(t.totalPaid)}</td>
               <td>${money(t.balance)}</td>
               <td>${statusBadge(inv.status)}</td>
-              <td><div class="flex-row" style="gap:2px">
+              <td><div class="flex-row" style="gap:2px;flex-wrap:wrap">
                 <button class="btn btn-ghost btn-sm" data-view-invoice="${inv.id}">View</button>
                 <button class="btn btn-ghost btn-sm" data-pdf-invoice="${inv.id}">PDF</button>
+                ${canEditInvoice(inv) ? `<button class="btn btn-ghost btn-sm" data-edit-invoice="${inv.id}">Edit</button>` : ''}
+                ${t.balance>0.004 && inv.status!=='Draft' && inv.status!=='Cancelled' ? `<button class="btn btn-ghost btn-sm" data-pay-invoice="${inv.id}">Record Payment</button>` : ''}
               </div></td>
             </tr>`;
           }).join('')}
@@ -704,6 +1075,14 @@ function linkedInvoicesHtml(projectId){
 function wireLinkedInvoices(container){
   container.querySelectorAll('[data-view-invoice]').forEach(el=> el.onclick = ()=> openInvoiceDetailModal(el.dataset.viewInvoice));
   container.querySelectorAll('[data-pdf-invoice]').forEach(el=> el.onclick = ()=> openInvoicePreview(el.dataset.pdfInvoice, true));
+  container.querySelectorAll('[data-edit-invoice]').forEach(el=> el.onclick = ()=>{
+    const inv = DB.find('invoices', el.dataset.editInvoice);
+    if(inv){ IC_STATE = loadInvoiceStateFrom(inv); IC_TAB='edit'; renderCreateInvoiceModal(); }
+  });
+  container.querySelectorAll('[data-pay-invoice]').forEach(el=> el.onclick = ()=>{
+    const inv = DB.find('invoices', el.dataset.payInvoice);
+    if(inv && inv.projectCode) openRecordPaymentModal(inv.projectCode, ()=>{ if(typeof openProjectDetailModal==='function') openProjectDetailModal(inv.projectCode); }, inv.id);
+  });
   const newBtn = container.querySelector('[data-new-invoice]');
   if(newBtn) newBtn.onclick = ()=> openCreateInvoiceModal({ projectCode: newBtn.dataset.newInvoice });
 }
@@ -723,11 +1102,26 @@ function invoiceInfoRows(inv, proj){
   }
   rows.push(`<tr><th>${bilingualLabel('គម្រោង','Project')}</th><td>${escapeHtml(inv.projectCode||'—')}${proj?' — '+escapeHtml(serviceDisplayName(proj.projectType)):''}</td></tr>`);
   rows.push(`<tr><th>${bilingualLabel('កាលបរិច្ឆេទ','Date')}</th><td>${fmtDate(inv.invoiceDate)}</td></tr>`);
+  if(inv.dueDate) rows.push(`<tr><th>Payment Due Date</th><td>${fmtDate(inv.dueDate)}</td></tr>`);
   if(inv.websiteLink) rows.push(`<tr><th>Website</th><td>${escapeHtml(inv.websiteLink)}</td></tr>`);
+  if(proj) rows.push(`<tr><th>Project Status</th><td>${escapeHtml(proj.stage||'—')}</td></tr>`);
+  rows.push(`<tr><th>Payment Status</th><td>${escapeHtml(invoicePaymentDisplayStatus(inv, invoiceTotals(inv)))}</td></tr>`);
   return rows.join('');
 }
 
+// Spec §14-16: the printed/preview title reflects the Invoice Type, and
+// flips to the "…PAID" wording once real linked payments actually cover it
+// — never just because the invoice was Issued.
+function invoiceDocTitle(inv, totals){
+  const disp = invoicePaymentDisplayStatus(inv, totals);
+  if(inv.invoiceType==='Deposit') return disp==='Deposit Paid' ? 'DEPOSIT PAID' : 'DEPOSIT INVOICE';
+  if(inv.invoiceType==='Progress') return disp==='Progress Payment Paid' ? 'PROGRESS PAYMENT PAID' : 'PROGRESS PAYMENT INVOICE';
+  if(inv.invoiceType==='Final') return disp==='Fully Paid' ? 'FINAL PAYMENT — FULLY PAID' : 'FINAL PAYMENT INVOICE';
+  return 'INVOICE';
+}
+
 function invoiceFullHeaderHtml(inv){
+  const totals = invoiceTotals(inv);
   return `<div class="quote-doc-head">
     <div class="quote-doc-brand">
       <img class="quote-doc-logo" src="../assets/branding/bizweb-kh-logo-main-print.png" alt="BizWeb KH">
@@ -735,13 +1129,88 @@ function invoiceFullHeaderHtml(inv){
     </div>
     <div class="quote-doc-meta">
       <div class="khmer-text" style="font-size:13px;color:var(--blue)">វិក្កយបត្រ</div>
-      <div><b>INVOICE</b> ${statusBadge(inv.status)}</div>
+      <div><b>${escapeHtml(invoiceDocTitle(inv, totals))}</b> ${statusBadge(inv.status)}</div>
       <div>Invoice No: ${escapeHtml(inv.invoiceNumber)}</div>
     </div>
   </div>`;
 }
 function invoiceContHeaderHtml(inv){
-  return `<div class="quote-doc-cont-head"><b>BizWeb KH</b> — INVOICE · Invoice No: ${escapeHtml(inv.invoiceNumber)}</div>`;
+  return `<div class="quote-doc-cont-head"><b>BizWeb KH</b> — ${escapeHtml(invoiceDocTitle(inv, invoiceTotals(inv)))} · Invoice No: ${escapeHtml(inv.invoiceNumber)}</div>`;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Payment-stage type framing + the compact multi-stage Payment Schedule    */
+/* breakdown block (spec §12/§13/§14-16) — both are pure render functions   */
+/* over invoicePaymentBreakdown()'s real numbers; no calculation is         */
+/* duplicated here, and both are used identically by the live preview pane  */
+/* AND Print/PDF (buildInvoiceSections below is the one place either is     */
+/* called from — spec §23).                                                 */
+/* ---------------------------------------------------------------------- */
+function invoiceTypeFramingHtml(inv){
+  const bd = invoicePaymentBreakdown(inv);
+  const t = bd.totals;
+  if(inv.invoiceType==='Deposit'){
+    const stage = inv.paymentStageIndex!=null ? bd.schedule[inv.paymentStageIndex] : null;
+    return `<table class="quote-doc-table qc-mini-table" style="max-width:380px">
+      <tbody>
+        <tr><td>Project Total</td><td style="text-align:right">${money(bd.projectTotal)}</td></tr>
+        ${stage ? `<tr><td>Deposit %</td><td style="text-align:right">${stage.pct}%</td></tr>` : ''}
+        <tr><td>Deposit Amount</td><td style="text-align:right">${money(t.total)}</td></tr>
+        <tr><td>Previous Paid</td><td style="text-align:right">${money(bd.previouslyPaid)}</td></tr>
+        <tr><td><b>Balance After Deposit</b></td><td style="text-align:right"><b>${money(bd.balanceAfter)}</b></td></tr>
+      </tbody>
+    </table>`;
+  }
+  if(inv.invoiceType==='Progress'){
+    return `<table class="quote-doc-table qc-mini-table" style="max-width:380px">
+      <tbody>
+        <tr><td>Project Total</td><td style="text-align:right">${money(bd.projectTotal)}</td></tr>
+        <tr><td>Deposit Already Paid</td><td style="text-align:right">${money(bd.previouslyPaid)}</td></tr>
+        <tr><td>Current Progress Payment</td><td style="text-align:right">${money(t.total)}</td></tr>
+        <tr><td><b>Remaining Final Balance</b></td><td style="text-align:right"><b>${money(bd.balanceAfter)}</b></td></tr>
+      </tbody>
+    </table>`;
+  }
+  if(inv.invoiceType==='Final'){
+    const fullyPaid = bd.balanceAfter<=0.005 && t.totalPaid>0.004;
+    return `<table class="quote-doc-table qc-mini-table" style="max-width:380px">
+      <tbody>
+        <tr><td>Project Total</td><td style="text-align:right">${money(bd.projectTotal)}</td></tr>
+        <tr><td>Total Previous Payments</td><td style="text-align:right">${money(bd.previouslyPaid)}</td></tr>
+        <tr><td>Final Amount Due</td><td style="text-align:right">${money(t.total)}</td></tr>
+        <tr><td><b>Balance After Payment</b></td><td style="text-align:right"><b>${money(bd.balanceAfter)}${fullyPaid?' — FULLY PAID':''}</b></td></tr>
+      </tbody>
+    </table>`;
+  }
+  return '';
+}
+// Compact multi-stage breakdown — only rendered when the project's real
+// schedule has 2+ stages (a single-stage/no-schedule project has nothing to
+// break down). PAID/PARTIAL/PENDING is derived from the actual OTHER
+// invoice (if any) issued against each stage — never hardcoded percentages,
+// never this invoice's own record for any stage but its own.
+function invoicePaymentScheduleBlockHtml(inv){
+  const { schedule } = projectPaymentScheduleFor(inv.projectCode);
+  if(!schedule || schedule.length<2) return '';
+  const rows = schedule.map((st,i)=>{
+    let tag, color;
+    if(i===inv.paymentStageIndex){ tag='CURRENT INVOICE'; color='var(--blue)'; }
+    else{
+      const other = DB.all('invoices')
+        .filter(x=> x.projectCode===inv.projectCode && x.paymentStageIndex===i && x.status!=='Cancelled' && x.id!==inv.id)
+        .sort((a,b)=> new Date(b.createdAt||0)-new Date(a.createdAt||0))[0];
+      if(other){
+        const ot = invoiceTotals(other);
+        tag = ot.balance<=0.005 && ot.totalPaid>0.004 ? 'PAID' : (ot.totalPaid>0.004 ? 'PARTIAL' : 'PENDING');
+      } else tag = 'PENDING';
+      color = tag==='PAID' ? 'var(--green)' : tag==='PARTIAL' ? '#d98a12' : 'var(--muted)';
+    }
+    return `<tr><td>${escapeHtml(st.label)}</td><td style="text-align:right">${money(st.amount)}</td><td style="text-align:right;color:${color};font-weight:700">${tag}</td></tr>`;
+  }).join('');
+  return `<h4 class="quote-doc-h">Payment Schedule</h4><table class="quote-doc-table qc-mini-table" style="max-width:460px">
+    <thead><tr><th>Stage</th><th style="text-align:right">Amount</th><th style="text-align:right">Status</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
 }
 
 function buildInvoiceSections(inv){
@@ -754,6 +1223,14 @@ function buildInvoiceSections(inv){
 
   sections.push({ id:'summary', kind:'block',
     html:`<h4 class="quote-doc-h">Invoice Summary</h4><p style="font-size:12.5px;margin:0;white-space:pre-wrap">${escapeHtml(inv.summary||'—')}</p>` });
+
+  const typeFraming = invoiceTypeFramingHtml(inv);
+  if(typeFraming){
+    sections.push({ id:'stageframing', kind:'block',
+      html:`<h4 class="quote-doc-h">${escapeHtml(invoiceDocTitle(inv, totals))}</h4>${typeFraming}` });
+  }
+  const scheduleBlock = invoicePaymentScheduleBlockHtml(inv);
+  if(scheduleBlock) sections.push({ id:'schedule', kind:'block', html: scheduleBlock });
 
   sections.push({ id:'items', kind:'group',
     headingHtml:`<h4 class="quote-doc-h">Items</h4>`,
