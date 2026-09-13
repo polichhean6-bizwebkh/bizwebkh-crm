@@ -1211,21 +1211,66 @@ function isProjectCodeTaken(code, { excludeLeadId=null, excludeProjectId=null } 
   return inLeads;
 }
 
+// Pure calculation, no DB access — takes a flat list of raw code-like
+// values (any mix of null/undefined/blank/garbage is fine, non-matching
+// entries are just ignored) and returns the highest valid "C" + digits
+// code found (by NUMERIC value, never by count of entries or position —
+// a list like [C001,C002,C005,C058] must resolve to C058, not "5th item"
+// or "count=4") plus the next suggested code.
+//
+// Matching is case-insensitive ("c058" counts the same as "C058"), and the
+// suggested code's zero-padding defaults to the SAME digit-width as the
+// highest code found (so a codebase using e.g. C01..C58 keeps suggesting
+// 2-digit codes) but never truncates: if incrementing pushes the number
+// past that width (C099 -> 100), the width simply expands to fit
+// (Math.max(existingPadWidth, String(incremented).length)) rather than
+// staying short or zero-padding over the extra digit.
+//
+// Returns { lastUsed, suggested } where lastUsed is the normalized
+// (uppercase) highest code found, or null if nothing valid was found
+// anywhere — in which case `suggested` falls back to 'C001', the CRM's
+// existing seed convention.
+function computeNextProjectCode(allCodes){
+  let max = 0, padWidth = 3, lastUsed = null;
+  (allCodes||[]).forEach(raw=>{
+    const norm = normalizeProjectCode(raw);
+    const m = norm.match(/^C(\d+)$/i);
+    if(!m) return;
+    const num = parseInt(m[1],10);
+    if(lastUsed===null || num>max){
+      max = num;
+      padWidth = m[1].length;
+      lastUsed = norm;
+    }
+  });
+  if(lastUsed===null) return { lastUsed:null, suggested:'C001' };
+  const nextNum = max+1;
+  const width = Math.max(padWidth, String(nextNum).length);
+  return { lastUsed, suggested: 'C'+String(nextNum).padStart(width,'0') };
+}
+
 // A convenience PREFILL only (never auto-assigned without the user seeing
 // and being able to change it) — reuses the CRM's existing "C" + zero-
 // padded number convention (the same one DB.nextId('C','projects') already
-// applies), scanning BOTH leads' reserved codes and projects' ids so the
-// suggestion can never collide with a code that's only reserved on a lead
-// and has no Project row yet.
+// applies), scanning every place a project code can live (projects' ids,
+// leads' reserved codes, and quotations'/invoices' own projectCode field,
+// in case one of those references a code not yet reflected on a lead or
+// project row) so the suggestion can never collide with a code that's
+// only reserved somewhere else. Delegates the actual max/next math to
+// computeNextProjectCode() so there's exactly one implementation of the
+// "highest numeric code, padding-safe" rule shared by the prefill and by
+// the Edit Project Code popup's "Last used / Suggested next" remark.
+function allKnownProjectCodes(){
+  return [
+    ...DB.all('projects').map(p=>p.id),
+    ...DB.all('leads').map(l=>l.projectCode),
+    ...DB.all('quotations').map(q=>q.projectCode),
+    ...DB.all('invoices').map(i=>i.projectCode)
+  ];
+}
+
 function suggestNextProjectCode(){
-  let max = 0;
-  const scan = codes => codes.forEach(code=>{
-    const m = normalizeProjectCode(code).match(/^C(\d+)$/);
-    if(m) max = Math.max(max, parseInt(m[1],10));
-  });
-  scan(DB.all('projects').map(p=>p.id));
-  scan(DB.all('leads').map(l=>l.projectCode));
-  return 'C' + String(max+1).padStart(3,'0');
+  return computeNextProjectCode(allKnownProjectCodes()).suggested;
 }
 
 /* ---------------------------------------------------------------------- */

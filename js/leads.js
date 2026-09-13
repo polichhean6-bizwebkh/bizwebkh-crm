@@ -912,14 +912,23 @@ function advanceLeadToPipeline(lead, projectCode){
 function openEditProjectCodeModal(lead, onDone){
   if(!isFounder()){ toast('Only Founder/Admin can edit Project Code.', 'error'); return; }
   const required = leadStatusRequiresProjectCode(lead.status);
+  // Informational only — reflects true current state across ALL leads and
+  // projects (including this very lead's own already-assigned code, since
+  // this is context about the overall pool, not part of the uniqueness
+  // check itself, which still exempts this lead separately below).
+  const { lastUsed, suggested } = computeNextProjectCode(allKnownProjectCodes());
   const html = `
     <div class="modal-head"><h3>Edit Project Code</h3><button class="modal-close" id="epcClose">&times;</button></div>
     <div class="modal-body">
       <p class="text-muted" style="margin-top:0;font-size:13px">${escapeHtml(lead.clientName)} — ${escapeHtml(lead.businessName)}</p>
       <div class="form-field">
         <label ${required ? 'class="required"' : ''}>Project Code</label>
-        <input id="epcCode" value="${escapeHtml(lead.projectCode||'')}" placeholder="e.g. C046" style="text-transform:uppercase">
+        <div style="display:flex;gap:6px;align-items:center">
+          <input id="epcCode" value="${escapeHtml(lead.projectCode||'')}" placeholder="e.g. C046" style="text-transform:uppercase;flex:1">
+          <button type="button" class="btn btn-secondary" id="epcUseSuggested" style="white-space:nowrap;padding:6px 10px;font-size:12px">Use ${escapeHtml(suggested)}</button>
+        </div>
         <span class="form-hint">Must be unique across all leads and projects (not case-sensitive).${required ? ' Required at this stage.' : ''}</span>
+        <span class="form-hint">${lastUsed ? `Last used project code: <b>${escapeHtml(lastUsed)}</b> · Suggested next: <b>${escapeHtml(suggested)}</b>` : `No project codes assigned yet · Suggested next: <b>${escapeHtml(suggested)}</b>`}</span>
       </div>
     </div>
     <div class="modal-foot">
@@ -930,6 +939,12 @@ function openEditProjectCodeModal(lead, onDone){
   openModal(html, { onMount:(overlay)=>{
     overlay.querySelector('#epcClose').onclick = closeModal;
     overlay.querySelector('#epcCancel').onclick = closeModal;
+    overlay.querySelector('#epcUseSuggested').onclick = ()=>{
+      const codeInput = overlay.querySelector('#epcCode');
+      codeInput.value = suggested;
+      codeInput.dispatchEvent(new Event('input', { bubbles:true }));
+      codeInput.focus();
+    };
     overlay.querySelector('#epcSave').onclick = ()=>{
       const codeInput = overlay.querySelector('#epcCode');
       const normalized = normalizeProjectCode(codeInput.value);
