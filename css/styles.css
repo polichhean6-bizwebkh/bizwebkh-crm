@@ -585,6 +585,11 @@ svg{width:18px;height:18px}
 .form-field input:focus,.form-field select:focus,.form-field textarea:focus{outline:2px solid #bcd6ff;border-color:var(--blue)}
 .form-field textarea{resize:vertical;min-height:70px}
 .form-hint{font-size:11px;color:var(--muted)}
+.form-hint b{color:var(--text);font-weight:700}
+/* Multiple stacked .form-hint lines under one field (e.g. Edit Project
+   Code's rule line + its "Last used / Suggested next" remark) — a small
+   gap keeps them from reading as one run-on sentence. */
+.form-field .form-hint + .form-hint{display:block;margin-top:3px}
 .required:after{content:" *";color:var(--red)}
 /* Read-only / auto-generated / locked field styling (Quotations spec §2/§3):
    a field the user cannot type into must look visibly different from one
