@@ -550,8 +550,22 @@ function renderUsersPage(){
   const projects = DB.all('projects');
   const quotations = DB.all('quotations');
   const salesNames = salesPerformanceNames();
+  const founder = isFounder();
+
+  // Founder/Admin sees the full Users & Roles Management area (invite/edit
+  // role/deactivate/etc.) at the top of this same page — this is the exact
+  // same settingsUsersTab() markup as Settings -> Users & Roles, so the two
+  // entry points can never disagree with each other. Every other role sees
+  // this page exactly as before it existed (team list + Sales Performance),
+  // unchanged.
+  if(founder){
+    document.getElementById('pageTitle').textContent = 'Users & Roles';
+    document.getElementById('pageSub').textContent = 'Invite and manage BizWeb KH CRM staff accounts';
+  }
 
   el.innerHTML = `
+    ${founder ? `<div id="usersPageStaffMgmt">${settingsUsersTab()}</div><div class="divider" style="margin:28px 0"></div>` : ''}
+    <div class="section-title">Team Accounts</div>
     <div class="table-wrap scroll-x">
       <table class="data-table">
         <thead><tr><th>User</th><th>Username</th><th>Role</th><th>Leads Assigned</th><th>Active Projects</th></tr></thead>
@@ -570,7 +584,7 @@ function renderUsersPage(){
         </tbody>
       </table>
     </div>
-    <p class="text-muted" style="margin:14px 0 24px;font-size:12.5px">Live BizWeb KH team accounts from Supabase. New team members are added by creating a Supabase Auth user + linked <code>profiles</code> row — this page will list them automatically once that's done.</p>
+    <p class="text-muted" style="margin:14px 0 24px;font-size:12.5px">${founder ? 'Every CRM team account, for reference — use "+ Invite Staff" above to add a new one.' : 'Live BizWeb KH team accounts from Supabase.'}</p>
 
     <div class="section-title">Sales Performance</div>
     <p class="text-muted" style="margin:0 0 10px;font-size:12px">Only users with a Sales role, or who have at least one lead assigned, appear here.</p>
@@ -602,6 +616,7 @@ function renderUsersPage(){
       </table>
     </div>
   `;
+  if(founder) wireSettingsUsersTab('usersPageStaffMgmt');
 }
 
 let SETTINGS_TAB = 'general';
@@ -616,10 +631,11 @@ function renderSettingsPage(){
 function renderSettingsBody(){
   const el = document.getElementById('pageContent');
   el.innerHTML = `
-    <div class="tabs" style="max-width:640px">
+    <div class="tabs" style="max-width:${isFounder()?'840':'640'}px">
       <div class="tab-btn ${SETTINGS_TAB==='general'?'active':''}" data-stab="general">General</div>
       <div class="tab-btn ${SETTINGS_TAB==='prices'?'active':''}" data-stab="prices">Service Price List</div>
       <div class="tab-btn ${SETTINGS_TAB==='quotations'?'active':''}" data-stab="quotations">Quotations</div>
+      ${isFounder() ? `<div class="tab-btn ${SETTINGS_TAB==='users'?'active':''}" data-stab="users">Users &amp; Roles</div>` : ''}
     </div>
     <div id="settingsTabBody"></div>
   `;
@@ -636,6 +652,7 @@ function renderSettingsBody(){
   const body = document.getElementById('settingsTabBody');
   if(SETTINGS_TAB==='general') body.innerHTML = settingsGeneralTab();
   else if(SETTINGS_TAB==='prices') body.innerHTML = settingsPricesTab();
+  else if(SETTINGS_TAB==='users') body.innerHTML = isFounder() ? settingsUsersTab() : '';
   else body.innerHTML = settingsQuotationsTab();
 
   if(SETTINGS_TAB==='general'){
@@ -663,6 +680,8 @@ function renderSettingsBody(){
     }
   } else if(SETTINGS_TAB==='prices'){
     wireSettingsPricesTab();
+  } else if(SETTINGS_TAB==='users'){
+    if(isFounder()) wireSettingsUsersTab();
   } else {
     wireSettingsQuotationsTab();
   }
@@ -704,6 +723,23 @@ function settingsGeneralTab(){
   `;
 }
 
+// Renders one Year 2/Year 3 Renewal cell in the Service Price List. Most
+// packages have a numeric editable default (same input the Base Price
+// column already uses — no layout change). The 4 "To be confirmed"
+// packages (E-Commerce L3/L4, Custom Business System, Mobile App) store
+// `null` for this field (2026-09-13 approval, item 3: keep Settings and
+// quotation renewal references consistent rather than inventing a number) —
+// shown here as a plain muted "To be confirmed" label instead of a $ input/
+// value, matching the same inline-label convention already used for the
+// "(from)" badge above. This is Founder-editable text on this Settings tab
+// only; it never touches the Create Quotation UI or any quotation totals.
+function settingsRenewalCell(s, field, editable){
+  const val = s[field];
+  if(val===null || val===undefined) return '<span class="text-muted" style="font-size:12px">To be confirmed</span>';
+  return editable
+    ? `<input type="number" class="sel" style="width:90px" data-field="${field}" value="${val}">`
+    : money(val);
+}
 function settingsPricesTab(){
   const services = DB.all('services');
   const editable = isFounder();
@@ -720,8 +756,8 @@ function settingsPricesTab(){
             <tr data-svc="${s.id}">
               <td class="cell-strong">${escapeHtml(s.name)}${s.priceIsStartingFrom?' <span class="text-muted" style="font-weight:400;font-size:11px">(from)</span>':''}</td>
               <td>${editable?`<input type="number" class="sel" style="width:90px" data-field="basePrice" value="${s.basePrice}">`:money(s.basePrice)}</td>
-              <td>${editable?`<input type="number" class="sel" style="width:90px" data-field="year2Price" value="${s.year2Price}">`:money(s.year2Price)}</td>
-              <td>${editable?`<input type="number" class="sel" style="width:90px" data-field="year3Price" value="${s.year3Price}">`:money(s.year3Price)}</td>
+              <td>${settingsRenewalCell(s, 'year2Price', editable)}</td>
+              <td>${settingsRenewalCell(s, 'year3Price', editable)}</td>
               <td>${s.salesCanQuote?'✓ Yes':'No'}</td>
               <td>${s.founderReviewRequired?'✓ Yes':'No'}</td>
               <td>${escapeHtml(s.defaultDelivery)}</td>
@@ -743,6 +779,321 @@ function wireSettingsPricesTab(){
       toast(`${svc.name} updated.`, 'success');
     };
   });
+}
+
+/* ---------------------------------------------------------------------- */
+/* Settings -> Users & Roles — Founder/Admin-only staff management.        */
+/* Invite/resend/role-change/deactivate/reactivate all go through the      */
+/* staff-manage Supabase Edge Function (supabase/functions/staff-manage) — */
+/* the ONLY place the service_role key or the Auth Admin API is ever used. */
+/* This module never touches either. "Send Password Reset" is the one     */
+/* exception: it calls supabaseClient.auth.resetPasswordForEmail() (a      */
+/* public, anon-key method — no elevated access needed), the exact same    */
+/* call already used by the login page's own "Forgot password?" link.      */
+/* ---------------------------------------------------------------------- */
+
+const STAFF_ROLE_OPTIONS = ['founder_admin', 'sales', 'sales_rep', 'finance', 'partner_operations'];
+
+// Every privileged staff-management call funnels through here so errors are
+// handled once, consistently, and the friendly "already associated with a
+// CRM user" / permission messages the Edge Function returns are surfaced
+// as-is rather than a generic failure.
+async function callStaffManage(action, fields){
+  const { data, error } = await supabaseClient.functions.invoke('staff-manage', { body: { action, ...fields } });
+  if(error){
+    // supabase-js surfaces a non-2xx Edge Function response as `error`, with
+    // the function's own JSON body reachable via error.context — fall back
+    // to a generic message only if that shape isn't there.
+    let msg = 'Something went wrong. Please try again.';
+    try{
+      const body = error.context && typeof error.context.json === 'function' ? await error.context.json() : null;
+      if(body && body.error) msg = body.error;
+    }catch(e){ /* ignore — use generic message */ }
+    throw new Error(msg);
+  }
+  if(data && data.error) throw new Error(data.error);
+  return data;
+}
+
+function staffStatusLabel(status){
+  return status==='invited' ? 'Invited' : status==='inactive' ? 'Inactive' : 'Active';
+}
+
+function settingsUsersTab(){
+  const users = DB.all('users').slice().sort((a,b)=> a.name.localeCompare(b.name));
+  const total = users.length;
+  const active = users.filter(u=>u.status==='active').length;
+  const invited = users.filter(u=>u.status==='invited').length;
+  const inactive = users.filter(u=>u.status==='inactive').length;
+  return `
+    <div class="kpi-grid" style="margin:14px 0 18px">
+      <div class="kpi-card"><div class="kpi-value">${total}</div><div class="kpi-label">Total Users</div></div>
+      <div class="kpi-card"><div class="kpi-value" style="color:var(--green)">${active}</div><div class="kpi-label">Active</div></div>
+      <div class="kpi-card"><div class="kpi-value" style="color:var(--amber)">${invited}</div><div class="kpi-label">Invited</div></div>
+      <div class="kpi-card"><div class="kpi-value" style="color:var(--muted)">${inactive}</div><div class="kpi-label">Inactive</div></div>
+    </div>
+    <div class="flex-row" style="justify-content:space-between;align-items:flex-start;margin-bottom:12px;gap:12px">
+      <p class="text-muted" style="margin:0;font-size:12.5px;max-width:520px">Invite and manage BizWeb KH CRM staff accounts. Deactivating a user blocks their access immediately — their history and records are kept.</p>
+      <button class="btn btn-primary btn-sm" id="usrInviteBtn" style="white-space:nowrap">+ Invite Staff</button>
+    </div>
+    <div class="table-wrap scroll-x">
+      <table class="data-table">
+        <thead><tr>
+          <th>Full Name</th><th>Email</th><th>Role</th><th>Status</th><th>Invited Date</th><th>Last Login</th><th>Actions</th>
+        </tr></thead>
+        <tbody>
+          ${users.length ? users.map(u=>{
+            const isSelf = u.id===CURRENT_USER.id;
+            const btns = [];
+            btns.push(`<button class="btn btn-ghost btn-sm" data-view="${u.id}">View</button>`);
+            if(!isSelf) btns.push(`<button class="btn btn-ghost btn-sm" data-editrole="${u.id}">Edit Role</button>`);
+            if(u.status==='invited') btns.push(`<button class="btn btn-ghost btn-sm" data-resend="${u.id}">Resend Invitation</button>`);
+            if(u.status==='active' && !isSelf) btns.push(`<button class="btn btn-ghost btn-sm" data-resetpw="${u.id}">Send Password Reset</button>`);
+            if(u.status!=='inactive' && u.role!=='founder_admin' && !isSelf) btns.push(`<button class="btn btn-ghost btn-sm" style="color:var(--red)" data-deactivate="${u.id}">Deactivate</button>`);
+            if(u.status==='inactive') btns.push(`<button class="btn btn-ghost btn-sm" style="color:var(--green)" data-reactivate="${u.id}">Reactivate</button>`);
+            return `
+            <tr data-uid="${u.id}">
+              <td><div class="flex-row"><div class="avatar-sm" style="background:${u.color}">${u.initials}</div><span class="cell-strong">${escapeHtml(u.name)}</span>${isSelf?' <span class="text-muted" style="font-size:11px">(you)</span>':''}</div></td>
+              <td>${escapeHtml(u.email||'—')}</td>
+              <td>${escapeHtml(ROLE_LABELS[u.role]||u.role)}</td>
+              <td>${statusBadge(u.status, staffStatusLabel(u.status))}</td>
+              <td>${u.invitedAt?fmtDate(u.invitedAt):'—'}</td>
+              <td>${u.lastLoginAt?fmtDateTime(u.lastLoginAt):'—'}</td>
+              <td><div class="flex-row" style="gap:6px;flex-wrap:wrap">${btns.join('')}</div></td>
+            </tr>`;
+          }).join('') : `<tr><td colspan="7"><div class="empty-row">No staff accounts yet.</div></td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+// Re-fetches the staff list and re-renders whichever page is currently
+// showing the Users & Roles section — Settings -> Users & Roles, and/or
+// the sidebar Users page (Founder/Admin view) — so an action taken from
+// either place is reflected immediately, wherever the user is looking.
+async function reloadUsersTabAfterChange(){
+  await DB.refreshUsers();
+  if(document.getElementById('settingsTabBody') && SETTINGS_TAB==='users') renderSettingsBody();
+  if(document.getElementById('usersPageStaffMgmt')) renderUsersPage();
+}
+
+// `containerId` is the element wrapping this render's Invite/View/Edit
+// Role/etc. buttons — Settings -> Users & Roles tab (settingsTabBody) and
+// the sidebar Users page (usersPageStaffMgmt) both render the exact same
+// settingsUsersTab() markup and wire it through here, so the two entry
+// points can never drift out of sync with each other.
+function wireSettingsUsersTab(containerId='settingsTabBody'){
+  const wrap = document.getElementById(containerId);
+  if(!wrap) return;
+
+  wrap.querySelector('#usrInviteBtn').onclick = openInviteStaffModal;
+
+  wrap.querySelectorAll('[data-view]').forEach(b=> b.onclick = ()=>{
+    const u = DB.all('users').find(x=>x.id===b.dataset.view);
+    if(u) openUserDetailsModal(u);
+  });
+  wrap.querySelectorAll('[data-editrole]').forEach(b=> b.onclick = ()=>{
+    const u = DB.all('users').find(x=>x.id===b.dataset.editrole);
+    if(u) openEditRoleModal(u);
+  });
+  wrap.querySelectorAll('[data-resend]').forEach(b=> b.onclick = async ()=>{
+    const u = DB.all('users').find(x=>x.id===b.dataset.resend);
+    if(!u) return;
+    if(!confirm(`Resend the invitation email to ${u.name} (${u.email})?`)) return;
+    b.disabled = true;
+    try{
+      await callStaffManage('resend_invite', { userId: u.id });
+      toast(`Invitation resent to ${u.name}.`, 'success');
+      await reloadUsersTabAfterChange();
+    }catch(err){
+      console.error('resend_invite failed', err);
+      toast(err.message || 'Could not resend the invitation.', 'error');
+      b.disabled = false;
+    }
+  });
+  wrap.querySelectorAll('[data-deactivate]').forEach(b=> b.onclick = async ()=>{
+    const u = DB.all('users').find(x=>x.id===b.dataset.deactivate);
+    if(!u) return;
+    if(!confirm(`Deactivate ${u.name}? They will be signed out immediately and won't be able to log in until reactivated. Their history and records are kept.`)) return;
+    b.disabled = true;
+    try{
+      await callStaffManage('deactivate', { userId: u.id });
+      toast(`${u.name} has been deactivated.`, 'success');
+      await reloadUsersTabAfterChange();
+    }catch(err){
+      console.error('deactivate failed', err);
+      toast(err.message || 'Could not deactivate this user.', 'error');
+      b.disabled = false;
+    }
+  });
+  wrap.querySelectorAll('[data-reactivate]').forEach(b=> b.onclick = async ()=>{
+    const u = DB.all('users').find(x=>x.id===b.dataset.reactivate);
+    if(!u) return;
+    if(!confirm(`Reactivate ${u.name}? They will be able to log in again immediately.`)) return;
+    b.disabled = true;
+    try{
+      await callStaffManage('reactivate', { userId: u.id });
+      toast(`${u.name} has been reactivated.`, 'success');
+      await reloadUsersTabAfterChange();
+    }catch(err){
+      console.error('reactivate failed', err);
+      toast(err.message || 'Could not reactivate this user.', 'error');
+      b.disabled = false;
+    }
+  });
+  wrap.querySelectorAll('[data-resetpw]').forEach(b=> b.onclick = async ()=>{
+    const u = DB.all('users').find(x=>x.id===b.dataset.resetpw);
+    if(!u || !u.email) return;
+    if(!confirm(`Send a password reset email to ${u.name} (${u.email})? You will never see or set their password directly.`)) return;
+    b.disabled = true;
+    try{
+      const { error } = await supabaseClient.auth.resetPasswordForEmail(u.email, { redirectTo: productionRedirectToForApp() });
+      if(error) throw error;
+      logActivity({
+        userName: CURRENT_USER.name, refType:'user', refId: u.id, refLabel: u.name,
+        type:'Password Reset Requested', description: `${CURRENT_USER.name} sent a password reset link to ${u.name} (${u.email}).`
+      });
+      toast(`Password reset email sent to ${u.name}.`, 'success');
+    }catch(err){
+      console.error('resetPasswordForEmail failed', err);
+      toast('Could not send the password reset email.', 'error');
+    }
+    b.disabled = false;
+  });
+}
+
+// Same production/staging redirect logic as login/index.html's own
+// productionRedirectTo() (this module is loaded on dashboard/ pages, never
+// login/, so it needs its own copy rather than sharing that file's local
+// const — kept logically identical on purpose).
+function productionRedirectToForApp(){
+  return window.location.hostname === 'crm.bizwebkh.com'
+    ? 'https://crm.bizwebkh.com/login/index.html'
+    : 'https://polichhean6-bizwebkh.github.io/bizwebkh-crm/login/index.html';
+}
+
+function openInviteStaffModal(){
+  const html = `
+    <div class="modal-head"><h3>Invite Staff</h3><button class="modal-close" id="invClose">&times;</button></div>
+    <div class="modal-body">
+      <div id="invError"></div>
+      <div class="form-field" style="margin-bottom:14px">
+        <label for="invName">Full Name</label>
+        <input id="invName" type="text" placeholder="e.g. Sokha Chan" required>
+      </div>
+      <div class="form-field" style="margin-bottom:14px">
+        <label for="invEmail">Email</label>
+        <input id="invEmail" type="email" placeholder="name@bizwebkh.com" required>
+      </div>
+      <div class="form-field">
+        <label for="invRole">Role</label>
+        <select id="invRole" class="sel" style="width:100%">
+          ${STAFF_ROLE_OPTIONS.map(r=>`<option value="${r}">${ROLE_LABELS[r]}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-secondary" id="invCancel">Cancel</button>
+      <button class="btn btn-primary" id="invSend">Send Invitation</button>
+    </div>
+  `;
+  openModal(html, { onMount:(overlay)=>{
+    overlay.querySelector('#invClose').onclick = closeModal;
+    overlay.querySelector('#invCancel').onclick = closeModal;
+    overlay.querySelector('#invRole').value = 'sales_rep';
+    overlay.querySelector('#invSend').onclick = async ()=>{
+      const fullName = overlay.querySelector('#invName').value.trim();
+      const email = overlay.querySelector('#invEmail').value.trim();
+      const role = overlay.querySelector('#invRole').value;
+      const errEl = overlay.querySelector('#invError');
+      errEl.innerHTML = '';
+      if(!fullName || !email){
+        errEl.innerHTML = `<div class="login-error">Full name and email are required.</div>`;
+        return;
+      }
+      const btn = overlay.querySelector('#invSend');
+      btn.disabled = true; btn.textContent = 'Sending…';
+      try{
+        await callStaffManage('invite', { fullName, email, role });
+        closeModal();
+        toast(`Invitation sent to ${fullName}.`, 'success');
+        await reloadUsersTabAfterChange();
+      }catch(err){
+        console.error('invite failed', err);
+        errEl.innerHTML = `<div class="login-error">${escapeHtml(err.message || 'Could not send the invitation.')}</div>`;
+        btn.disabled = false; btn.textContent = 'Send Invitation';
+      }
+    };
+  }});
+}
+
+function openEditRoleModal(user){
+  const html = `
+    <div class="modal-head"><h3>Edit Role</h3><button class="modal-close" id="erClose">&times;</button></div>
+    <div class="modal-body">
+      <div id="erError"></div>
+      <p class="text-muted" style="margin-top:0">${escapeHtml(user.name)} — ${escapeHtml(user.email||'')}</p>
+      <div class="form-field">
+        <label for="erRole">Role</label>
+        <select id="erRole" class="sel" style="width:100%">
+          ${STAFF_ROLE_OPTIONS.map(r=>`<option value="${r}" ${r===user.role?'selected':''}>${ROLE_LABELS[r]}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-secondary" id="erCancel">Cancel</button>
+      <button class="btn btn-primary" id="erSave">Save</button>
+    </div>
+  `;
+  openModal(html, { onMount:(overlay)=>{
+    overlay.querySelector('#erClose').onclick = closeModal;
+    overlay.querySelector('#erCancel').onclick = closeModal;
+    overlay.querySelector('#erSave').onclick = async ()=>{
+      const role = overlay.querySelector('#erRole').value;
+      const errEl = overlay.querySelector('#erError');
+      errEl.innerHTML = '';
+      const btn = overlay.querySelector('#erSave');
+      btn.disabled = true; btn.textContent = 'Saving…';
+      try{
+        await callStaffManage('set_role', { userId: user.id, role });
+        closeModal();
+        toast(`${user.name}'s role updated to ${ROLE_LABELS[role]}.`, 'success');
+        await reloadUsersTabAfterChange();
+      }catch(err){
+        console.error('set_role failed', err);
+        errEl.innerHTML = `<div class="login-error">${escapeHtml(err.message || 'Could not update the role.')}</div>`;
+        btn.disabled = false; btn.textContent = 'Save';
+      }
+    };
+  }});
+}
+
+function openUserDetailsModal(user){
+  const inviter = user.invitedBy ? (DB.all('users').find(u=>u.id===user.invitedBy) || null) : null;
+  const html = `
+    <div class="modal-head"><h3>User Details</h3><button class="modal-close" id="udClose">&times;</button></div>
+    <div class="modal-body">
+      <div class="flex-row" style="gap:10px;margin-bottom:16px">
+        <div class="avatar-sm" style="background:${user.color};width:36px;height:36px;font-size:14px">${user.initials}</div>
+        <div>
+          <div class="cell-strong" style="font-size:15px">${escapeHtml(user.name)}</div>
+          <div class="text-muted" style="font-size:12.5px">${escapeHtml(user.email||'—')}</div>
+        </div>
+      </div>
+      <div class="form-field" style="margin-bottom:10px"><label>Role</label><input value="${escapeHtml(ROLE_LABELS[user.role]||user.role)}" disabled></div>
+      <div class="form-field" style="margin-bottom:10px"><label>Status</label><input value="${staffStatusLabel(user.status)}" disabled></div>
+      <div class="form-field" style="margin-bottom:10px"><label>Invited Date</label><input value="${user.invitedAt?fmtDateTime(user.invitedAt):'—'}" disabled></div>
+      <div class="form-field" style="margin-bottom:10px"><label>Activated Date</label><input value="${user.activatedAt?fmtDateTime(user.activatedAt):'—'}" disabled></div>
+      <div class="form-field" style="margin-bottom:10px"><label>Last Login</label><input value="${user.lastLoginAt?fmtDateTime(user.lastLoginAt):'—'}" disabled></div>
+      <div class="form-field"><label>Invited By</label><input value="${inviter?escapeHtml(inviter.name):'—'}" disabled></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-secondary" id="udClose2">Close</button></div>
+  `;
+  openModal(html, { onMount:(overlay)=>{
+    overlay.querySelector('#udClose').onclick = closeModal;
+    overlay.querySelector('#udClose2').onclick = closeModal;
+  }});
 }
 
 /* ---------------------------------------------------------------------- */

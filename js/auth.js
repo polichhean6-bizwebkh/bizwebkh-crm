@@ -10,8 +10,8 @@
 
    Session shape: { id, email, name, role, color, initials } — `role` is
    the canonical snake_case value from the `profiles.role` enum
-   (founder_admin | sales | partner_operations). Use ROLE_LABELS below for
-   display text — never show `role` raw in the UI.
+   (founder_admin | sales | sales_rep | partner_operations | finance). Use
+   ROLE_LABELS below for display text — never show `role` raw in the UI.
 
    IMPORTANT: Auth.currentUser() is still SYNCHRONOUS (it just reads an
    in-memory + localStorage-cached session object) so app.js's top-level
@@ -34,13 +34,41 @@ const Auth = {
       .from('profiles').select('*').eq('id', data.user.id).single();
     if(profileErr || !profile) return null;
 
+    // Deactivated staff must never reach a live session, even though their
+    // password still works — a Founder/Admin "Deactivate" action revokes
+    // access, not the credential itself (see js/app.js Users & Roles).
+    if(profile.status && profile.status !== 'active'){
+      try{ await supabaseClient.auth.signOut(); }catch(e){ console.error('Supabase signOut failed', e); }
+      Auth._session = null;
+      Auth._loginBlockedReason = profile.status === 'invited'
+        ? 'Your invitation hasn\'t been activated yet. Please use the link in your invitation email to set a password.'
+        : 'This account has been deactivated. Please contact your Founder/Admin.';
+      return null;
+    }
+
     const session = {
       id: data.user.id, email: data.user.email,
       name: profile.name, role: profile.role,
       color: profile.color || '#1d7bff', initials: profile.initials || initialsOfName(profile.name),
     };
     sessionSet(session);
+    // Best-effort — never block login on this. Records last_login_at via a
+    // SECURITY DEFINER RPC (a plain UPDATE from the client would otherwise
+    // be blocked/awkward under the profiles RLS policy set).
+    try{ await supabaseClient.rpc('fn_touch_last_login'); }
+    catch(e){ console.error('fn_touch_last_login failed', e); }
     return session;
+  },
+
+  // Last blocked-login reason (set by login() when it rejects an invited/
+  // inactive account) — login/index.html reads this once, right after a
+  // failed login() call, to show a clearer message than the generic
+  // "invalid email or password" one.
+  _loginBlockedReason: null,
+  consumeLoginBlockedReason(){
+    const r = Auth._loginBlockedReason;
+    Auth._loginBlockedReason = null;
+    return r;
   },
 
   async logout(){
@@ -88,6 +116,15 @@ const Auth = {
       .from('profiles').select('*').eq('id', data.session.user.id).single();
     if(profileErr || !profile){ Auth._session = null; return null; }
 
+    // A user deactivated mid-session must be kicked out on their very next
+    // page load/refresh, not just blocked from a fresh sign-in.
+    if(profile.status && profile.status !== 'active'){
+      try{ await supabaseClient.auth.signOut(); }catch(e){ console.error('Supabase signOut failed', e); }
+      Auth._session = null;
+      localStorage.removeItem(BZ_SESSION_KEY);
+      return null;
+    }
+
     const session = {
       id: data.session.user.id, email: data.session.user.email,
       name: profile.name, role: profile.role,
@@ -120,26 +157,36 @@ function getDashboardPath(){ return '../dashboard/index.html'; }
 /* if opened directly. See ROLE_LABELS for the matching display text.      */
 /* ---------------------------------------------------------------------- */
 const ROLE_PERMISSIONS = {
-  'founder_admin': null, // null = full access, every nav key
+  'founder_admin': null, // null = full access, every nav key (includes Settings -> Users & Roles)
   'sales': [
+    'dashboard','leads','pipeline','projects','quotations','invoices','payments','activity'
+  ],
+  'sales_rep': [
     'dashboard','leads','pipeline','projects','quotations','invoices','payments','activity'
   ],
   'partner_operations': [
     'dashboard','leads','pipeline','projects','quotations','invoices','payments','activity','users'
   ],
+  'finance': [
+    'dashboard','invoices','payments','activity'
+  ],
 };
 
 // Display-only labels for the canonical role values — use these anywhere
-// a role is shown as text; never render the raw `role` string.
+// a role is shown as text; never render the raw `role` string. Keep in
+// lockstep with ROLE_LABELS in supabase/functions/staff-manage/index.ts.
 const ROLE_LABELS = {
   founder_admin: 'Founder / Admin',
   sales: 'Senior Sales Consultant',
-  partner_operations: 'Business Partner / Operations',
+  sales_rep: 'Sales',
+  partner_operations: 'Operations / IT',
+  finance: 'Finance',
 };
 
 function roleCanAccess(role, navKey){
   const allowed = ROLE_PERMISSIONS[role];
-  if(allowed === null || allowed === undefined) return true; // unlisted role / Founder = full access, fail-open for any role we haven't explicitly restricted yet
+  if(allowed === null) return true; // only an explicit null (Founder/Admin) means full access
+  if(!Array.isArray(allowed)) return false; // any role not explicitly listed above is fail-CLOSED, not fail-open
   return allowed.includes(navKey);
 }
 

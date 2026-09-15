@@ -246,7 +246,11 @@ const ACTIVITY_TYPES = [
   // 'Quotation Created', 'Quotation Sent', 'Quotation Accepted' and
   // 'Quotation Expired' already existed above and are reused as-is.
   'Quotation Updated', 'Quotation Submitted for Approval', 'Quotation Approved',
-  'Quotation Rejected', 'Quotation Superseded', 'Quotation Converted to Project'
+  'Quotation Rejected', 'Quotation Superseded', 'Quotation Converted to Project',
+  // Users & Roles Management (Settings -> Users & Roles) — logged
+  // server-side by the staff-manage Edge Function, never by the client.
+  'User Invited', 'Invitation Resent', 'User Role Changed',
+  'User Deactivated', 'User Reactivated', 'Password Reset Requested'
 ];
 
 /* ---------------------------------------------------------------------- */
@@ -292,24 +296,65 @@ function svcFn(name, opts={}){
            founderReviewRequired: !!opts.founderReviewRequired, defaultPrice: opts.defaultPrice===undefined ? 0 : opts.defaultPrice };
 }
 
+/* ---------------------------------------------------------------------- */
+/* Package scope wording — APPROVED FINAL (BizWeb_KH_Service_Package_      */
+/* Master_APPROVED_FINAL.xlsx, "APPROVED FINAL" sheet, approved 2026-09-13)*/
+/* is the single source of truth for every package's default scope         */
+/* wording below. Two structural rules apply to EVERY package:             */
+/*   1) Domain and Hosting are always two separate scope lines — never     */
+/*      combined into one "hosting & domain" bullet (Starter's old wording */
+/*      literally called single-page SECTIONS separate "pages", which is   */
+/*      the bug this whole approval process started from).                */
+/*   2) These are purely informational scope-item TEXT — the ACTUAL Year 1 */
+/*      domain/hosting Included-vs-Separate calculation and dollar amounts */
+/*      already live entirely in the separate Annual Cost Breakdown        */
+/*      (annualCost.year1.domainMode/hostingIncluded, see                  */
+/*      normalizeAnnualCost() in quotations.js) — changing this wording    */
+/*      has ZERO effect on any total, payment schedule, or calculation.    */
+/* ---------------------------------------------------------------------- */
+const KHMER_ENGLISH_SCOPE_ITEM = 'Khmer / English (client supplies final content/translations)';
+// `year2Price`/`year3Price` below (Settings -> Service Price List, Founder-
+// editable) are now aligned to the SAME APPROVED FINAL renewal figures as
+// RENEWAL_DEFAULTS in defaultAnnualCostForService() (2026-09-13 approval,
+// item 3: "I do not want the CRM to contain two conflicting renewal
+// reference systems"). This is a REFERENCE TABLE ONLY — it is never read by
+// any quotation/annual-cost calculation (RENEWAL_DEFAULTS is the sole
+// source consumed there); it only feeds the Settings display/edit table
+// (settingsPricesTab() in app.js) and its own Supabase columns
+// (year2_price/year3_price, both nullable numeric). Changing it therefore
+// cannot affect any already-saved quotation's stored values in any way.
+// The 4 "To be confirmed" packages (E-Commerce L3/L4, Custom Business
+// System, Mobile App) use `null` rather than inventing a numeric renewal —
+// the DB columns are nullable, and settingsPricesTab() renders a null value
+// as a plain "To be confirmed" label instead of a $ figure/input, with no
+// change to the table's columns/layout.
 const SERVICE_PRICE_LIST = [
-  { id:'SVC01', name:'Starter Website', projectType:'Starter Website', category:'Website', basePrice:99, year2Price:49, year3Price:49,
+  { id:'SVC01', name:'Starter Website', projectType:'Starter Website', category:'Website', basePrice:99, year2Price:45, year3Price:45,
     salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'7 days', status:'Active',
-    functions:[ svcFn('Home / About / Services / Contact pages'), svcFn('Khmer / English toggle'), svcFn('Basic SEO setup'), svcFn('Year-1 hosting & domain') ] },
-  { id:'SVC02', name:'Pro Website', projectType:'Pro Website', category:'Website', basePrice:199, year2Price:79, year3Price:79,
+    functions:[ svcFn('Single-page website with multiple sections (Home, About, Services, Gallery/Contact)'),
+                svcFn(KHMER_ENGLISH_SCOPE_ITEM), svcFn('Responsive desktop/mobile design'), svcFn('Basic SEO setup'),
+                svcFn('Year 1 Hosting'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+  { id:'SVC02', name:'Pro Website', projectType:'Pro Website', category:'Website', basePrice:199, year2Price:60, year3Price:60,
     salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'10 days', status:'Active',
-    functions:[ svcFn('Up to 8 pages'), svcFn('Gallery / Portfolio section'), svcFn('Contact form + map'), svcFn('Basic SEO setup'), svcFn('Year-1 hosting & domain') ] },
-  { id:'SVC03', name:'Pro Max Website', projectType:'Pro Max Website', category:'Website', basePrice:299, year2Price:99, year3Price:99,
+    functions:[ svcFn('Multi-page website — up to 5 pages (e.g. Home, About, Services, Gallery/Projects, Contact)'),
+                svcFn(KHMER_ENGLISH_SCOPE_ITEM), svcFn('Responsive desktop/mobile design'), svcFn('Basic SEO setup'),
+                svcFn('Year 1 Hosting'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+  { id:'SVC03', name:'Pro Max Website', projectType:'Pro Max Website', category:'Website', basePrice:299, year2Price:75, year3Price:75,
     salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'14 days', status:'Active',
-    functions:[ svcFn('Up to 12 pages'), svcFn('Blog / News section'), svcFn('Advanced SEO setup'), svcFn('Contact form + map'), svcFn('Year-1 hosting & domain') ] },
-  { id:'SVC04', name:'Dynamic Website + CMS', projectType:'Dynamic Website / CMS', category:'CMS', basePrice:399, year2Price:129, year3Price:129,
+    functions:[ svcFn('Multi-page website — up to 8 pages, with enhanced sections and static News/Blog-style content where required'),
+                svcFn(KHMER_ENGLISH_SCOPE_ITEM), svcFn('Responsive desktop/mobile design'), svcFn('Basic SEO setup'),
+                svcFn('Year 1 Hosting'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+  { id:'SVC04', name:'Dynamic Website + CMS', projectType:'Dynamic Website / CMS', category:'CMS', basePrice:399, year2Price:120, year3Price:120,
     salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'14 days', status:'Active',
-    functions:[ svcFn('Website (core pages)'), svcFn('Admin content editor'), svcFn('Media library'), svcFn('Page management'), svcFn('Year-1 hosting & domain') ] },
-  { id:'SVC05', name:'Booking Website + Admin', projectType:'Booking System', category:'Booking', basePrice:499, year2Price:149, year3Price:149,
+    functions:[ svcFn('Up to 5 core public pages'), svcFn('Secure CMS / Admin Dashboard'), svcFn('Database / backend'),
+                svcFn('Agreed editable modules (e.g. Services, News, Projects, Gallery, Team) per client scope'),
+                svcFn(KHMER_ENGLISH_SCOPE_ITEM),
+                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+  { id:'SVC05', name:'Booking Website + Admin', projectType:'Booking System', category:'Booking', basePrice:499, year2Price:150, year3Price:150,
     salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'18 days', status:'Active',
-    functions:[ svcFn('Website'), svcFn('Booking form'), svcFn('Date/time selection'), svcFn('Customer information'),
+    functions:[ svcFn('Up to 5 core public pages'), svcFn('Booking form'), svcFn('Date/time selection'), svcFn('Customer information'),
                 svcFn('Basic admin dashboard'), svcFn('Booking list'), svcFn('Calendar'), svcFn('Booking status'),
-                svcFn('Year-1 hosting/backend/database') ] },
+                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
   /* Renamed from "Customer Management System" to proper CRM terminology
      (CRM = Customer Relationship Management, a distinct product from CMS =
      Content Management System — SVC04 above). `name` is the full display
@@ -325,34 +370,51 @@ const SERVICE_PRICE_LIST = [
      and CRM must remain visually distinct everywhere, including on the
      quotation's own scope table (spec: "They must remain two different
      products"). */
-  { id:'SVC06', name:'CRM – Customer Relationship Management', shortName:'CRM System', projectType:'Customer Management System', category:'CRM', basePrice:599, year2Price:179, year3Price:179,
+  { id:'SVC06', name:'CRM – Customer Relationship Management', shortName:'CRM System', projectType:'Customer Management System', category:'CRM', basePrice:599, year2Price:180, year3Price:180,
     salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'21 days', status:'Active',
     functions:[ svcFn('Customer records'), svcFn('Customer history'), svcFn('Customer type / VIP management'), svcFn('Package / balance management'),
                 svcFn('Transactions'), svcFn('Staff incentive / commission'), svcFn('Reports'), svcFn('Business dashboard'),
-                svcFn('Year-1 hosting/backend/database') ] },
-  { id:'SVC07', name:'E-Commerce Level 1 – Basic Catalog + Admin', projectType:'E-Commerce Level 1', category:'E-Commerce', basePrice:500, year2Price:149, year3Price:149,
+                svcFn('Year 1 Hosting / Backend / Database'),
+                svcFn('Domain — Included in Year 1 if a public domain/entry point is needed (or Charged Separately / Client Owns Domain), per quotation') ] },
+  { id:'SVC07', name:'E-Commerce Level 1 – Basic Catalog + Admin', projectType:'E-Commerce Level 1', category:'E-Commerce', basePrice:500, year2Price:150, year3Price:150,
     salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'21 days', status:'Active',
-    functions:[ svcFn('Website'), svcFn('Product catalog'), svcFn('Chat / manual ordering'), svcFn('Basic admin dashboard'),
-                svcFn('Year-1 hosting/backend/database') ] },
-  { id:'SVC08', name:'E-Commerce Level 2 – Standard Online Store', projectType:'E-Commerce Level 2', category:'E-Commerce', basePrice:1199, year2Price:299, year3Price:299,
+    functions:[ svcFn('Product catalog'), svcFn('Product admin dashboard'), svcFn('Search / filter (where agreed in scope)'),
+                svcFn('Order/inquiry redirect to Telegram / Facebook / WhatsApp'),
+                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+  { id:'SVC08', name:'E-Commerce Level 2 – Standard Online Store', projectType:'E-Commerce Level 2', category:'E-Commerce', basePrice:1199, year2Price:240, year3Price:240,
     salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'30 days', status:'Active', priceIsStartingFrom:true,
-    functions:[ svcFn('Website'), svcFn('Product catalog'), svcFn('Shopping cart'), svcFn('Checkout'),
-                svcFn('Standard customer login'), svcFn('Order management'), svcFn('Year-1 hosting/backend/database') ] },
-  { id:'SVC09', name:'E-Commerce Level 3 – Customized Commerce', projectType:'E-Commerce Level 3', category:'E-Commerce', basePrice:1500, year2Price:399, year3Price:399,
+    functions:[ svcFn('Product catalog'), svcFn('Shopping cart'), svcFn('Checkout'),
+                svcFn('Payment method: to be explicitly confirmed with client (e.g. COD, Manual KHQR, Bank Transfer, or Online Gateway)'),
+                svcFn('Standard customer login'), svcFn('Order management'),
+                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+  { id:'SVC09', name:'E-Commerce Level 3 – Customized Commerce', projectType:'E-Commerce Level 3', category:'E-Commerce', basePrice:1500, year2Price:null, year3Price:null,
     salesCanQuote:false, founderReviewRequired:true, maxDiscountPct:0, defaultDelivery:'45 days', status:'Active', priceIsStartingFrom:true,
-    functions:[ svcFn('Website'), svcFn('Product catalog'), svcFn('Shopping cart'), svcFn('Checkout'),
-                svcFn('Customized workflow', {founderReviewRequired:true,defaultPrice:null}), svcFn('Year-1 hosting/backend/database') ] },
-  { id:'SVC10', name:'E-Commerce Level 4 – Advanced / Integrated', projectType:'E-Commerce Level 4', category:'E-Commerce', basePrice:2000, year2Price:499, year3Price:499,
+    functions:[ svcFn('Product catalog'), svcFn('Shopping cart'), svcFn('Checkout'),
+                svcFn('Customized workflow', {founderReviewRequired:true,defaultPrice:null}),
+                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+  { id:'SVC10', name:'E-Commerce Level 4 – Advanced / Integrated', projectType:'E-Commerce Level 4', category:'E-Commerce', basePrice:2000, year2Price:null, year3Price:null,
     salesCanQuote:false, founderReviewRequired:true, maxDiscountPct:0, defaultDelivery:'60 days', status:'Active', priceIsStartingFrom:true,
-    functions:[ svcFn('Website'), svcFn('Full e-commerce engine'), svcFn('Third-party API integration', {founderReviewRequired:true,defaultPrice:null}),
-                svcFn('Advanced reporting', {founderReviewRequired:true,defaultPrice:null}), svcFn('Year-1 hosting/backend/database') ] },
-  { id:'SVC11', name:'Custom Business System', projectType:'Custom Business System', category:'Custom', basePrice:800, year2Price:199, year3Price:199,
+    functions:[ svcFn('Full e-commerce engine'), svcFn('Third-party API integration', {founderReviewRequired:true,defaultPrice:null}),
+                svcFn('Advanced reporting', {founderReviewRequired:true,defaultPrice:null}),
+                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+  { id:'SVC11', name:'Custom Business System', projectType:'Custom Business System', category:'Custom', basePrice:800, year2Price:null, year3Price:null,
     salesCanQuote:false, founderReviewRequired:true, maxDiscountPct:0, defaultDelivery:'By scope', status:'Active', priceIsStartingFrom:true,
-    functions:[ svcFn('Custom-scoped modules', {founderReviewRequired:true,defaultPrice:null}), svcFn('Year-1 hosting/backend/database') ] },
-  { id:'SVC12', name:'Mobile App / Advanced Platform', projectType:'Mobile App / Advanced Platform', category:'Mobile', basePrice:2000, year2Price:499, year3Price:499,
+    functions:[ svcFn('Custom-scoped modules — defined per project scope', {founderReviewRequired:true,defaultPrice:null}),
+                svcFn('Year 1 Hosting / Backend / Database — if quoted', {founderReviewRequired:true,defaultPrice:null}),
+                svcFn('Domain — separate, if applicable', {founderReviewRequired:true,defaultPrice:null}) ] },
+  // Mobile App / Advanced Platform (spec §11 of the 2026-09-13 approval):
+  // deliberately has NO "Year 1 Hosting"/"Domain" bullet like every other
+  // package — backend/infra/domain/app-store/provider items are always
+  // "separately defined" per project here, never silently assumed
+  // included, so this package gets one explicit TBC line instead (see also
+  // the Custom/Mobile-specific defaultAnnualCostForService() override below,
+  // which correspondingly defaults Year 1 hosting/domain to NOT included
+  // for these two package types only).
+  { id:'SVC12', name:'Mobile App / Advanced Platform', projectType:'Mobile App / Advanced Platform', category:'Mobile', basePrice:2000, year2Price:null, year3Price:null,
     salesCanQuote:false, founderReviewRequired:true, maxDiscountPct:0, defaultDelivery:'By scope', status:'Active', priceIsStartingFrom:true,
     functions:[ svcFn('iOS App', {founderReviewRequired:true,defaultPrice:null}), svcFn('Android App', {founderReviewRequired:true,defaultPrice:null}),
-                svcFn('Push Notifications', {founderReviewRequired:true,defaultPrice:null}), svcFn('Year-1 hosting/backend/database') ] },
+                svcFn('Push Notifications', {founderReviewRequired:true,defaultPrice:null}),
+                svcFn('Backend / infrastructure — defined per project scope (domain, hosting, app-store and provider fees separately defined)', {founderReviewRequired:true,defaultPrice:null}) ] },
 ];
 
 function serviceByProjectType(projectType){
@@ -382,37 +444,73 @@ function hostingLabelForService(svc){
 // hosting/backend/database share and a maintenance share, so no package
 // is ever left with an un-configured $0 default that looks broken.
 function defaultAnnualCostForService(svc){
+  // Per-year Maintenance COST vs NOTE model (generalizes the prior task's
+  // Year-1-only "maintenanceRemark" to all of Year 1/2/3 — see the big
+  // comment above normalizeAnnualCost() in quotations.js for the full
+  // shape/rationale). `maintenanceInclude` is the ONLY financial switch —
+  // it decides whether `maintenance` counts toward that year's Total.
+  // `maintenanceNote` is purely informational and independently toggled.
+  // Defaults for a BRAND-NEW quotation (task spec):
+  //   Year 1: Include=OFF, Note=ON/Free Period/"1 Month".
+  //   Year 2/3: Include=OFF, Note=OFF.
+  // An EXISTING quotation with no stored fields at all instead gets a safe
+  // OFF/OFF default for every year — see normalizeAnnualCost(), which is
+  // what every loaded/legacy record actually passes through.
   const base = {
-    year1: { domain:0, domainMode:'included', hosting:0, hostingIncluded:true, maintenance:0, maintenanceMode:'included',
-             // Year 1 Maintenance REMARK (informational only, zero price
-             // impact — fully independent from `maintenance`/`maintenanceMode`
-             // above, which are the financial cost fields). Defaults ENABLED
-             // for every brand-new quotation regardless of package (task
-             // spec: "default: ENABLED for all NEW quotations"). An EXISTING
-             // quotation with no stored `maintenanceRemark` instead gets a
-             // safe disabled default — see normalizeAnnualCost(), which is
-             // what every loaded/legacy record actually passes through.
-             maintenanceRemark: { enabled:true, period:'1 Month', customText:'' } },
-    year2: { domain: DEFAULT_DOMAIN_COST_ESTIMATE, hosting:0, maintenance:0, displayMode:'estimated' },
-    year3: { domain: DEFAULT_DOMAIN_COST_ESTIMATE, hosting:0, maintenance:0, displayMode:'estimated' },
+    year1: { domain:0, domainMode:'included', hosting:0, hostingIncluded:true, maintenance:0,
+             maintenanceInclude:false,
+             maintenanceNote: { enabled:true, type:'freePeriod', period:'1 Month', customText:'' } },
+    year2: { domain: DEFAULT_DOMAIN_COST_ESTIMATE, hosting:0, maintenance:0,
+             maintenanceInclude:false,
+             maintenanceNote: { enabled:false, type:'freePeriod', period:'1 Month', customText:'' },
+             displayMode:'estimated' },
+    year3: { domain: DEFAULT_DOMAIN_COST_ESTIMATE, hosting:0, maintenance:0,
+             maintenanceInclude:false,
+             maintenanceNote: { enabled:false, type:'freePeriod', period:'1 Month', customText:'' },
+             displayMode:'estimated' },
   };
   if(!svc) return base;
-  if(svc.projectType==='Starter Website'){
-    base.year2.hosting = 30; base.year2.maintenance = 0;
-    base.year3.hosting = 30; base.year3.maintenance = 0;
-    return base;
+  // Custom Business System and Mobile App / Advanced Platform (APPROVED
+  // FINAL, 2026-09-13, Package Master rows 29/30 + Add-On row 68): unlike
+  // every other package, Year 1 hosting/backend/database and domain are
+  // NOT silently assumed included here — they are "separately defined per
+  // project" / "if quoted". Sales/Founder can still switch these back to
+  // Included per quotation exactly as before; only the SUGGESTED default
+  // changes for these two package types.
+  if(svc.projectType==='Custom Business System' || svc.projectType==='Mobile App / Advanced Platform'){
+    base.year1.hostingIncluded = false;
+    base.year1.domainMode = 'separate';
   }
-  if(svc.projectType==='Dynamic Website / CMS'){
-    base.year2.hosting = 99; base.year2.maintenance = 150;
-    base.year3.hosting = 99; base.year3.maintenance = 150;
-    return base;
+  // Year 2/3 CORE RENEWAL — APPROVED FINAL explicit defaults (Section C of
+  // the 2026-09-13 approval), replacing the old automatic 70/30 Hosting/
+  // Maintenance split entirely (spec: "REMOVE the generic automatic 70/30
+  // split... Use explicit package-level estimates"). `maintenance` now
+  // always defaults to $0/Include-OFF for every package — maintenance is
+  // optional and separate, never bundled into the core renewal figure.
+  // Where the approval gives a range (e.g. "$120–150/year"), the LOW end
+  // of the range is used as the editable starting suggestion; Sales/
+  // Founder can raise it per quotation up to the approved ceiling.
+  // Packages marked "To be confirmed" get displayMode 'tbc' (no numeric
+  // default) instead of a fixed estimate.
+  const RENEWAL_DEFAULTS = {
+    'Starter Website':               { hosting: 45,  mode: 'estimated' }, // approved: ~$45/year
+    'Pro Website':                    { hosting: 60,  mode: 'estimated' }, // approved: ~$60/year
+    'Pro Max Website':                { hosting: 75,  mode: 'estimated' }, // approved: ~$75/year
+    'Dynamic Website / CMS':          { hosting: 120, mode: 'estimated' }, // approved: ~$120–150/year (low end)
+    'Booking System':                 { hosting: 150, mode: 'estimated' }, // approved: ~$150–180/year (low end)
+    'Customer Management System':     { hosting: 180, mode: 'estimated' }, // approved: ~$180–240/year (low end)
+    'E-Commerce Level 1':             { hosting: 150, mode: 'estimated' }, // approved: ~$150–180/year (low end)
+    'E-Commerce Level 2':             { hosting: 240, mode: 'estimated' }, // approved: ~$240–360/year (low end)
+    'E-Commerce Level 3':             { hosting: 0,   mode: 'tbc' },       // approved: To be confirmed
+    'E-Commerce Level 4':             { hosting: 0,   mode: 'tbc' },       // approved: To be confirmed
+    'Custom Business System':         { hosting: 0,   mode: 'tbc' },       // approved: To be confirmed
+    'Mobile App / Advanced Platform': { hosting: 0,   mode: 'tbc' },       // approved: To be confirmed
+  };
+  const r = RENEWAL_DEFAULTS[svc.projectType];
+  if(r){
+    base.year2.hosting = r.hosting; base.year2.maintenance = 0; base.year2.displayMode = r.mode;
+    base.year3.hosting = r.hosting; base.year3.maintenance = 0; base.year3.displayMode = r.mode;
   }
-  // Generic split for every other package: ~70% of the existing Year 2/3
-  // renewal figure goes to hosting/backend/database, ~30% to maintenance —
-  // adjustable per quotation, never a hard rule.
-  const y2 = Number(svc.year2Price)||0, y3 = Number(svc.year3Price)||0;
-  base.year2.hosting = Math.round(y2*0.7); base.year2.maintenance = Math.round(y2*0.3);
-  base.year3.hosting = Math.round(y3*0.7); base.year3.maintenance = Math.round(y3*0.3);
   return base;
 }
 // The user-facing label for a stored project-type/interested-service ID.
@@ -491,13 +589,73 @@ const DEFAULT_QUOTATION_EXCLUSIONS = {
     'Mobile app (iOS / Android)',
   ],
 };
+/* ---------------------------------------------------------------------- */
+/* Package-specific exclusions — APPROVED FINAL, Section E, 2026-09-13.     */
+/* The two generic templates above (DEFAULT_QUOTATION_EXCLUSIONS.website/   */
+/* .system) previously applied uniformly to every package of that type —   */
+/* which produced real conflicts (e.g. the 'system' template excluded      */
+/* "online customer booking" even for the Booking System package itself,   */
+/* and the 'website' template excluded "backend/database/admin dashboard"  */
+/* even for the Dynamic Website + CMS package). Keyed by SERVICE_PRICE_    */
+/* LIST[].projectType. selectPackageOnQC() (quotations.js) now looks here  */
+/* FIRST and only falls back to the generic per-type template (still fully */
+/* Settings-editable, completely unchanged) for a projectType with no      */
+/* entry here (e.g. 'Other') — so the existing Settings → Quotations       */
+/* exclusion editor keeps working exactly as before, untouched.            */
+/* E-Commerce Level 3/4, Custom Business System and Mobile App / Advanced  */
+/* Platform intentionally get an EMPTY list — "no generic exclusion list,  */
+/* scope/exclusions defined per project" (approved Section E, last row).   */
+/* ---------------------------------------------------------------------- */
+const PACKAGE_SPECIFIC_EXCLUSIONS = {
+  'Starter Website': [
+    'CMS / admin dashboard', 'Database / backend', 'Customer login / member accounts',
+    'Booking or appointment system', 'Online payment gateway / e-commerce checkout',
+    'Mobile app (iOS / Android)', 'Custom API integrations',
+  ],
+  'Pro Website': [
+    'CMS / admin dashboard', 'Database / backend', 'Customer login / member accounts',
+    'Booking or appointment system', 'Online payment gateway / e-commerce checkout',
+    'Mobile app (iOS / Android)', 'Custom API integrations',
+  ],
+  'Pro Max Website': [
+    'CMS / admin dashboard', 'Database / backend', 'Customer login / member accounts',
+    'Booking or appointment system', 'Online payment gateway / e-commerce checkout',
+    'Mobile app (iOS / Android)', 'Custom API integrations',
+  ],
+  'Dynamic Website / CMS': [
+    'Customer login / member accounts', 'Booking or appointment system',
+    'Online payment gateway', 'OTP / SMS verification', 'Mobile app (iOS / Android)',
+  ],
+  'Booking System': [
+    'Customer login / member accounts (unless included)', 'OTP / SMS verification',
+    'Online payment gateway', 'Mobile app (iOS / Android)',
+  ],
+  'Customer Management System': [
+    'Public marketing website', 'Online customer booking / public self-service booking',
+    'Online payment gateway', 'OTP / SMS verification', 'Payroll / HR management',
+    'Accounting integration', 'Full POS / inventory management', 'Loyalty program',
+    'Multi-branch / multi-location', 'Mobile app (iOS / Android)',
+  ],
+  'E-Commerce Level 1': [
+    'Shopping cart', 'Online checkout / payment gateway', 'Customer login / member accounts',
+    'Advanced inventory / POS management', 'OTP / SMS verification', 'Mobile app (iOS / Android)',
+  ],
+  'E-Commerce Level 2': [
+    'Online payment gateway (unless explicitly included)',
+    'Advanced ERP / POS / inventory integrations', 'Third-party API integrations',
+  ],
+  'E-Commerce Level 3': [],
+  'E-Commerce Level 4': [],
+  'Custom Business System': [],
+  'Mobile App / Advanced Platform': [],
+};
 const DEFAULT_QUOTATION_NOTES = {
   website: [
     { key:'domainHosting', title:'Domain & Hosting Support', text:'Year 1 domain and hosting are included as quoted above. From Year 2 onward, domain and hosting renewal is billed annually at the rates shown.' },
     { key:'annualRenewal', title:'Annual Renewal', text:'Annual renewal covers hosting and domain only. It does not include new features or major changes — those are quoted separately.' },
     { key:'contentDelivery', title:'Content Delivery', text:'Client provides all text content, images/logo, and any account access needed (domain registrar, existing hosting, etc.) before development begins.' },
     { key:'additionalFeatures', title:'Additional Features', text:'Any feature outside this quotation’s listed scope will be quoted separately.' },
-    { key:'providerCosts', title:'Provider Costs', text:'Domain/registrar and third-party service costs are estimates and may vary slightly at the time of purchase/renewal.' },
+    { key:'providerCosts', title:'Provider Costs', text:'Domain/registrar costs are estimates and may vary slightly at the time of purchase/renewal. Any add-on requiring a third-party provider (e.g. payment gateway, SMS/OTP, hosting/storage upgrades) is billed as two separate items: BizWeb KH’s setup/integration fee, and the provider’s own recurring or usage-based fee, which is not included in BizWeb KH’s price.' },
     { key:'newFeatures', title:'New Features', text:'New features requested after this quotation is accepted are quoted and invoiced separately.' },
   ],
   system: [
@@ -505,7 +663,7 @@ const DEFAULT_QUOTATION_NOTES = {
     { key:'annualRenewal', title:'Annual Renewal', text:'Annual renewal budget is an estimate based on current usage and may be adjusted before each renewal based on actual usage, storage, or provider pricing.' },
     { key:'contentDelivery', title:'Content Delivery', text:'Client provides service/price lists, staff information, workflow rules, and any account access needed before development begins.' },
     { key:'additionalFeatures', title:'Additional Features', text:'Features not listed in the Scope of Work above (see Exclusions) are not included and will be quoted separately.' },
-    { key:'providerCosts', title:'Provider Costs', text:'Hosting/backend/database and domain costs are estimates based on the agreed usage level and may vary if actual usage changes.' },
+    { key:'providerCosts', title:'Provider Costs', text:'Hosting/backend/database and domain costs are estimates based on the agreed usage level and may vary if actual usage changes. Any add-on requiring a third-party provider (e.g. payment gateway, SMS/OTP, APIs, storage/bandwidth) is billed as two separate items: BizWeb KH’s setup/integration fee, and the provider’s own recurring or usage-based fee, which is not included in BizWeb KH’s price.' },
     { key:'newFeatures', title:'New Features', text:'New features or major workflow changes requested after acceptance are scoped and quoted separately.' },
   ],
 };
@@ -596,31 +754,48 @@ function computePaymentSchedule(total, presetKey, customStages){
 // of the base package. Mirrors the spec's exact standard-vs-founder-review
 // split (section 11). `defaultPrice: null` means "TBC" (no fixed approved
 // price — Sales must never guess).
+// APPROVED FINAL, Section D, 2026-09-13 — pricing/naming below matches that
+// sheet exactly. Catalog item ids are internal-only (never stored on a
+// saved quotation's items — each added item gets its own fresh id at
+// add-time, see openAddQuotationFunctionModal() in quotations.js), so
+// renaming/renumbering/removing entries here never affects any
+// already-saved quotation. Where the approval gives a fee RANGE (e.g.
+// "$20–30/page"), the LOW end is used as the editable default; Sales/
+// Founder can raise it per quotation. AF09/AF10 (previously two separate
+// OTP/SMS entries) are merged back into one "OTP / SMS setup" entry per the
+// approval. AF20 "Mobile app" fixed add-on is REMOVED — Mobile App /
+// Advanced Platform (SVC12) is now the only path to quote a mobile app,
+// always as its own separately-scoped project (approval Section D row 68 /
+// Section 11).
 const ADDITIONAL_FUNCTIONS_CATALOG = [
   // ----- Standard / Sales Can Quote -----
-  { id:'AF01', name:'Informational website page', founderReviewRequired:false, salesCanQuote:true, defaultPrice:0 },
-  { id:'AF02', name:'Basic contact / inquiry form', founderReviewRequired:false, salesCanQuote:true, defaultPrice:0 },
+  { id:'AF01', name:'Additional informational page', founderReviewRequired:false, salesCanQuote:true, defaultPrice:20 },
+  { id:'AF02b', name:'Additional section', founderReviewRequired:false, salesCanQuote:true, defaultPrice:10 },
+  { id:'AF02', name:'Contact / inquiry form', founderReviewRequired:false, salesCanQuote:true, defaultPrice:null },
   { id:'AF03', name:'Standard CMS (content editor)', founderReviewRequired:false, salesCanQuote:true, defaultPrice:80 },
   { id:'AF04', name:'Basic booking form', founderReviewRequired:false, salesCanQuote:true, defaultPrice:100 },
   { id:'AF05', name:'Standard customer management', founderReviewRequired:false, salesCanQuote:true, defaultPrice:100 },
   { id:'AF06', name:'Product catalog + chat ordering', founderReviewRequired:false, salesCanQuote:true, defaultPrice:80 },
   { id:'AF07', name:'Standard E-Commerce Level 2 workflow', founderReviewRequired:false, salesCanQuote:true, defaultPrice:150 },
+  { id:'AF30', name:'Search / filter', founderReviewRequired:false, salesCanQuote:true, defaultPrice:null },
+  { id:'AF34', name:'Additional third language', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
+  { id:'AF31', name:'Telegram / WhatsApp inquiry', founderReviewRequired:false, salesCanQuote:true, defaultPrice:null },
+  { id:'AF32', name:'Additional storage / bandwidth', founderReviewRequired:false, salesCanQuote:true, defaultPrice:null },
   // ----- Founder Review Required -----
-  { id:'AF08', name:'Online payment gateway (outside standard package)', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF09', name:'OTP Verification', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF10', name:'SMS verification', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF11', name:'Customer login (outside standard Level 2 package)', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
+  { id:'AF08', name:'Online payment gateway integration', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
+  { id:'AF33', name:'Dynamic KHQR', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
+  { id:'AF09', name:'OTP / SMS setup', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
+  { id:'AF11', name:'Customer login / member accounts', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
   { id:'AF12', name:'Inventory management', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
   { id:'AF13', name:'POS system', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
   { id:'AF14', name:'Accounting integration', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
   { id:'AF15', name:'Payroll module', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF16', name:'Multi-branch support', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF17', name:'Multiple complex user roles', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
+  { id:'AF16', name:'Multi-branch / multi-location', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
+  { id:'AF17', name:'Advanced roles / permissions', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
   { id:'AF18', name:'Approval workflow', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF19', name:'Third-party API integration', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF20', name:'Mobile app', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
+  { id:'AF19', name:'API / third-party integration', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
   { id:'AF21', name:'500+ products / heavy data', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF22', name:'Custom reports / automation', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
+  { id:'AF22', name:'Advanced reports / export / automation', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
   { id:'AF23', name:'Customized loyalty program', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
   { id:'AF24', name:'Customized delivery logic', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
   { id:'AF25', name:'Marketplace sync', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
@@ -1037,7 +1212,13 @@ function _fallbackAvatarColor(name){
 }
 function rowToUser(row){
   return { id: row.id, username: row.name, name: row.name, role: row.role,
-           color: row.color || _fallbackAvatarColor(row.name), initials: row.initials || _fallbackInitials(row.name) };
+           color: row.color || _fallbackAvatarColor(row.name), initials: row.initials || _fallbackInitials(row.name),
+           // Users & Roles Management fields (Settings -> Users & Roles) —
+           // status defaults to 'active' for any pre-existing row that
+           // predates this feature (matches the DB column's own default).
+           email: row.email || null, status: row.status || 'active',
+           invitedAt: row.invited_at || null, activatedAt: row.activated_at || null,
+           lastLoginAt: row.last_login_at || null, invitedBy: row.invited_by || null };
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1099,6 +1280,17 @@ const DB = {
   // Data", which used to wipe localStorage and reseed fake data — it now
   // just re-syncs from the live backend instead).
   reset(){ return this.init(); },
+
+  // Re-fetches just the `profiles` table — used by Settings -> Users & Roles
+  // after invite/resend/role-change/deactivate/reactivate so the staff table
+  // reflects the change immediately, without the cost of a full DB.reset()
+  // across every other module's data.
+  async refreshUsers(){
+    const { data, error } = await supabaseClient.from('profiles').select('*');
+    if(error){ console.error('Supabase profiles refresh failed', error); return this._cache.users; }
+    this._cache.users = (data || []).map(rowToUser);
+    return this._cache.users;
+  },
 
   // Local passthrough only (no Supabase side effect) — kept for the few
   // call sites that mutate a whole collection at once (e.g. the in-memory
