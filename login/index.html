@@ -40,7 +40,13 @@
     // require an explicit type= on the query string since Supabase doesn't
     // always include one for the PKCE case — the PASSWORD_RECOVERY event
     // fired by the SDK below is the final authority either way).
-    var looksLikeRecovery = /type=recovery/.test(hash) || /type=recovery/.test(search) || /[?&]code=/.test(search);
+    // A Supabase "invite" link (Users & Roles -> Invite Staff) uses the
+    // exact same underlying recovery-session mechanism as a password reset
+    // — it just carries type=invite instead of type=recovery — so it's
+    // handled by this same form, with slightly different copy (see
+    // isInviteLink below).
+    var looksLikeRecovery = /type=recovery/.test(hash) || /type=recovery/.test(search)
+      || /type=invite/.test(hash) || /type=invite/.test(search) || /[?&]code=/.test(search);
     var looksLikeAuthError = /error=/.test(hash) || /error=/.test(search);
     if(looksLikeRecovery || looksLikeAuthError){
       document.documentElement.classList.add('recovery-mode');
@@ -94,8 +100,8 @@
 
     <!-- ===================== Password recovery (Supabase reset-email landing) ===================== -->
     <div id="recoverySection">
-      <h2>Set a new password</h2>
-      <p class="lead-sub" style="margin-top:-14px">You're resetting your BizWeb KH CRM password.</p>
+      <h2 id="recoveryHeading">Set a new password</h2>
+      <p class="lead-sub" style="margin-top:-14px" id="recoverySubtext">You're resetting your BizWeb KH CRM password.</p>
 
       <div id="recoveryError"></div>
 
@@ -214,6 +220,15 @@
 
   const looksLikeRecovery = document.documentElement.classList.contains('recovery-mode');
   const urlHadAuthError = /error=/.test(window.location.hash) || /error=/.test(window.location.search);
+  // Best-effort only — used for copy ("invited" vs "resetting"). The PKCE
+  // code= form carries no type= hint here; in that case we fall back to the
+  // generic reset copy, which is still accurate (an invite link genuinely
+  // does put the visitor through the same "set your password" step).
+  const isInviteLink = /type=invite/.test(window.location.hash) || /type=invite/.test(window.location.search);
+  if(isInviteLink){
+    document.getElementById('recoveryHeading').textContent = "You've been invited to BizWeb KH CRM";
+    document.getElementById('recoverySubtext').textContent = 'Set your password to activate your account.';
+  }
 
   if(looksLikeRecovery){
     // Skip the normal "already logged in? bounce to dashboard" check —
@@ -286,7 +301,15 @@
       return;
     }
 
-    showMessage('recoveryError', 'Password updated. Redirecting you to Sign In…', 'success');
+    // Flip a still-Invited profile to Active now that the account has a
+    // real password (spec: "clicks the link, sets a password -> account
+    // becomes Active"). Harmless no-op (and never blocks this flow) for a
+    // normal password-reset link on an already-Active user — fn_activate_self
+    // only ever moves status invited -> active, nothing else.
+    try{ await supabaseClient.rpc('fn_activate_self'); }
+    catch(err){ console.error('fn_activate_self failed', err); }
+
+    showMessage('recoveryError', isInviteLink ? 'Account activated. Redirecting you to Sign In…' : 'Password updated. Redirecting you to Sign In…', 'success');
     recoveryForm.classList.add('hidden');
 
     // Sign the one-time recovery session out — the user signs back in fresh
@@ -339,7 +362,8 @@
     }
     if(!user){
       submitBtn.disabled = false;
-      showMessage('loginError', 'Incorrect email or password.', 'error');
+      const blockedReason = Auth.consumeLoginBlockedReason();
+      showMessage('loginError', blockedReason || 'Incorrect email or password.', 'error');
       return;
     }
     window.location.href = '../dashboard/index.html';
