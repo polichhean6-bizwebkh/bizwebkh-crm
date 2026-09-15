@@ -480,6 +480,12 @@ svg{width:18px;height:18px}
 .st-partially-paid{background:#e5edff;color:#3757d6}
 .st-paid{background:var(--green-soft);color:var(--green)}
 
+/* Settings -> Users & Roles — staff account status badges (slug of
+   `profiles.status`: invited | active | inactive). */
+.st-invited{background:var(--amber-soft);color:var(--amber)}
+.st-active{background:var(--green-soft);color:var(--green)}
+.st-inactive{background:var(--gray-soft);color:var(--muted)}
+
 .pay-not-paid{background:var(--red-soft);color:var(--red)}
 .pay-deposit-paid{background:var(--amber-soft);color:var(--amber)}
 .pay-partially-paid{background:#e5edff;color:#3757d6}
@@ -640,6 +646,14 @@ svg{width:18px;height:18px}
    input, so it never drifts into its own detached/wide strip. Label sits
    left, the switch sits right. */
 .field-toggle-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:4px;font-size:11.5px;font-weight:600;color:var(--muted)}
+/* Scoped, additive-only variant of .field-toggle-row: groups the switch and
+   its label as one left-aligned control instead of spreading them across
+   the row (used for the Year 1 "Show Year 1 Maintenance Note" toggle only
+   -- 2026-09-14 layout fix). Overrides justify-content and allows the label
+   to wrap under the switch on narrow widths; everything else -- spacing,
+   font, color, and every other .field-toggle-row/.toggle-switch usage in
+   the app -- is untouched. */
+.field-toggle-row-left{justify-content:flex-start;flex-wrap:wrap}
 /* Small reusable ON/OFF toggle switch (styled checkbox, not the browser
    default square) — used anywhere a compact included/enabled state needs
    a slider control instead of a checkbox glyph. */
@@ -1047,9 +1061,23 @@ svg{width:18px;height:18px}
    same fixed-dimensions trick already used for .quote-doc-logo, so no
    pagination measurement runs against a collapsed/pre-load height. */
 .quote-doc-qr-frame{
-  width:168px;height:168px;aspect-ratio:1/1;background:#fff;border:1px solid #dce8f7;border-radius:6px;
+  /* Bumped from 168px -> 190px (2026-09-14 KHQR scanability fix): a modest
+     ~13% size increase to give the dense KHQR pattern more physical/pixel
+     area in the preview, print, and PDF output, without changing the
+     bank-details card's layout -- the grid column this sits in
+     (.quote-doc-bankbox-qr, min-width:180px) already reserved room for
+     roughly this size. Everything else about the frame (white background,
+     border, radius, centered quiet-zone padding) is unchanged. */
+  width:190px;height:190px;aspect-ratio:1/1;background:#fff;border:1px solid #dce8f7;border-radius:6px;
   padding:14px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;
 }
+/* object-fit:contain (unchanged) already renders the source image at its
+   own native aspect ratio without stretching, letterboxed inside this box
+   if needed -- the KHQR source (570x555, not a perfect square) was never
+   actually distorted. No image-rendering override is set here: the
+   browser's default smooth/high-quality downscaling is correct for
+   shrinking a real photo/render like this KHQR asset (pixelated/crisp-edges
+   is for upscaling pixel art and would look worse, not better, here). */
 .quote-doc-qr-img{display:block;width:100%;height:100%;object-fit:contain}
 .quote-doc-qr-caption{font-size:12px;font-weight:700;color:var(--navy);margin-top:8px}
 .quote-doc-qr-help{font-size:10.5px;color:var(--muted);margin-top:2px;max-width:170px}
