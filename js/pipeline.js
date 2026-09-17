@@ -9,7 +9,7 @@
    Records — no separate follow-up dataset is created or maintained here.
    ========================================================================== */
 
-let PIPELINE_FILTER_STATE = { sales:'', industry:'', followup:'' };
+let PIPELINE_FILTER_STATE = { sales:'', industry:'', followup:'', search:'' };
 
 /* ---------------------------------------------------------------------- */
 /* Drag auto-scroll — native HTML5 drag-and-drop never auto-scrolls a      */
@@ -97,6 +97,36 @@ function leadMatchesFollowupFilter(lead, filter){
   return urgencyOf(lead.nextFollowup) === filter;
 }
 
+// Pipeline search box (spec: "Add Search Function to Pipeline Tab") —
+// matches Client Name, Project/Business Name, and Project Code only,
+// case-insensitive, partial, trimmed. Reads the SAME lead objects already
+// loaded for the board (activeLeads()) — no separate dataset is created,
+// and no DB call is made per keystroke.
+function normalizePipelineSearch(s){ return (s||'').toLowerCase().trim(); }
+function leadMatchesPipelineSearch(l, nq){
+  if(!nq) return true;
+  if((l.clientName||'').toLowerCase().includes(nq)) return true;
+  if((l.businessName||'').toLowerCase().includes(nq)) return true;
+  if((l.projectCode||'').toLowerCase().includes(nq)) return true;
+  return false;
+}
+
+// Shared by the full page render and the search-only re-render below, so
+// the two can never drift out of sync. Sales / Industry / Follow-up
+// filters and the search box all narrow the SAME list together — none of
+// them resets another.
+function pipelineBoardLeads(){
+  const nq = normalizePipelineSearch(PIPELINE_FILTER_STATE.search);
+  return activeLeads().filter(l=>{
+    if(!PIPELINE_STATUSES.includes(l.status)) return false;
+    if(PIPELINE_FILTER_STATE.sales && l.assignedSales!==PIPELINE_FILTER_STATE.sales) return false;
+    if(PIPELINE_FILTER_STATE.industry && l.industry!==PIPELINE_FILTER_STATE.industry) return false;
+    if(!leadMatchesFollowupFilter(l, PIPELINE_FILTER_STATE.followup)) return false;
+    if(!leadMatchesPipelineSearch(l, nq)) return false;
+    return true;
+  });
+}
+
 function renderPipelinePage(){
   const el = document.getElementById('pageContent');
 
@@ -114,23 +144,21 @@ function renderPipelinePage(){
   const prevScrollLeft = prevBoard ? prevBoard.scrollLeft : 0;
   const prevScrollTop = prevBoard ? window.scrollY : 0;
 
-  // Board columns respect Sales / Industry / Follow-up filters together —
-  // Confirmed leads normally have no outstanding follow-up (spec §12), so a
+  // Board columns respect Sales / Industry / Follow-up filters AND the
+  // search box together (see pipelineBoardLeads() above) — Confirmed
+  // leads normally have no outstanding follow-up (spec §12), so a
   // Follow-up filter naturally shows few/no Confirmed cards, which is
   // correct rather than something to special-case.
-  const boardLeads = activeLeads().filter(l=>{
-    if(!PIPELINE_STATUSES.includes(l.status)) return false;
-    if(PIPELINE_FILTER_STATE.sales && l.assignedSales!==PIPELINE_FILTER_STATE.sales) return false;
-    if(PIPELINE_FILTER_STATE.industry && l.industry!==PIPELINE_FILTER_STATE.industry) return false;
-    if(!leadMatchesFollowupFilter(l, PIPELINE_FILTER_STATE.followup)) return false;
-    return true;
-  });
+  const boardLeads = pipelineBoardLeads();
 
   // Follow-up counters (spec §8) — deliberately scoped to TRUE open
   // opportunities (OPEN_PIPELINE_STATUSES, i.e. excluding Confirmed) so a
   // Confirmed lead's now-irrelevant sales follow-up never inflates them
   // (spec §12). Sales/Industry filters still narrow the counters, so the
   // numbers always match what's actually visible on the board below.
+  // Deliberately NOT narrowed by the search box — these stay a stable
+  // "what's actually due" reference regardless of what's typed, same as
+  // before the search box existed.
   const counterLeads = activeLeads().filter(l=>{
     if(!OPEN_PIPELINE_STATUSES.includes(l.status)) return false;
     if(PIPELINE_FILTER_STATE.sales && l.assignedSales!==PIPELINE_FILTER_STATE.sales) return false;
@@ -147,6 +175,11 @@ function renderPipelinePage(){
   el.innerHTML = `
     <div class="filters-bar">
       ${isFounder() ? `<button class="btn btn-outline" id="pArchiveBtn" style="margin-right:4px">${icon('archive','width="15" height="15"')} Archive</button>` : ''}
+      <div class="search-box pipeline-search-box">
+        ${icon('search')}
+        <input type="text" id="pFltSearch" autocomplete="off" placeholder="Search client, project, or code..." value="${escapeHtml(PIPELINE_FILTER_STATE.search)}">
+        <button type="button" class="search-box-clear" id="pFltSearchClear" ${PIPELINE_FILTER_STATE.search?'':'hidden'} aria-label="Clear search">&times;</button>
+      </div>
       <select id="pFltSales" class="sel">
         <option value="">All Sales</option>
         ${salesList.map(s=>`<option value="${escapeHtml(s)}" ${PIPELINE_FILTER_STATE.sales===s?'selected':''}>${escapeHtml(s)}</option>`).join('')}
@@ -175,39 +208,10 @@ function renderPipelinePage(){
       <div class="text-muted" style="font-size:11.5px;margin-left:4px">Drag a card to another column to move it through the pipeline. Every move requires confirmation and is logged.</div>
     </div>
 
+    <div id="pSearchEmptyMsg" class="empty-row" style="display:${PIPELINE_FILTER_STATE.search.trim() && boardLeads.length===0 ? 'block':'none'};margin-bottom:14px">No matching pipeline records found.</div>
+
     <div class="pipeline-board" id="pipelineBoard">
-      ${PIPELINE_STATUSES.map(st=>{
-        let cards = boardLeads.filter(l=>l.status===st);
-        // On Hold / Future Follow-up sorts nearest follow-up date first
-        // (spec §6) — a lead with no date at all (shouldn't normally
-        // happen, the status-change modal requires one) sorts to the end
-        // rather than crashing on an invalid Date comparison. Every other
-        // column keeps its normal (unsorted / natural DB) order — this is
-        // the one column where "what needs attention soonest" is the whole
-        // point of the view.
-        if(st===ON_HOLD_STATUS){
-          cards = [...cards].sort((a,b)=>{
-            if(!a.nextFollowup && !b.nextFollowup) return 0;
-            if(!a.nextFollowup) return 1;
-            if(!b.nextFollowup) return -1;
-            return new Date(a.nextFollowup) - new Date(b.nextFollowup);
-          });
-        }
-        const total = cards.reduce((s,l)=>s+(l.estimatedValue||0),0);
-        return `
-        <div class="pipeline-col" data-status="${st}">
-          <div class="pipeline-col-head">
-            <div>
-              <div class="col-title">${escapeHtml(pipelineStageLabel(st))}</div>
-              <div class="text-muted" style="font-size:10.5px;margin-top:2px">${money(total)}</div>
-            </div>
-            <div class="col-count">${cards.length}</div>
-          </div>
-          <div class="pipeline-cards" data-status="${st}">
-            ${cards.map(l=>pipelineCardHtml(l)).join('')}
-          </div>
-        </div>`;
-      }).join('')}
+      ${pipelineBoardColumnsHtml(boardLeads)}
     </div>
   `;
 
@@ -229,7 +233,115 @@ function renderPipelinePage(){
     };
   });
 
-  el.querySelectorAll('.pcard').forEach(card=>{
+  // Search box — updates on every keystroke, but deliberately re-renders
+  // ONLY the board/column contents (renderPipelineBoardOnly), never this
+  // filters-bar itself. A full renderPipelinePage() on every keystroke
+  // would rebuild this very <input>, killing focus and cursor position
+  // after each typed character — this keeps typing responsive and the
+  // field usable. Sales/Follow-up/Industry filters still use the full
+  // re-render above since a <select> onchange never has that focus
+  // problem.
+  const searchInput = document.getElementById('pFltSearch');
+  const searchClearBtn = document.getElementById('pFltSearchClear');
+  searchInput.oninput = (e)=>{
+    PIPELINE_FILTER_STATE.search = e.target.value;
+    searchClearBtn.hidden = !e.target.value;
+    renderPipelineBoardOnly();
+  };
+  searchClearBtn.onclick = ()=>{
+    PIPELINE_FILTER_STATE.search = '';
+    searchInput.value = '';
+    searchClearBtn.hidden = true;
+    searchInput.focus();
+    renderPipelineBoardOnly();
+  };
+
+  wirePipelineBoardInteractions();
+
+  // Restore the viewport captured above. Setting it right away covers the
+  // normal case (layout from the innerHTML assignment above is already
+  // committed by the time synchronous script resumes); the rAF pass is a
+  // second application as a safeguard against any layout that only
+  // settles on the next frame, so the restore always sticks rather than
+  // being silently overridden by the browser's own scroll handling.
+  if(prevBoard){
+    const newBoard = document.getElementById('pipelineBoard');
+    if(newBoard) newBoard.scrollLeft = prevScrollLeft;
+    window.scrollTo(0, prevScrollTop);
+    requestAnimationFrame(()=>{
+      const boardAgain = document.getElementById('pipelineBoard');
+      if(boardAgain) boardAgain.scrollLeft = prevScrollLeft;
+      window.scrollTo(0, prevScrollTop);
+    });
+  }
+}
+
+// Builds just the column markup (headers + cards) for the given, already-
+// filtered lead list — shared by the full page render above and the
+// search-only re-render below so the two can never drift apart.
+function pipelineBoardColumnsHtml(boardLeads){
+  return PIPELINE_STATUSES.map(st=>{
+    let cards = boardLeads.filter(l=>l.status===st);
+    // On Hold / Future Follow-up sorts nearest follow-up date first
+    // (spec §6) — a lead with no date at all (shouldn't normally
+    // happen, the status-change modal requires one) sorts to the end
+    // rather than crashing on an invalid Date comparison. Every other
+    // column keeps its normal (unsorted / natural DB) order — this is
+    // the one column where "what needs attention soonest" is the whole
+    // point of the view.
+    if(st===ON_HOLD_STATUS){
+      cards = [...cards].sort((a,b)=>{
+        if(!a.nextFollowup && !b.nextFollowup) return 0;
+        if(!a.nextFollowup) return 1;
+        if(!b.nextFollowup) return -1;
+        return new Date(a.nextFollowup) - new Date(b.nextFollowup);
+      });
+    }
+    const total = cards.reduce((s,l)=>s+(l.estimatedValue||0),0);
+    return `
+    <div class="pipeline-col" data-status="${st}">
+      <div class="pipeline-col-head">
+        <div>
+          <div class="col-title">${escapeHtml(pipelineStageLabel(st))}</div>
+          <div class="text-muted" style="font-size:10.5px;margin-top:2px">${money(total)}</div>
+        </div>
+        <div class="col-count">${cards.length}</div>
+      </div>
+      <div class="pipeline-cards" data-status="${st}">
+        ${cards.map(l=>pipelineCardHtml(l)).join('')}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Search-only re-render: rebuilds ONLY #pipelineBoard's column markup (and
+// the "no matches" message) from the current filter+search state, leaving
+// the filters-bar — and critically the search <input> itself — untouched
+// in the DOM, so it never loses focus or cursor position while typing.
+// Re-wires drag/drop and click handlers on the freshly-built cards/columns
+// (the old ones were just discarded with the old innerHTML) and preserves
+// horizontal scroll position, exactly like the full-page render does.
+function renderPipelineBoardOnly(){
+  const board = document.getElementById('pipelineBoard');
+  if(!board) return;
+  const prevScrollLeft = board.scrollLeft;
+  const boardLeads = pipelineBoardLeads();
+
+  const emptyMsg = document.getElementById('pSearchEmptyMsg');
+  if(emptyMsg) emptyMsg.style.display = (PIPELINE_FILTER_STATE.search.trim() && boardLeads.length===0) ? 'block' : 'none';
+
+  board.innerHTML = pipelineBoardColumnsHtml(boardLeads);
+  board.scrollLeft = prevScrollLeft;
+  wirePipelineBoardInteractions();
+}
+
+// Card drag/drop/click + column drop-target wiring — shared by the full
+// page render and the search-only re-render above (both discard and
+// rebuild the card/column DOM, so both need to re-attach these every
+// time). Pulled out verbatim from the old renderPipelinePage() body; no
+// behavior change.
+function wirePipelineBoardInteractions(){
+  document.querySelectorAll('.pcard').forEach(card=>{
     card.addEventListener('dragstart', (e)=>{
       card.classList.add('dragging');
       e.dataTransfer.setData('text/plain', card.dataset.leadId);
@@ -250,7 +362,7 @@ function renderPipelinePage(){
   // pipelineCardHtml) — must stop propagation so clicking it opens the
   // small Edit Project Code modal instead of the card's own click handler
   // opening the full Lead Detail modal underneath it.
-  el.querySelectorAll('[data-edit-code]').forEach(btn=>{
+  document.querySelectorAll('[data-edit-code]').forEach(btn=>{
     btn.addEventListener('click', (e)=>{
       e.stopPropagation();
       const lead = DB.find('leads', btn.dataset.editCode);
@@ -262,7 +374,7 @@ function renderPipelinePage(){
     btn.addEventListener('mousedown', (e)=> e.stopPropagation());
   });
 
-  el.querySelectorAll('.pipeline-col').forEach(col=>{
+  document.querySelectorAll('.pipeline-col').forEach(col=>{
     col.addEventListener('dragover', (e)=>{ e.preventDefault(); col.classList.add('drag-over'); });
     col.addEventListener('dragleave', ()=> col.classList.remove('drag-over'));
     col.addEventListener('drop', (e)=>{
@@ -275,23 +387,6 @@ function renderPipelinePage(){
       applyLeadStatusChange(lead, targetStatus);
     });
   });
-
-  // Restore the viewport captured above. Setting it right away covers the
-  // normal case (layout from the innerHTML assignment above is already
-  // committed by the time synchronous script resumes); the rAF pass is a
-  // second application as a safeguard against any layout that only
-  // settles on the next frame, so the restore always sticks rather than
-  // being silently overridden by the browser's own scroll handling.
-  if(prevBoard){
-    const newBoard = document.getElementById('pipelineBoard');
-    if(newBoard) newBoard.scrollLeft = prevScrollLeft;
-    window.scrollTo(0, prevScrollTop);
-    requestAnimationFrame(()=>{
-      const boardAgain = document.getElementById('pipelineBoard');
-      if(boardAgain) boardAgain.scrollLeft = prevScrollLeft;
-      window.scrollTo(0, prevScrollTop);
-    });
-  }
 }
 
 function pipelineCardHtml(l){
