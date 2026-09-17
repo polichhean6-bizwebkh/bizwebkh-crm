@@ -415,6 +415,20 @@ table.data-table tbody tr:last-child td{border-bottom:0}
 .filters-bar select, .filters-bar .sel, .sel{padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:var(--input-bg);font-size:12.5px;color:var(--text)}
 .filters-bar .spacer{flex:1}
 
+/* Pipeline search box clear (×) button — additively-scoped rules only
+   (search-box-clear / pipeline-search-box), so no other page's existing
+   .search-box (Leads, Add to Pipeline modal, Pipeline Archive modal) is
+   affected: none of them render this button in their markup, so these
+   rules simply never match there. */
+.search-box .search-box-clear{position:absolute;right:8px;top:50%;transform:translateY(-50%);width:22px;height:22px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:16px;line-height:1;border-radius:6px;padding:0}
+/* An author stylesheet rule always wins over the UA default [hidden]{display:none},
+   regardless of specificity — so the plain display:flex above would otherwise show
+   this button even while it carries the `hidden` attribute. This explicit
+   [hidden] override (higher specificity + later in source) restores that default. */
+.search-box .search-box-clear[hidden]{display:none}
+.search-box .search-box-clear:hover{color:var(--text);background:var(--surface-2)}
+.search-box.pipeline-search-box input[type="text"]{padding-right:30px}
+
 /* Global safety net: an <svg> icon dropped anywhere with no more specific
    rule (a new page, a new modal) still gets a sane default instead of
    falling back to the browser's unstyled intrinsic SVG size. */
