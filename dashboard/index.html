@@ -55,10 +55,10 @@
      bookmarks, relative links, or the custom domain. -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="../js/supabase-config.js?v=2026091202"></script>
-<script src="../js/data.js?v=2026091901"></script>
-<script src="../js/auth.js?v=2026091203"></script>
+<script src="../js/data.js?v=2026091904"></script>
+<script src="../js/auth.js?v=2026091904"></script>
 <script>
-  const ASSET_VERSION = '2026091902';
+  const ASSET_VERSION = '2026091904';
   // Session-first + data-first bootstrap: app.js and every other feature
   // module assume (a) Auth.currentUser() already resolves synchronously to
   // the signed-in user, and (b) DB.all()/DB.find() already read live data
@@ -91,7 +91,7 @@
     // loaded LAST, after Auth/DB are both already populated above.
     const scripts = [
       '../js/dashboard.js', '../js/leads.js', '../js/pipeline.js',
-      '../js/projects.js', '../js/quotations.js', '../js/invoices.js', '../js/followups.js',
+      '../js/projects.js', '../js/quotations.js', '../js/invoices.js', '../js/receipts.js', '../js/followups.js',
       '../js/payments.js', '../js/activity.js', '../js/theme.js', '../js/app.js'
     ];
     for(const src of scripts){
