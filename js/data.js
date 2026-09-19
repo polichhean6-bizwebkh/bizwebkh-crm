@@ -201,7 +201,7 @@ const PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'ABA', 'Wing', 'Other'];
 // Payment TYPE describes what a single ledger entry was for. Payment STATUS
 // (above) is never stored — it's always derived live from the ledger, see
 // paymentSummaryFor() below.
-const PAYMENT_TYPES = ['Deposit', 'Partial Payment', 'Final Payment', 'Renewal', 'Other'];
+const PAYMENT_TYPES = ['Deposit', 'Partial Payment', 'Full Payment', 'Final Payment', 'Renewal', 'Other'];
 
 // Status of an individual confirmed function / scope item inside a project.
 const FUNCTION_STATUSES = ['Confirmed', 'In Development', 'Completed', 'Future / Phase 2'];
@@ -1091,6 +1091,7 @@ function rowToQuotation(row){
     paymentPreset: row.payment_preset || '30/70',
     quotationDate: row.quotation_date, validUntil: row.valid_until,
     demoLink: row.demo_link || '',
+    demoLinks: row.demo_links_extra || [],
     items: row.scope_items || [], exclusions: row.exclusions || [],
     importantNotes: row.important_notes || [], paymentSchedule: row.payment_schedule || [],
     reasons: row.founder_review_reasons || [],
@@ -1126,6 +1127,7 @@ function quotationToRow(q){
     payment_preset: q.paymentPreset || '30/70',
     quotation_date: q.quotationDate, valid_until: q.validUntil || null,
     demo_link: q.demoLink || null,
+    demo_links_extra: (q.demoLinks && q.demoLinks.length) ? q.demoLinks : null,
     scope_items: q.items || [], exclusions: q.exclusions || [],
     important_notes: q.importantNotes || [], payment_schedule: q.paymentSchedule || [],
     founder_review_reasons: q.reasons || [],

@@ -206,6 +206,7 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
           <select id="rp_type">
             ${!hasDeposit ? '<option value="Deposit">Deposit</option>' : ''}
             <option value="Partial Payment">Partial Payment</option>
+            <option value="Full Payment">Full Payment</option>
             <option value="Final Payment">Final Payment</option>
             <option value="Renewal">Renewal</option>
             <option value="Other">Other</option>
@@ -232,6 +233,25 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
   openModal(html, { onMount:(overlay)=>{
     overlay.querySelector('#rpClose').onclick = closeModal;
     overlay.querySelector('#rpCancel').onclick = closeModal;
+
+    // Full Payment (spec: "CRM – Record Payment: Add Full Payment Payment
+    // Type") — selecting it autofills Amount with the CURRENT remaining
+    // balance (recomputed fresh, not the value captured when the modal
+    // opened), and — only when the project has no previous payment at all —
+    // suggests "Full Payment" as the Payment Number instead of forcing an
+    // ordinal like "1st Payment". Both fields stay freely editable
+    // afterward. No other Payment Type's behavior is touched.
+    const rpTypeSel = overlay.querySelector('#rp_type');
+    rpTypeSel.onchange = ()=>{
+      if(rpTypeSel.value === 'Full Payment'){
+        const freshSummary = paymentSummaryFor(projectId);
+        overlay.querySelector('#rp_amount').value = freshSummary.remaining;
+        if(paymentsForProject(projectId).length === 0){
+          overlay.querySelector('#rp_number').value = 'Full Payment';
+        }
+      }
+    };
+
     overlay.querySelector('#rpSave').onclick = ()=>{
       const paymentNumber = overlay.querySelector('#rp_number').value.trim() || suggestedNumber;
       const type = overlay.querySelector('#rp_type').value;
