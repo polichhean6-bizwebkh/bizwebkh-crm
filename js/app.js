@@ -18,6 +18,32 @@ function money(n){
   if(n===null || n===undefined || n==='') return '$0';
   return '$' + Number(n).toLocaleString('en-US', {maximumFractionDigits:0});
 }
+// Quotation money formatting fix (CRM – Quotation Money Formatting Fix):
+// money() above rounds to whole dollars everywhere it's used across the
+// CRM (Projects, Payments, Dashboard, Invoices, etc.) — that's a
+// long-established, unrelated display convention this fix must not touch.
+// Quotation money (Development, Domain, Hosting, Maintenance, Year 1/2/3
+// totals, discounts, payment schedule stages) must always show exactly 2
+// decimal places instead, so a real value like $11.28 is never silently
+// shown as $11. Never uses parseInt()/Math.round() to a whole number —
+// only rounds to the nearest cent for display, exactly like toFixed(2)
+// but with thousands separators.
+function moneyPrecise(n){
+  if(n===null || n===undefined || n==='') return '$0.00';
+  return '$' + Number(n).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+// For text-based approximate labels only (spec: "~$60/year" style Year 2/3
+// estimates) — preserves the existing whole-dollar look for a whole-dollar
+// estimate (~$60/year, not ~$60.00/year) but still shows real cents when
+// the configured value actually has them (~$60.50/year). Never used for an
+// exact/precise total — see moneyPrecise() for that.
+function moneyEstimate(n){
+  if(n===null || n===undefined || n==='') return '$0';
+  const rounded = Math.round(Number(n)*100)/100;
+  return Number.isInteger(rounded)
+    ? '$' + rounded.toLocaleString('en-US')
+    : '$' + rounded.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
 function fmtDate(d){
   if(!d) return '—';
   const dt = new Date(d);
@@ -550,22 +576,8 @@ function renderUsersPage(){
   const projects = DB.all('projects');
   const quotations = DB.all('quotations');
   const salesNames = salesPerformanceNames();
-  const founder = isFounder();
-
-  // Founder/Admin sees the full Users & Roles Management area (invite/edit
-  // role/deactivate/etc.) at the top of this same page — this is the exact
-  // same settingsUsersTab() markup as Settings -> Users & Roles, so the two
-  // entry points can never disagree with each other. Every other role sees
-  // this page exactly as before it existed (team list + Sales Performance),
-  // unchanged.
-  if(founder){
-    document.getElementById('pageTitle').textContent = 'Users & Roles';
-    document.getElementById('pageSub').textContent = 'Invite and manage BizWeb KH CRM staff accounts';
-  }
 
   el.innerHTML = `
-    ${founder ? `<div id="usersPageStaffMgmt">${settingsUsersTab()}</div><div class="divider" style="margin:28px 0"></div>` : ''}
-    <div class="section-title">Team Accounts</div>
     <div class="table-wrap scroll-x">
       <table class="data-table">
         <thead><tr><th>User</th><th>Username</th><th>Role</th><th>Leads Assigned</th><th>Active Projects</th></tr></thead>
@@ -584,7 +596,7 @@ function renderUsersPage(){
         </tbody>
       </table>
     </div>
-    <p class="text-muted" style="margin:14px 0 24px;font-size:12.5px">${founder ? 'Every CRM team account, for reference — use "+ Invite Staff" above to add a new one.' : 'Live BizWeb KH team accounts from Supabase.'}</p>
+    <p class="text-muted" style="margin:14px 0 24px;font-size:12.5px">Live BizWeb KH team accounts from Supabase. New team members are added by creating a Supabase Auth user + linked <code>profiles</code> row — this page will list them automatically once that's done.</p>
 
     <div class="section-title">Sales Performance</div>
     <p class="text-muted" style="margin:0 0 10px;font-size:12px">Only users with a Sales role, or who have at least one lead assigned, appear here.</p>
@@ -616,7 +628,6 @@ function renderUsersPage(){
       </table>
     </div>
   `;
-  if(founder) wireSettingsUsersTab('usersPageStaffMgmt');
 }
 
 let SETTINGS_TAB = 'general';
@@ -868,26 +879,16 @@ function settingsUsersTab(){
   `;
 }
 
-// Re-fetches the staff list and re-renders whichever page is currently
-// showing the Users & Roles section — Settings -> Users & Roles, and/or
-// the sidebar Users page (Founder/Admin view) — so an action taken from
-// either place is reflected immediately, wherever the user is looking.
 async function reloadUsersTabAfterChange(){
   await DB.refreshUsers();
-  if(document.getElementById('settingsTabBody') && SETTINGS_TAB==='users') renderSettingsBody();
-  if(document.getElementById('usersPageStaffMgmt')) renderUsersPage();
+  if(SETTINGS_TAB==='users') renderSettingsBody();
 }
 
-// `containerId` is the element wrapping this render's Invite/View/Edit
-// Role/etc. buttons — Settings -> Users & Roles tab (settingsTabBody) and
-// the sidebar Users page (usersPageStaffMgmt) both render the exact same
-// settingsUsersTab() markup and wire it through here, so the two entry
-// points can never drift out of sync with each other.
-function wireSettingsUsersTab(containerId='settingsTabBody'){
-  const wrap = document.getElementById(containerId);
+function wireSettingsUsersTab(){
+  const wrap = document.getElementById('settingsTabBody');
   if(!wrap) return;
 
-  wrap.querySelector('#usrInviteBtn').onclick = openInviteStaffModal;
+  document.getElementById('usrInviteBtn').onclick = openInviteStaffModal;
 
   wrap.querySelectorAll('[data-view]').forEach(b=> b.onclick = ()=>{
     const u = DB.all('users').find(x=>x.id===b.dataset.view);

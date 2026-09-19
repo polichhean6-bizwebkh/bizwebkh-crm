@@ -457,8 +457,8 @@ function qcYear1PaymentTotal(maintenance, year1ScopeTotal){
 function qcYearAmountDisplay(amount, mode){
   if(mode==='tbc') return 'To be confirmed';
   const amt = Number(amount)||0;
-  if(mode==='exact') return money(amt)+'/year';
-  return '~'+money(amt)+'/year'; // 'estimated' (default)
+  if(mode==='exact') return moneyPrecise(amt)+'/year';
+  return '~'+moneyEstimate(amt)+'/year'; // 'estimated' (default) — spec: don't force .00 on approximate labels
 }
 
 // The Maintenance Renewal wording note (spec §14) — regenerated fresh from
@@ -570,7 +570,7 @@ function openCreateQuotationModal(prefill={}){
     maintenance: defaultMaintenanceState(),
     paymentPreset: '30/70', customStages:null,
     quotationDate: todayLocalISO(), validUntil: daysFromNow(quotationDefaults().validityDays),
-    demoLink:'', editingId: null, versionOf: null,
+    demoLink:'', demoLinks: [], editingId: null, versionOf: null,
   };
   if(QC_STATE.leadId) applyLeadToQC(QC_STATE.leadId);
   QC_TAB = 'edit';
@@ -708,7 +708,19 @@ function renderCreateQuotationModal(){
             <div class="form-field"><label>Quote No. (preview) <span class="field-auto-badge">Auto</span></label><input value="${s.packageKey?qcQuoteNumberPreview():'—'}" readonly></div>
             <div class="form-field"><label class="required">Quotation Date</label><input type="date" id="cq_qdate" value="${s.quotationDate}" ${isFounder()?'':'readonly class="field-locked"'}></div>
             <div class="form-field"><label class="required">Valid Until</label><input type="date" id="cq_validUntil" value="${s.validUntil}" ${isFounder()?'':'readonly class="field-locked"'}></div>
-            <div class="form-field full"><label>Demo Link</label><input id="cq_demoLink" value="${escapeHtml(s.demoLink)}" placeholder="https://..."></div>
+            <div class="form-field full">
+              <label>Demo Link</label>
+              <input id="cq_demoLink" value="${escapeHtml(s.demoLink)}" placeholder="https://...">
+              ${(s.demoLinks||[]).map((link,idx)=>`
+                <div class="flex-row" style="gap:8px;align-items:center;margin-top:8px">
+                  <span class="text-muted" style="font-size:11px;min-width:82px;flex-shrink:0">Demo Link ${idx+2}</span>
+                  <input data-demolink-extra="${idx}" value="${escapeHtml(link)}" placeholder="https://..." style="flex:1">
+                  <span class="icon-btn" data-remove-demolink="${idx}" title="Remove Demo Link ${idx+2}" style="font-size:15px;cursor:pointer">&times;</span>
+                </div>`).join('')}
+              ${(s.demoLinks||[]).length < 2
+                ? `<button class="btn btn-outline btn-sm" id="cq_addDemoLink" type="button" style="margin-top:8px">+ Add Demo Link</button>`
+                : ''}
+            </div>
           </div>
 
           <div class="divider"></div>
@@ -733,9 +745,9 @@ function renderCreateQuotationModal(){
           </div>
           <div class="table-wrap scroll-x">
             <table class="data-table qc-mini-table"><thead><tr><th>Stage</th><th>%</th><th>Amount</th></tr></thead>
-            <tbody>${schedule.map(st=>`<tr><td>${escapeHtml(st.label)}</td><td>${st.pct}%</td><td>${money(st.amount)}</td></tr>`).join('')}</tbody></table>
+            <tbody>${schedule.map(st=>`<tr><td>${escapeHtml(st.label)}</td><td>${st.pct}%</td><td>${moneyPrecise(st.amount)}</td></tr>`).join('')}</tbody></table>
           </div>
-          <p class="text-muted" style="font-size:11.5px;margin:6px 0 16px">Stages always sum exactly to the Year 1 Total (${totals.evalRes.priceIsTBC?'TBC':money(totals.year1Total)}) and auto-update whenever any Year 1 cost above changes.</p>
+          <p class="text-muted" style="font-size:11.5px;margin:6px 0 16px">Stages always sum exactly to the Year 1 Total (${totals.evalRes.priceIsTBC?'TBC':moneyPrecise(totals.year1Total)}) and auto-update whenever any Year 1 cost above changes.</p>
 
           <div class="divider"></div>
           <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">F. Notes</div>
@@ -843,6 +855,15 @@ function renderCreateQuotationModal(){
     overlay.querySelector('#cq_qdate').onchange = e=>{ s.quotationDate = e.target.value; renderCreateQuotationModal(); };
     overlay.querySelector('#cq_validUntil').onchange = e=>{ s.validUntil = e.target.value; refreshQcPreview(overlay); };
     overlay.querySelector('#cq_demoLink').oninput = e=>{ s.demoLink = e.target.value; refreshQcPreview(overlay); };
+    if(!Array.isArray(s.demoLinks)) s.demoLinks = [];
+    overlay.querySelectorAll('[data-demolink-extra]').forEach(inp=>{
+      inp.oninput = e=>{ s.demoLinks[Number(inp.dataset.demolinkExtra)] = e.target.value; refreshQcPreview(overlay); };
+    });
+    overlay.querySelectorAll('[data-remove-demolink]').forEach(btn=>{
+      btn.onclick = ()=>{ s.demoLinks.splice(Number(btn.dataset.removeDemolink), 1); renderCreateQuotationModal(); };
+    });
+    const addDemoLinkBtn = overlay.querySelector('#cq_addDemoLink');
+    if(addDemoLinkBtn) addDemoLinkBtn.onclick = ()=>{ if(s.demoLinks.length<2){ s.demoLinks.push(''); renderCreateQuotationModal(); } };
 
     overlay.querySelector('#cq_domainName').oninput = e=>{ s.domainName = e.target.value; refreshQcPreview(overlay); };
 
@@ -917,7 +938,7 @@ function refreshQcPreview(overlay){
   // itself live too (spec §29: "no stale totals") — every other field in
   // that section already routes through this same function.
   const y1TotalEl = overlay.querySelector('.qc-year-block:nth-of-type(1) .qc-year-total');
-  if(y1TotalEl) y1TotalEl.textContent = totals.evalRes.priceIsTBC ? 'TBC' : money(totals.year1Total);
+  if(y1TotalEl) y1TotalEl.textContent = totals.evalRes.priceIsTBC ? 'TBC' : moneyPrecise(totals.year1Total);
   const y2TotalEl = overlay.querySelector('.qc-year-block:nth-of-type(2) .qc-year-total');
   if(y2TotalEl) y2TotalEl.textContent = qcYearAmountDisplay(totals.year2Total, totals.annualCost.year2.displayMode);
   const y3TotalEl = overlay.querySelector('.qc-year-block:nth-of-type(3) .qc-year-total');
@@ -979,12 +1000,12 @@ function authorityBannerHtml(evalRes){
     return `<div class="panel" style="border-color:var(--orange,#d98a12);background:#fff8ec;padding:12px 14px;margin-top:12px">
       <strong style="color:#a56206">⚠ Founder Review Required</strong>
       <ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px;color:var(--navy)">${evalRes.reasons.map(r=>`<li>${escapeHtml(r)}</li>`).join('')}</ul>
-      <div style="margin-top:8px;font-size:13px">Estimated Year 1 Total: <b>${evalRes.priceIsTBC?'TBC':money(evalRes.finalPrice)}</b></div>
+      <div style="margin-top:8px;font-size:13px">Estimated Year 1 Total: <b>${evalRes.priceIsTBC?'TBC':moneyPrecise(evalRes.finalPrice)}</b></div>
     </div>`;
   }
   return `<div class="panel" style="border-color:var(--green,#12a775);background:#eefaf4;padding:12px 14px;margin-top:12px">
     <strong style="color:#0d8a5f">✓ Within Sales Quoting Authority</strong>
-    <div style="margin-top:8px;font-size:13px">Year 1 Total: <b>${money(evalRes.finalPrice)}</b> ${evalRes.discountAmt?`(after ${money(evalRes.discountAmt)} discount)`:''}</div>
+    <div style="margin-top:8px;font-size:13px">Year 1 Total: <b>${moneyPrecise(evalRes.finalPrice)}</b> ${evalRes.discountAmt?`(after ${moneyPrecise(evalRes.discountAmt)} discount)`:''}</div>
   </div>`;
 }
 
@@ -1066,7 +1087,7 @@ function quotationItemsEditorHtml(items){
               <td><input type="checkbox" data-inc="${it.id}" ${it.included!==false?'checked':''}></td>
               <td>${escapeHtml(it.module)}</td>
               <td>${escapeHtml(it.name)}${it.founderReviewRequired?' <span class="badge chip-overdue" style="margin-left:4px">Founder Review</span>':''}</td>
-              <td>${it.price===null||it.price===undefined?'TBC':money(it.price)}</td>
+              <td>${it.price===null||it.price===undefined?'TBC':moneyPrecise(it.price)}</td>
               <td><span class="icon-btn" data-remove-item="${it.id}" title="Remove" style="font-size:15px;cursor:pointer">&times;</span></td>
             </tr>`).join('')}
         </tbody>
@@ -1167,10 +1188,10 @@ function annualCostBreakdownHtml(s, svc, totals){
   const y1DomainBadge = y1.domainMode==='included' ? `<span class="field-included-badge">Included</span>` : '';
   return `
     <div class="qc-year-block">
-      <div class="qc-year-head"><h4>Year 1</h4><span class="qc-year-total">${totals.evalRes.priceIsTBC?'TBC':money(totals.year1Total)}</span></div>
+      <div class="qc-year-head"><h4>Year 1</h4><span class="qc-year-total">${totals.evalRes.priceIsTBC?'TBC':moneyPrecise(totals.year1Total)}</span></div>
       <div class="form-grid">
         <div class="form-field full"><label>Website / System Development <span class="field-auto-badge">Auto</span></label>
-          <input value="${money(totals.year1Development)}" readonly class="field-locked"></div>
+          <input value="${moneyPrecise(totals.year1Development)}" readonly class="field-locked"></div>
         <div class="form-field"><label>Domain ($) ${y1DomainBadge}</label><input type="number" id="cq_y1_domain" value="${y1.domain}" ${y1.domainMode!=='separate'?'readonly class="field-locked"':''}></div>
         <div class="form-field"><label>Domain Status</label>
           <select id="cq_y1_domainMode" class="sel">
@@ -1319,6 +1340,7 @@ function saveQuotationFromState(s){
     manualAdjustment: (isFounder() && s.adjustment) ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
     paymentPreset: s.paymentPreset, quotationDate: s.quotationDate, validUntil: s.validUntil,
     demoLink: s.demoLink,
+    demoLinks: s.demoLinks||[],
     items: activeItems.map(i=>({ id:i.id, module:i.module, name:i.name, price:i.price, founderReviewRequired:i.founderReviewRequired })),
     exclusions: s.exclusions, importantNotes: finalNotes, paymentSchedule: schedule,
     reasons: evalRes.reasons,
@@ -1383,6 +1405,7 @@ function loadStateFromQuotation(q, { asDuplicate=false } = {}){
     quotationDate: asDuplicate ? todayLocalISO() : q.quotationDate,
     validUntil: asDuplicate ? daysFromNow(quotationDefaults().validityDays) : q.validUntil,
     demoLink: q.demoLink||'',
+    demoLinks: q.demoLinks ? [...q.demoLinks] : [],
     editingId: asDuplicate ? null : q.id,
   };
 }
@@ -1447,20 +1470,20 @@ function openQuotationDetailModal(id){
       <div class="table-wrap scroll-x">
         <table class="data-table">
           <thead><tr><th>Module</th><th>Item</th><th>Price</th></tr></thead>
-          <tbody>${(q.items||[]).map(it=>`<tr><td>${escapeHtml(it.module)}</td><td>${escapeHtml(it.name)}</td><td>${it.price===null||it.price===undefined?'TBC':money(it.price)}</td></tr>`).join('')}</tbody>
+          <tbody>${(q.items||[]).map(it=>`<tr><td>${escapeHtml(it.module)}</td><td>${escapeHtml(it.name)}</td><td>${it.price===null||it.price===undefined?'TBC':moneyPrecise(it.price)}</td></tr>`).join('')}</tbody>
         </table>
       </div>
 
       <div class="divider"></div>
       <div class="two-col">
         <div>
-          ${infoRow('Year 1 Total', q.priceIsTBC?'TBC':money(q.year1Total))}
-          ${infoRow('Year 2 Renewal', money(q.year2Total)+'/yr')}
-          ${infoRow('Year 3 Renewal', money(q.year3Total)+'/yr')}
+          ${infoRow('Year 1 Total', q.priceIsTBC?'TBC':moneyPrecise(q.year1Total))}
+          ${infoRow('Year 2 Renewal', moneyPrecise(q.year2Total)+'/yr')}
+          ${infoRow('Year 3 Renewal', moneyPrecise(q.year3Total)+'/yr')}
         </div>
         <div>
           ${infoRow('Discount', (q.discountPct||0)+'%')}
-          ${q.manualAdjustment ? infoRow('Price Adjustment', money(q.manualAdjustment.amount)+' — '+escapeHtml(q.manualAdjustment.reason)) : ''}
+          ${q.manualAdjustment ? infoRow('Price Adjustment', moneyPrecise(q.manualAdjustment.amount)+' — '+escapeHtml(q.manualAdjustment.reason)) : ''}
         </div>
       </div>
 
@@ -1712,7 +1735,7 @@ function qcStateToPreviewQuotation(s, evalRes, schedule){
     clientName: s.clientName, businessName: s.businessName, industry: s.industry,
     packageName: svc?svc.name:s.packageKey, packageKey: s.packageKey,
     quotationType: s.packageKey ? quotationTypeForProjectType(s.packageKey) : 'website',
-    quotationDate: s.quotationDate, validUntil: s.validUntil, demoLink: s.demoLink,
+    quotationDate: s.quotationDate, validUntil: s.validUntil, demoLink: s.demoLink, demoLinks: s.demoLinks||[],
     items: s.items.filter(i=>i.included!==false),
     exclusions: s.exclusions,
     domainName: s.domainName,
@@ -1842,7 +1865,7 @@ function buildQuoteSections(q){
   // the full chargeable total (development + domain + hosting +
   // maintenance + add-ons − discount, spec §10) — adding y1MaintAddOn again
   // would double-count it.
-  const y1Amount = q.priceIsTBC ? 'TBC' : money((Number(q.year1Total)||0) + (usingNewModel?0:y1MaintAddOn));
+  const y1Amount = q.priceIsTBC ? 'TBC' : moneyPrecise((Number(q.year1Total)||0) + (usingNewModel?0:y1MaintAddOn));
   let y2Base, y2Maint, y3Base, y3Maint, y2Amount, y3Amount, y1Breakdown='', y2Breakdown='', y3Breakdown='';
   if(usingNewModel){
     const y1 = storedAnnualCost.year1, y2 = storedAnnualCost.year2, y3 = storedAnnualCost.year3;
@@ -1859,17 +1882,17 @@ function buildQuoteSections(q){
     if(y1.domainMode==='client_own'){
       y1Breakdown = `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Existing / client-owned domain${domainNameSuffix} — no domain cost charged.</div>`;
     } else if(y1.domainMode==='separate' && y1.domain>0){
-      y1Breakdown = `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Domain${domainNameSuffix} ${money(y1.domain)}</div>`;
+      y1Breakdown = `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Domain${domainNameSuffix} ${moneyPrecise(y1.domain)}</div>`;
     } else if(q.domainName){
       y1Breakdown = `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Domain: ${escapeHtml(q.domainName)}</div>`;
     }
     if(showDetailed){
       const y1Parts = [];
-      if(!y1.hostingIncluded && y1.hosting>0) y1Parts.push(`${hostingLabelForService(serviceByProjectType(q.packageKey))} ${money(y1.hosting)}`);
-      if(y1.maintenanceInclude && y1.maintenance>0) y1Parts.push(`Maintenance ${money(y1.maintenance)}`);
+      if(!y1.hostingIncluded && y1.hosting>0) y1Parts.push(`${hostingLabelForService(serviceByProjectType(q.packageKey))} ${moneyPrecise(y1.hosting)}`);
+      if(y1.maintenanceInclude && y1.maintenance>0) y1Parts.push(`Maintenance ${moneyPrecise(y1.maintenance)}`);
       if(y1Parts.length) y1Breakdown += `<div class="text-muted" style="font-size:10.5px;margin-top:2px">${y1Parts.join(' / ')}</div>`;
-      y2Breakdown = `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Domain ${money(y2.domain)} / Hosting ${money(y2.hosting)} / Maintenance ${money(y2Maint)}</div>`;
-      y3Breakdown = `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Domain ${money(y3.domain)} / Hosting ${money(y3.hosting)} / Maintenance ${money(y3Maint)}</div>`;
+      y2Breakdown = `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Domain ${moneyPrecise(y2.domain)} / Hosting ${moneyPrecise(y2.hosting)} / Maintenance ${moneyPrecise(y2Maint)}</div>`;
+      y3Breakdown = `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Domain ${moneyPrecise(y3.domain)} / Hosting ${moneyPrecise(y3.hosting)} / Maintenance ${moneyPrecise(y3Maint)}</div>`;
     }
   } else {
     y2Base = Number(q.year2Total)||0;
@@ -1878,8 +1901,8 @@ function buildQuoteSections(q){
     y3Maint = Number(maint.year3Cost)||0;
     y2Amount = q.year2Total!=null ? qcYearAmountDisplay(y2Base + y2Maint, maint.year2DisplayMode||'estimated') : 'TBC';
     y3Amount = q.year3Total!=null ? qcYearAmountDisplay(y3Base + y3Maint, maint.year3DisplayMode||'estimated') : 'TBC';
-    y2Breakdown = (q.year2Total!=null && y2Maint>0) ? `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Renewal ${money(y2Base)} + Maintenance ${money(y2Maint)}</div>` : '';
-    y3Breakdown = (q.year3Total!=null && y3Maint>0) ? `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Renewal ${money(y3Base)} + Maintenance ${money(y3Maint)}</div>` : '';
+    y2Breakdown = (q.year2Total!=null && y2Maint>0) ? `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Renewal ${moneyPrecise(y2Base)} + Maintenance ${moneyPrecise(y2Maint)}</div>` : '';
+    y3Breakdown = (q.year3Total!=null && y3Maint>0) ? `<div class="text-muted" style="font-size:10.5px;margin-top:2px">Renewal ${moneyPrecise(y3Base)} + Maintenance ${moneyPrecise(y3Maint)}</div>` : '';
   }
   const visibleExcl = visibleExclusions(q.items, q.exclusions);
 
@@ -1917,16 +1940,16 @@ function buildQuoteSections(q){
   // never shifts.
   if(!usingNewModel && (q.domainName || q.domainCost!=null)){
     sections.push({ id:'domain', kind:'block',
-      html:`<h4 class="quote-doc-h">Domain</h4><p style="font-size:12.5px;margin:0">${q.domainName?escapeHtml(q.domainName)+' — ':''}${q.domainIncluded?'included in Year 1':'not included'} (est. ${money(q.domainCost)}); renewal est. ${money(q.domainRenewalEstimate)}/year.</p>` });
+      html:`<h4 class="quote-doc-h">Domain</h4><p style="font-size:12.5px;margin:0">${q.domainName?escapeHtml(q.domainName)+' — ':''}${q.domainIncluded?'included in Year 1':'not included'} (est. ${moneyPrecise(q.domainCost)}); renewal est. ${moneyPrecise(q.domainRenewalEstimate)}/year.</p>` });
   }
 
-  const paymentFootNote = (!usingNewModel && maintActive && y1MaintAddOn>0) ? `<p class="text-muted" style="font-size:11px;margin:4px 0 0">Includes Year 1 maintenance (${money(y1MaintAddOn)}).</p>` : '';
+  const paymentFootNote = (!usingNewModel && maintActive && y1MaintAddOn>0) ? `<p class="text-muted" style="font-size:11px;margin:4px 0 0">Includes Year 1 maintenance (${moneyPrecise(y1MaintAddOn)}).</p>` : '';
   sections.push({ id:'payment', kind:'group',
     headingHtml:`<h4 class="quote-doc-h">Payment Schedule</h4>`,
     contHeadingHtml:`<h4 class="quote-doc-h">Payment Schedule (continued)</h4>`,
     wrapOpenHtml:`<table class="quote-doc-table qc-mini-table"><thead><tr><th>Stage</th><th>%</th><th>Amount</th></tr></thead><tbody>`,
     wrapCloseHtml:`</tbody></table>${paymentFootNote}`,
-    items:(q.paymentSchedule||[]).map(st=>({ html:`<tr><td>${escapeHtml(st.label)}</td><td>${st.pct}%</td><td>${money(st.amount)}</td></tr>` })),
+    items:(q.paymentSchedule||[]).map(st=>({ html:`<tr><td>${escapeHtml(st.label)}</td><td>${st.pct}%</td><td>${moneyPrecise(st.amount)}</td></tr>` })),
   });
 
   const noteItems = [];
@@ -2023,7 +2046,12 @@ function quoteInfoRows(q){
   rows.push(`<tr><th>${bilingualLabel('គម្រោង','Project')}</th><td>${escapeHtml(q.packageName)}${q.industry?' — '+escapeHtml(q.industry):''}</td></tr>`);
   rows.push(`<tr><th>${bilingualLabel('កាលបរិច្ឆេទ','Date')}</th><td>${fmtDate(q.quotationDate)}</td></tr>`);
   rows.push(`<tr><th>${bilingualLabel('សុពលភាព','Valid Until')}</th><td>${fmtDate(q.validUntil)}</td></tr>`);
-  if(q.demoLink) rows.push(`<tr><th>Demo Preview Link</th><td>${escapeHtml(q.demoLink)}</td></tr>`);
+  const demoLinks = [q.demoLink, ...(q.demoLinks||[])].map(x=>String(x||'').trim()).filter(Boolean);
+  if(demoLinks.length===1){
+    rows.push(`<tr><th>Demo Preview Link</th><td>${escapeHtml(demoLinks[0])}</td></tr>`);
+  } else if(demoLinks.length>1){
+    rows.push(`<tr><th>Demo Preview Links</th><td>${demoLinks.map((l,i)=>`${i+1}. ${escapeHtml(l)}`).join('<br>')}</td></tr>`);
+  }
   return rows.join('');
 }
 
