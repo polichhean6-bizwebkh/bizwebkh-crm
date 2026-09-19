@@ -32,9 +32,9 @@ function renderPaymentsPage(){
 
   el.innerHTML = `
     <div class="kpi-grid summary-cards-6" style="margin-bottom:18px">
-      <div class="kpi-card"><div class="kpi-value">${money(totalProjectValue)}</div><div class="kpi-label">Total Project Value</div></div>
-      <div class="kpi-card"><div class="kpi-value" style="color:var(--green)">${money(totalCollected)}</div><div class="kpi-label">Total Collected</div></div>
-      <div class="kpi-card"><div class="kpi-value" style="color:var(--red)">${money(totalOutstanding)}</div><div class="kpi-label">Total Outstanding</div></div>
+      <div class="kpi-card"><div class="kpi-value">${moneyPrecise(totalProjectValue)}</div><div class="kpi-label">Total Project Value</div></div>
+      <div class="kpi-card"><div class="kpi-value" style="color:var(--green)">${moneyPrecise(totalCollected)}</div><div class="kpi-label">Total Collected</div></div>
+      <div class="kpi-card"><div class="kpi-value" style="color:var(--red)">${moneyPrecise(totalOutstanding)}</div><div class="kpi-label">Total Outstanding</div></div>
       <div class="kpi-card"><div class="kpi-value">${fullyPaidCount}</div><div class="kpi-label">Fully Paid Projects</div></div>
       <div class="kpi-card"><div class="kpi-value">${partiallyPaidCount}</div><div class="kpi-label">Partially Paid Projects</div></div>
       <div class="kpi-card"><div class="kpi-value">${unpaidCount}</div><div class="kpi-label">Unpaid Projects</div></div>
@@ -124,9 +124,9 @@ function renderFinancialTables(){
                 <tr>
                   <td class="cell-link" data-open="${p.id}">${p.id}</td>
                   <td>${escapeHtml(p.clientName)}<div class="cell-sub">${escapeHtml(p.businessName)}</div></td>
-                  <td class="cell-strong">${money(s.confirmedValue)}</td>
-                  <td style="font-weight:700;color:${s.totalPaid>0?'var(--green)':'inherit'}">${money(s.totalPaid)}</td>
-                  <td style="font-weight:700;color:#d98a12">${money(s.remaining)}</td>
+                  <td class="cell-strong">${moneyPrecise(s.confirmedValue)}</td>
+                  <td style="font-weight:700;color:${s.totalPaid>0?'var(--green)':'inherit'}">${moneyPrecise(s.totalPaid)}</td>
+                  <td style="font-weight:700;color:#d98a12">${moneyPrecise(s.remaining)}</td>
                   <td>${s.lastPayment ? `${fmtDate(s.lastPayment.date)}<div class="cell-sub">${escapeHtml(s.lastPayment.type)}</div>` : '—'}</td>
                   <td>${paymentBadge(s.status)}</td>
                   <td><button class="btn btn-secondary btn-sm" data-open="${p.id}">Open Project</button></td>
@@ -158,7 +158,7 @@ function renderFinancialTables(){
                   <td>${proj ? escapeHtml(proj.clientName) : '—'}</td>
                   <td class="cell-strong">${escapeHtml(p.paymentNumber||'—')}</td>
                   <td>${escapeHtml(p.type)}</td>
-                  <td class="cell-strong">${money(p.amount)}</td>
+                  <td class="cell-strong">${moneyPrecise(p.amount)}</td>
                   <td>${escapeHtml(p.method||'—')}</td>
                   <td>${escapeHtml(p.recordedBy||'—')}</td>
                   <td><button class="btn btn-ghost btn-sm" data-open="${p.projectId}">View Project</button></td>
@@ -199,7 +199,7 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
   const html = `
     <div class="modal-head"><h3>Record Payment</h3><button class="modal-close" id="rpClose">&times;</button></div>
     <div class="modal-body">
-      <p class="text-muted" style="margin-top:0;font-size:13px">${proj.id} — ${escapeHtml(proj.businessName)} · Project Value ${money(summary.confirmedValue)} · Remaining: <b>${money(summary.remaining)}</b></p>
+      <p class="text-muted" style="margin-top:0;font-size:13px">${proj.id} — ${escapeHtml(proj.businessName)} · Project Value ${moneyPrecise(summary.confirmedValue)} · Remaining: <b>${moneyPrecise(summary.remaining)}</b></p>
       <div class="form-grid">
         <div class="form-field"><label class="required">Payment Number</label><input id="rp_number" value="${suggestedNumber}"></div>
         <div class="form-field"><label class="required">Payment Type</label>
@@ -212,7 +212,7 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
             <option value="Other">Other</option>
           </select>
         </div>
-        <div class="form-field"><label class="required">Amount ($)</label><input type="number" id="rp_amount" value="${!hasDeposit ? Math.round(summary.confirmedValue*proj.depositPct/100) : summary.remaining}" min="0.01" step="0.01"></div>
+        <div class="form-field"><label class="required">Amount ($)</label><input type="number" id="rp_amount" value="${!hasDeposit ? Math.round(summary.confirmedValue*proj.depositPct) / 100 : summary.remaining}" min="0.01" step="0.01"></div>
         <div class="form-field"><label class="required">Payment Date</label><input type="date" id="rp_date" value="${new Date().toISOString().slice(0,10)}"></div>
         <div class="form-field"><label class="required">Payment Method</label><select id="rp_method">${PAYMENT_METHODS.map(m=>`<option>${m}</option>`).join('')}</select></div>
         <div class="form-field"><label>Reference</label><input id="rp_ref" placeholder="e.g. bank txn ref, receipt #…"></div>
@@ -272,8 +272,8 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
       if(amount > currentSummary.remaining + 0.004){
         const proceed = confirm(
           `This payment is greater than the remaining project balance.\n\n` +
-          `Remaining Balance: ${money(currentSummary.remaining)}\n` +
-          `Amount Entered: ${money(amount)}\n\n` +
+          `Remaining Balance: ${moneyPrecise(currentSummary.remaining)}\n` +
+          `Amount Entered: ${moneyPrecise(amount)}\n\n` +
           `Record this payment anyway?`
         );
         if(!proceed) return;
@@ -288,7 +288,7 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
       if(invoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(invoiceId);
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: proj.id, refLabel:`${proj.id} — ${proj.businessName}`,
         type: type==='Deposit' ? 'Deposit Recorded' : 'Payment Recorded',
-        description:`${CURRENT_USER.name} recorded payment: ${money(amount)} (${type}, ${paymentNumber}) for project ${proj.id}`,
+        description:`${CURRENT_USER.name} recorded payment: ${moneyPrecise(amount)} (${type}, ${paymentNumber}) for project ${proj.id}`,
         remark: [reference, notes].filter(Boolean).join(' — ') || null });
 
       closeModal();
@@ -345,9 +345,9 @@ function openPaymentRecordedModal({ proj, amount, summary, suggestedStage, payme
       <p class="text-muted" style="margin:0 0 18px;font-size:13px">${proj.id} — ${escapeHtml(proj.businessName)}</p>
       <div class="pd-keyinfo" style="grid-template-columns:1fr;text-align:left;margin-bottom:${suggestedStage?'18px':'4px'}">
         <div>
-          ${infoRow('Payment Amount', money(amount))}
-          ${infoRow('Total Paid', money(summary.totalPaid))}
-          ${infoRow('Remaining Balance', money(summary.remaining))}
+          ${infoRow('Payment Amount', moneyPrecise(amount))}
+          ${infoRow('Total Paid', moneyPrecise(summary.totalPaid))}
+          ${infoRow('Remaining Balance', moneyPrecise(summary.remaining))}
           ${infoRow('Payment Status', summary.status)}
         </div>
       </div>

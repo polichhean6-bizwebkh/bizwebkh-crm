@@ -67,7 +67,7 @@ function renderQuotSummaryCards(){
       <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px;color:var(--amber)">${awaiting}</div><div class="kpi-label" style="margin-top:4px">Awaiting Approval</div></div>
       <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px;color:var(--blue)">${sent}</div><div class="kpi-label" style="margin-top:4px">Sent</div></div>
       <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px;color:var(--green)">${accepted}</div><div class="kpi-label" style="margin-top:4px">Accepted</div></div>
-      <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px">${money(totalValue)}</div><div class="kpi-label" style="margin-top:4px">Total Quoted Value</div></div>
+      <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px">${moneyPrecise(totalValue)}</div><div class="kpi-label" style="margin-top:4px">Total Quoted Value</div></div>
     </div>
   `;
 }
@@ -104,7 +104,7 @@ function renderQuotTable(){
               <td>${escapeHtml(q.projectCode||'—')}</td>
               <td><div class="cell-strong">${escapeHtml(q.clientName)}</div>${q.businessName?`<div class="text-muted" style="font-size:11.5px">${escapeHtml(q.businessName)}</div>`:''}</td>
               <td>${escapeHtml(q.packageName||q.packageKey||'')}</td>
-              <td class="cell-strong">${q.priceIsTBC?'TBC':money(q.year1Total)}</td>
+              <td class="cell-strong">${q.priceIsTBC?'TBC':moneyPrecise(q.year1Total)}</td>
               <td><div class="flex-row"><div class="avatar-sm" style="background:${userColor(q.assignedSales)}">${userInitials(q.assignedSales)}</div>${escapeHtml(q.assignedSales)}</div></td>
               <td>${statusBadge(quotationDisplayStatus(q))}</td>
               <td>${fmtDate(q.quotationDate||q.createdAt)}</td>
@@ -762,7 +762,7 @@ function renderCreateQuotationModal(){
           <div id="cq_adjustmentsBody" ${s._showAdjustments?'':'hidden'} style="margin-top:10px">
             <div class="form-grid">
               <div class="form-field"><label>Discount %</label><input type="number" id="cq_discount" value="${s.discountPct}" min="0" max="100"></div>
-              <div class="form-field"><label>Manual Price Adjustment ($)</label><input type="number" id="cq_adjust" value="${s.adjustment}"></div>
+              <div class="form-field"><label>Manual Price Adjustment ($)</label><input type="number" step="0.01" id="cq_adjust" value="${s.adjustment}"></div>
               <div class="form-field full"><label>Reason for Price Adjustment ${s.adjustment?'<span class="required"></span>':'(required if adjusting)'}</label><input id="cq_adjustReason" value="${escapeHtml(s.adjustmentReason)}" placeholder='e.g. "Client already has hosting."'></div>
             </div>
           </div>` : `<div id="cq_adjustmentsBody" ${s._showAdjustments?'':'hidden'} style="margin-top:10px"><input value="Discount 0% — not permitted for your role" readonly class="field-locked"></div>`}
@@ -1192,7 +1192,7 @@ function annualCostBreakdownHtml(s, svc, totals){
       <div class="form-grid">
         <div class="form-field full"><label>Website / System Development <span class="field-auto-badge">Auto</span></label>
           <input value="${moneyPrecise(totals.year1Development)}" readonly class="field-locked"></div>
-        <div class="form-field"><label>Domain ($) ${y1DomainBadge}</label><input type="number" id="cq_y1_domain" value="${y1.domain}" ${y1.domainMode!=='separate'?'readonly class="field-locked"':''}></div>
+        <div class="form-field"><label>Domain ($) ${y1DomainBadge}</label><input type="number" step="0.01" id="cq_y1_domain" value="${y1.domain}" ${y1.domainMode!=='separate'?'readonly class="field-locked"':''}></div>
         <div class="form-field"><label>Domain Status</label>
           <select id="cq_y1_domainMode" class="sel">
             <option value="included" ${y1.domainMode==='included'?'selected':''}>Included</option>
@@ -1202,11 +1202,11 @@ function annualCostBreakdownHtml(s, svc, totals){
           ${y1DomainNote}
         </div>
         <div class="form-field"><label>${escapeHtml(hostingLabel)} ($) ${y1HostingBadge}</label>
-          <input type="number" id="cq_y1_hosting" value="${y1.hosting}" ${y1.hostingIncluded?'readonly class="field-locked"':''}>
+          <input type="number" step="0.01" id="cq_y1_hosting" value="${y1.hosting}" ${y1.hostingIncluded?'readonly class="field-locked"':''}>
           <label class="field-toggle-row"><span>Included in package price</span><span class="toggle-switch"><input type="checkbox" id="cq_y1_hostingIncluded" ${y1.hostingIncluded?'checked':''}><span class="toggle-slider"></span></span></label>
         </div>
         <div class="form-field"><label>Maintenance & Support ($)</label>
-          <input type="number" id="cq_y1_maint" value="${y1.maintenance}">
+          <input type="number" step="0.01" id="cq_y1_maint" value="${y1.maintenance}">
         </div>
       </div>
       ${maintenanceYearSectionHtml(1, y1)}
@@ -1215,9 +1215,9 @@ function annualCostBreakdownHtml(s, svc, totals){
     <div class="qc-year-block">
       <div class="qc-year-head"><h4>Year 2</h4><span class="qc-year-total">${qcYearAmountDisplay(totals.year2Total, y2.displayMode)}</span></div>
       <div class="form-grid">
-        <div class="form-field"><label>Domain Renewal ($)</label><input type="number" id="cq_y2_domain" value="${y2.domain}"></div>
-        <div class="form-field"><label>${escapeHtml(hostingLabel)} ($)</label><input type="number" id="cq_y2_hosting" value="${y2.hosting}"></div>
-        <div class="form-field"><label>Maintenance & Support ($)</label><input type="number" id="cq_y2_maint" value="${y2.maintenance}"></div>
+        <div class="form-field"><label>Domain Renewal ($)</label><input type="number" step="0.01" id="cq_y2_domain" value="${y2.domain}"></div>
+        <div class="form-field"><label>${escapeHtml(hostingLabel)} ($)</label><input type="number" step="0.01" id="cq_y2_hosting" value="${y2.hosting}"></div>
+        <div class="form-field"><label>Maintenance & Support ($)</label><input type="number" step="0.01" id="cq_y2_maint" value="${y2.maintenance}"></div>
         <div class="form-field"><label>Amount Display ${y2.displayMode==='tbc'?'<span class="field-tbc-badge">TBC</span>':''}</label>
           <select id="cq_y2_display" class="sel">
             <option value="exact" ${y2.displayMode==='exact'?'selected':''}>Exact Amount</option>
@@ -1232,9 +1232,9 @@ function annualCostBreakdownHtml(s, svc, totals){
     <div class="qc-year-block" style="margin-bottom:6px">
       <div class="qc-year-head"><h4>Year 3</h4><span class="qc-year-total">${qcYearAmountDisplay(totals.year3Total, y3.displayMode)}</span></div>
       <div class="form-grid">
-        <div class="form-field"><label>Domain Renewal ($)</label><input type="number" id="cq_y3_domain" value="${y3.domain}"></div>
-        <div class="form-field"><label>${escapeHtml(hostingLabel)} ($)</label><input type="number" id="cq_y3_hosting" value="${y3.hosting}"></div>
-        <div class="form-field"><label>Maintenance & Support ($)</label><input type="number" id="cq_y3_maint" value="${y3.maintenance}"></div>
+        <div class="form-field"><label>Domain Renewal ($)</label><input type="number" step="0.01" id="cq_y3_domain" value="${y3.domain}"></div>
+        <div class="form-field"><label>${escapeHtml(hostingLabel)} ($)</label><input type="number" step="0.01" id="cq_y3_hosting" value="${y3.hosting}"></div>
+        <div class="form-field"><label>Maintenance & Support ($)</label><input type="number" step="0.01" id="cq_y3_maint" value="${y3.maintenance}"></div>
         <div class="form-field"><label>Amount Display ${y3.displayMode==='tbc'?'<span class="field-tbc-badge">TBC</span>':''}</label>
           <select id="cq_y3_display" class="sel">
             <option value="exact" ${y3.displayMode==='exact'?'selected':''}>Exact Amount</option>
@@ -1362,7 +1362,7 @@ function saveQuotationFromState(s){
 
   logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId: quotation.id, refLabel:`${quotation.quoteNumber} — ${quotation.businessName||quotation.clientName}`,
     type: (s.editingId && !isNewRevision) ? 'Quotation Updated' : 'Quotation Created',
-    description: `${CURRENT_USER.name} ${(s.editingId && !isNewRevision)?'updated':(isNewRevision?'created revision v'+version+' of':'created')} quotation ${quotation.quoteNumber}. Year 1 Total: ${evalRes.priceIsTBC?'TBC':money(year1Total)}.`,
+    description: `${CURRENT_USER.name} ${(s.editingId && !isNewRevision)?'updated':(isNewRevision?'created revision v'+version+' of':'created')} quotation ${quotation.quoteNumber}. Year 1 Total: ${evalRes.priceIsTBC?'TBC':moneyPrecise(year1Total)}.`,
     remark: evalRes.requiresFounderReview ? 'Founder review required.' : null });
 
   toast(`Quotation ${quotation.quoteNumber} saved as Draft.`, 'success');
@@ -1572,7 +1572,7 @@ function markAsSent(id){
   q.status = 'Sent';
   DB.upsert('quotations', q);
   logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
-    type:'Quotation Sent', description:`${CURRENT_USER.name} sent quotation ${q.quoteNumber} / Year 1 Total: ${q.priceIsTBC?'TBC':money(q.year1Total)}`,
+    type:'Quotation Sent', description:`${CURRENT_USER.name} sent quotation ${q.quoteNumber} / Year 1 Total: ${q.priceIsTBC?'TBC':moneyPrecise(q.year1Total)}`,
     toValue:'Sent' });
   toast('Quotation marked as sent.', 'success');
   openQuotationDetailModal(id);
@@ -1608,7 +1608,7 @@ function openFounderReviewModal(id, mode){
         q.approvedBy = CURRENT_USER.name;
         DB.upsert('quotations', q);
         logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
-          type:'Quotation Approved', description:`${CURRENT_USER.name} approved quotation ${q.quoteNumber} at ${money(q.year1Total)}.`,
+          type:'Quotation Approved', description:`${CURRENT_USER.name} approved quotation ${q.quoteNumber} at ${moneyPrecise(q.year1Total)}.`,
           fromValue:'Awaiting Approval', toValue:'Approved', remark: comment });
       } else {
         q.approvalStatus = 'Founder Rejected';
@@ -1635,7 +1635,7 @@ function markAsAccepted(id){
   q.status = 'Accepted';
   DB.upsert('quotations', q);
   logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
-    type:'Quotation Accepted', description:`${CURRENT_USER.name} marked quotation ${q.quoteNumber} as Accepted. Value: ${money(q.year1Total)}.`,
+    type:'Quotation Accepted', description:`${CURRENT_USER.name} marked quotation ${q.quoteNumber} as Accepted. Value: ${moneyPrecise(q.year1Total)}.`,
     toValue:'Accepted' });
 
   const lead = q.leadId ? DB.find('leads', q.leadId) : null;
@@ -1695,10 +1695,10 @@ function convertQuotationToProject(id){
   DB.upsert('quotations', q);
 
   logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
-    type:'Quotation Converted to Project', description:`${CURRENT_USER.name} converted quotation ${q.quoteNumber} to project ${proj.id}. Confirmed Value: ${money(proj.confirmedValue)}.`,
+    type:'Quotation Converted to Project', description:`${CURRENT_USER.name} converted quotation ${q.quoteNumber} to project ${proj.id}. Confirmed Value: ${moneyPrecise(proj.confirmedValue)}.`,
     toValue: proj.id });
   logActivity({ userName: CURRENT_USER.name, refType:'project', refId: proj.id, refLabel:`${proj.id} — ${proj.businessName}`,
-    type:'Project Created', description:`${CURRENT_USER.name} created project ${proj.id} from accepted quotation ${q.quoteNumber}. Confirmed Value: ${money(proj.confirmedValue)}.`,
+    type:'Project Created', description:`${CURRENT_USER.name} created project ${proj.id} from accepted quotation ${q.quoteNumber}. Confirmed Value: ${moneyPrecise(proj.confirmedValue)}.`,
     toValue:'Confirmed', remark:`Functions copied from ${q.quoteNumber}.` });
 
   toast(`Project ${proj.id} created from ${q.quoteNumber}.`, 'success');
@@ -2324,7 +2324,7 @@ function linkedQuotationsHtml(leadId, projectId){
     </div>
     ${list.length ? list.map(q=>`
       <div class="mini-row" data-quote-row="${q.id}" style="cursor:pointer">
-        <div class="mini-main"><div class="mini-title">${q.quoteNumber}</div><div class="mini-sub">${q.priceIsTBC?'TBC':money(q.year1Total)} · ${escapeHtml(q.assignedSales)}</div></div>
+        <div class="mini-main"><div class="mini-title">${q.quoteNumber}</div><div class="mini-sub">${q.priceIsTBC?'TBC':moneyPrecise(q.year1Total)} · ${escapeHtml(q.assignedSales)}</div></div>
         <div class="mini-right">${statusBadge(quotationDisplayStatus(q))}</div>
       </div>`).join('') : `<div class="empty-row">No quotations yet.</div>`}
   `;

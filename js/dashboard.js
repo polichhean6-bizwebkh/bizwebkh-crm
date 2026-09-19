@@ -168,23 +168,23 @@ function renderDashboard(){
   //    reasoning as the original Financial Performance rebuild).
   const oppWord = n => n===1 ? 'opportunity' : 'opportunities';
   const salesPipelineKpis = [
-    { label:'Total Open Pipeline', value: money(pipelineValue), count:`${openLeads.length} ${oppWord(openLeads.length)}`,
+    { label:'Total Open Pipeline', value: moneyPrecise(pipelineValue), count:`${openLeads.length} ${oppWord(openLeads.length)}`,
       sub:'All active opportunities', icon:'columns', color:'#ff8a3d', go:'pipeline', goLabel:'Pipeline', strong:true },
-    { label: pipelineStageLabel(QUOTE_AND_DEMO_SENT_STATUS), value: money(quoteDemoSentValue), count:`${quoteDemoSentLeads.length} ${oppWord(quoteDemoSentLeads.length)}`,
+    { label: pipelineStageLabel(QUOTE_AND_DEMO_SENT_STATUS), value: moneyPrecise(quoteDemoSentValue), count:`${quoteDemoSentLeads.length} ${oppWord(quoteDemoSentLeads.length)}`,
       sub:'Currently at this stage', icon:'list', color:'#1d7bff', go:'pipeline', goLabel:'Pipeline' },
-    { label: pipelineStageLabel(POTENTIAL_FOLLOWUP_STATUS), value: money(potentialFollowupValue), count:`${potentialFollowupLeads.length} ${oppWord(potentialFollowupLeads.length)}`,
+    { label: pipelineStageLabel(POTENTIAL_FOLLOWUP_STATUS), value: moneyPrecise(potentialFollowupValue), count:`${potentialFollowupLeads.length} ${oppWord(potentialFollowupLeads.length)}`,
       sub:'Currently awaiting follow-up', icon:'clock', color:'#d98a12', go:'pipeline', goLabel:'Pipeline' },
-    { label:'Negotiation', value: money(negotiationValue), count:`${negotiationLeads.length} ${oppWord(negotiationLeads.length)}`,
+    { label:'Negotiation', value: moneyPrecise(negotiationValue), count:`${negotiationLeads.length} ${oppWord(negotiationLeads.length)}`,
       sub:'Currently under negotiation', icon:'grid', color:'#7c5cff', go:'pipeline', goLabel:'Pipeline' },
-    { label:'Other Open Pipeline', value: money(otherOpenPipelineValue), count:`${otherOpenLeads.length} ${oppWord(otherOpenLeads.length)}`,
+    { label:'Other Open Pipeline', value: moneyPrecise(otherOpenPipelineValue), count:`${otherOpenLeads.length} ${oppWord(otherOpenLeads.length)}`,
       sub:'Other active pipeline stages', icon:'grid', color:'#5a6b8c', go:'pipeline', goLabel:'Pipeline' },
   ];
   // B. REVENUE PERFORMANCE — unchanged definitions/calculations from the
   //    immediately preceding task, just relabeled as its own section.
   const revenuePerformanceKpis = [
-    { label:'Closed Sales Value', value: money(closedSalesValue), icon:'briefcase', color:'#0d8a5f', go:'projects', goLabel:'Projects' },
-    { label:'Collected Revenue', value: money(collectedRevenue), icon:'dollar', color:'#12a775', go:'payments', goLabel:'Payments' },
-    { label:'Outstanding Balance', value: money(outstanding), icon:'dollar', color:'#e0473c', go:'payments', goLabel:'Payments' },
+    { label:'Closed Sales Value', value: moneyPrecise(closedSalesValue), icon:'briefcase', color:'#0d8a5f', go:'projects', goLabel:'Projects' },
+    { label:'Collected Revenue', value: moneyPrecise(collectedRevenue), icon:'dollar', color:'#12a775', go:'payments', goLabel:'Payments' },
+    { label:'Outstanding Balance', value: moneyPrecise(outstanding), icon:'dollar', color:'#e0473c', go:'payments', goLabel:'Payments' },
   ];
 
   const recentLeads = [...leads].sort((a,b)=> new Date(b.createdAt)-new Date(a.createdAt)).slice(0,6);
@@ -241,7 +241,7 @@ function renderDashboard(){
               <div class="mini-row">
                 <div class="mini-main">
                   <div class="mini-title">${escapeHtml(l.businessName)} <span class="text-muted" style="font-weight:600">— ${escapeHtml(l.clientName)}</span></div>
-                  <div class="mini-sub">${l.id} · ${escapeHtml(l.assignedSales)} · ${money(l.estimatedValue)}</div>
+                  <div class="mini-sub">${l.id} · ${escapeHtml(l.assignedSales)} · ${moneyPrecise(l.estimatedValue)}</div>
                 </div>
                 <div class="mini-right">${statusBadge(l.status, pipelineStageLabel(l.status))}<div style="margin-top:4px">${fmtDate(l.createdAt)}</div></div>
               </div>`).join('') : `<div class="empty-row">No leads yet.</div>`}
@@ -287,7 +287,7 @@ function renderDashboard(){
               <div class="mini-row">
                 <div class="mini-main">
                   <div class="mini-title">${proj?escapeHtml(proj.businessName):p.projectId} <span class="text-muted" style="font-weight:600">(${p.projectId})</span></div>
-                  <div class="mini-sub">${escapeHtml(p.type)} · ${money(p.amount)}</div>
+                  <div class="mini-sub">${escapeHtml(p.type)} · ${moneyPrecise(p.amount)}</div>
                 </div>
                 <div class="mini-right">${fmtDate(p.date)}</div>
               </div>`;
@@ -416,14 +416,14 @@ function industryBarChartHtml(dataMap, { totalLabel, emptyText }){
         <div class="industry-bar-label" title="${escapeHtml(industry)}">${escapeHtml(industry)}</div>
         <div class="industry-bar-track"><div class="industry-bar-fill" style="width:${widthPct}%;background:${color}"></div></div>
         <div class="industry-bar-meta">
-          <span class="industry-bar-amount">${money(d.value)}</span>
+          <span class="industry-bar-amount">${moneyPrecise(d.value)}</span>
           <span class="industry-bar-pct">${pct}%</span>
         </div>
       </div>`;
   }).join('');
 
   return `
-    <div class="industry-bars-head"><span class="total-label">${escapeHtml(totalLabel||'Total')}</span><span class="total-value">${money(total)}</span></div>
+    <div class="industry-bars-head"><span class="total-label">${escapeHtml(totalLabel||'Total')}</span><span class="total-value">${moneyPrecise(total)}</span></div>
     <div class="industry-bars-list">${rows}</div>
   `;
 }

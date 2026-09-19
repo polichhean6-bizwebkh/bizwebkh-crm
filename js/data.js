@@ -1590,7 +1590,7 @@ function totalPaidForProject(projectId){
 // combination.
 // Payments are floats (e.g. 40.98 + 69.00), and summing them in JS can land
 // a hair off the exact cent value (109.97999999999999 instead of 109.98) —
-// invisible once money() rounds it for display ("$110"/"$0"), but a raw
+// invisible once moneyPrecise() rounds it to 2 decimals for display ("$109.98"), but a raw
 // `remaining > 0` / `totalPaid >= confirmedValue` comparison against that
 // un-rounded float saw the leftover ~1e-14 and never called it Fully Paid.
 // Half a cent is far smaller than any real partial payment, so absorbing it

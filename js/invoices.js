@@ -85,7 +85,7 @@ function invoiceStageOption(projectCode, typeKey){
 /* ---------------------------------------------------------------------- */
 function icDefaultSummary(s, breakdown){
   const name = s.businessName || s.clientName || 'the client';
-  const amt = money(breakdown.currentAmount);
+  const amt = moneyPrecise(breakdown.currentAmount);
   const already = breakdown.thisInvoicePaidActual > 0.004;
   if(s.invoiceType==='Deposit'){
     return already
@@ -351,9 +351,9 @@ function renderInvTable(){
                   <td>${escapeHtml(inv.projectCode||'—')}</td>
                   <td>${escapeHtml(inv.clientName)}<div class="cell-sub">${escapeHtml(inv.businessName||'')}</div></td>
                   <td>${proj?escapeHtml(serviceDisplayName(proj.projectType)):'—'}</td>
-                  <td class="cell-strong">${money(totals.total)}</td>
-                  <td style="font-weight:700;color:${totals.totalPaid>0?'var(--green)':'inherit'}">${money(totals.totalPaid)}</td>
-                  <td style="font-weight:700;color:${totals.balance>0?'#d98a12':'inherit'}">${money(totals.balance)}</td>
+                  <td class="cell-strong">${moneyPrecise(totals.total)}</td>
+                  <td style="font-weight:700;color:${totals.totalPaid>0?'var(--green)':'inherit'}">${moneyPrecise(totals.totalPaid)}</td>
+                  <td style="font-weight:700;color:${totals.balance>0?'#d98a12':'inherit'}">${moneyPrecise(totals.balance)}</td>
                   <td>${statusBadge(inv.status)}</td>
                   <td>
                     <div class="flex-row" style="gap:2px;flex-wrap:wrap">
@@ -680,15 +680,15 @@ function renderCreateInvoiceModal(){
             <div class="form-field"><label class="required">Client Name</label><input id="ic_client" value="${escapeHtml(s.clientName)}"></div>
             <div class="form-field"><label>Business Name</label><input id="ic_business" value="${escapeHtml(s.businessName)}"></div>
             <div class="form-field full"><label>Website Link</label><input id="ic_website" value="${escapeHtml(s.websiteLink)}" placeholder="https://…"></div>
-            <div class="form-field"><label>Project Value</label><input value="${breakdown.proj?money(breakdown.projectTotal):'—'}" disabled></div>
+            <div class="form-field"><label>Project Value</label><input value="${breakdown.proj?moneyPrecise(breakdown.projectTotal):'—'}" disabled></div>
             <div class="form-field"><label>Project Status</label>
               <select id="ic_pstatus">${PROJECT_STAGES.map(st=>`<option ${s.projectStatus===st?'selected':''}>${st}</option>`).join('')}</select>
             </div>
-            <div class="form-field"><label>Existing Payments</label><input value="${money(breakdown.previouslyPaid)}" disabled></div>
-            <div class="form-field"><label>Outstanding Balance</label><input value="${breakdown.proj?money(Math.max(0,Math.round((breakdown.projectTotal-breakdown.previouslyPaid)*100)/100)):'—'}" disabled></div>
+            <div class="form-field"><label>Existing Payments</label><input value="${moneyPrecise(breakdown.previouslyPaid)}" disabled></div>
+            <div class="form-field"><label>Outstanding Balance</label><input value="${breakdown.proj?moneyPrecise(Math.max(0,Math.round((breakdown.projectTotal-breakdown.previouslyPaid)*100)/100)):'—'}" disabled></div>
           </div>
           ${breakdown.schedule.length ? `
-          <p class="text-muted" style="font-size:11.5px;margin:8px 0 0">Existing Payment Schedule: ${breakdown.schedule.map(st=>`${escapeHtml(st.label)} ${st.pct}% (${money(st.amount)})`).join(' · ')}</p>
+          <p class="text-muted" style="font-size:11.5px;margin:8px 0 0">Existing Payment Schedule: ${breakdown.schedule.map(st=>`${escapeHtml(st.label)} ${st.pct}% (${moneyPrecise(st.amount)})`).join(' · ')}</p>
           ` : (s.projectCode ? `<p class="text-muted" style="font-size:11.5px;margin:8px 0 0">No payment schedule found on file for this project — only Custom Invoice is available.</p>` : '')}
 
           <div class="divider"></div>
@@ -696,7 +696,7 @@ function renderCreateInvoiceModal(){
           <div class="form-grid">
             <div class="form-field full"><label class="required">Invoice Type</label>
               <select id="ic_type">
-                ${stageOpts.map(o=>`<option value="${o.key}" ${s.invoiceType===o.key?'selected':''}>${escapeHtml(INVOICE_TYPE_LABELS[o.key]||o.label)}${o.amount!=null?` — ${money(o.amount)}`:''}</option>`).join('')}
+                ${stageOpts.map(o=>`<option value="${o.key}" ${s.invoiceType===o.key?'selected':''}>${escapeHtml(INVOICE_TYPE_LABELS[o.key]||o.label)}${o.amount!=null?` — ${moneyPrecise(o.amount)}`:''}</option>`).join('')}
               </select>
             </div>
             <div class="form-field"><label>Invoice No. <span class="field-auto-badge">Auto</span></label>
@@ -718,11 +718,11 @@ function renderCreateInvoiceModal(){
           <div class="divider"></div>
           <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Payment Summary</div>
           <div class="form-grid">
-            <div class="form-field"><label>Project Total</label><input value="${money(breakdown.projectTotal)}" disabled></div>
-            <div class="form-field"><label>Previously Paid</label><input value="${money(breakdown.previouslyPaid)}" disabled></div>
-            <div class="form-field"><label>Current Invoice Amount</label><input value="${money(breakdown.currentAmount)}" disabled></div>
-            <div class="form-field"><label>Total Paid After This Payment <span class="text-muted" style="font-weight:400">(projected)</span></label><input value="${money(breakdown.projectedTotalPaidAfter)}" disabled></div>
-            <div class="form-field"><label>Remaining Balance</label><input value="${money(breakdown.remainingAfter)}" disabled></div>
+            <div class="form-field"><label>Project Total</label><input value="${moneyPrecise(breakdown.projectTotal)}" disabled></div>
+            <div class="form-field"><label>Previously Paid</label><input value="${moneyPrecise(breakdown.previouslyPaid)}" disabled></div>
+            <div class="form-field"><label>Current Invoice Amount</label><input value="${moneyPrecise(breakdown.currentAmount)}" disabled></div>
+            <div class="form-field"><label>Total Paid After This Payment <span class="text-muted" style="font-weight:400">(projected)</span></label><input value="${moneyPrecise(breakdown.projectedTotalPaidAfter)}" disabled></div>
+            <div class="form-field"><label>Remaining Balance</label><input value="${moneyPrecise(breakdown.remainingAfter)}" disabled></div>
           </div>
           <p class="text-muted" style="font-size:11px;margin:6px 0 0">"Total Paid After This Payment" is a projection — it assumes this invoice gets paid in full. Only real recorded/linked payments ever count as actually paid.</p>
 
@@ -923,9 +923,9 @@ function openInvoiceDetailModal(id){
           ${infoRow('Website Link', inv.websiteLink||'—')}
         </div>
         <div>
-          ${infoRow('Total Amount', money(totals.total))}
-          ${infoRow('Total Paid', money(totals.totalPaid))}
-          ${infoRow('Balance Due', money(totals.balance))}
+          ${infoRow('Total Amount', moneyPrecise(totals.total))}
+          ${infoRow('Total Paid', moneyPrecise(totals.totalPaid))}
+          ${infoRow('Balance Due', moneyPrecise(totals.balance))}
         </div>
       </div>
 
@@ -985,7 +985,7 @@ function invoiceItemsReadonlyHtml(inv){
       <table class="data-table qc-mini-table">
         <thead><tr><th>No.</th><th>Description</th><th>Timeline / Period</th><th>Qty</th><th>Amount</th></tr></thead>
         <tbody>
-          ${items.map((it,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(it.description||'')}</td><td>${escapeHtml(it.period||'—')}</td><td>${it.qty!=null?it.qty:1}</td><td>${money(it.amount)}</td></tr>`).join('')}
+          ${items.map((it,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(it.description||'')}</td><td>${escapeHtml(it.period||'—')}</td><td>${it.qty!=null?it.qty:1}</td><td>${moneyPrecise(it.amount)}</td></tr>`).join('')}
         </tbody>
       </table>
     </div>
@@ -1001,7 +1001,7 @@ function invoiceLinkedPaymentsHtml(payments){
           ${payments.map(p=>`<tr>
             <td class="cell-strong">${escapeHtml(p.paymentNumber||'—')}</td>
             <td>${escapeHtml(p.type)}</td>
-            <td class="cell-strong">${money(p.amount)}</td>
+            <td class="cell-strong">${moneyPrecise(p.amount)}</td>
             <td>${fmtDate(p.date)}</td>
             <td>${escapeHtml(p.method||'—')}</td>
             <td>${escapeHtml(p.recordedBy||'—')}</td>
@@ -1068,9 +1068,9 @@ function linkedInvoicesHtml(projectId){
               <td class="cell-strong">${escapeHtml(inv.invoiceNumber)}</td>
               <td>${escapeHtml(INVOICE_TYPE_LABELS[inv.invoiceType]||inv.invoiceType||'Custom Invoice')}</td>
               <td>${fmtDate(inv.invoiceDate)}</td>
-              <td>${money(t.total)}</td>
-              <td>${money(t.totalPaid)}</td>
-              <td>${money(t.balance)}</td>
+              <td>${moneyPrecise(t.total)}</td>
+              <td>${moneyPrecise(t.totalPaid)}</td>
+              <td>${moneyPrecise(t.balance)}</td>
               <td>${statusBadge(inv.status)}</td>
               <td><div class="flex-row" style="gap:2px;flex-wrap:wrap">
                 <button class="btn btn-ghost btn-sm" data-view-invoice="${inv.id}">View</button>
@@ -1166,21 +1166,21 @@ function invoiceTypeFramingHtml(inv){
     const stage = inv.paymentStageIndex!=null ? bd.schedule[inv.paymentStageIndex] : null;
     return `<table class="quote-doc-table qc-mini-table" style="max-width:380px">
       <tbody>
-        <tr><td>Project Total</td><td style="text-align:right">${money(bd.projectTotal)}</td></tr>
+        <tr><td>Project Total</td><td style="text-align:right">${moneyPrecise(bd.projectTotal)}</td></tr>
         ${stage ? `<tr><td>Deposit %</td><td style="text-align:right">${stage.pct}%</td></tr>` : ''}
-        <tr><td>Deposit Amount</td><td style="text-align:right">${money(t.total)}</td></tr>
-        <tr><td>Previous Paid</td><td style="text-align:right">${money(bd.previouslyPaid)}</td></tr>
-        <tr><td><b>Balance After Deposit</b></td><td style="text-align:right"><b>${money(bd.balanceAfter)}</b></td></tr>
+        <tr><td>Deposit Amount</td><td style="text-align:right">${moneyPrecise(t.total)}</td></tr>
+        <tr><td>Previous Paid</td><td style="text-align:right">${moneyPrecise(bd.previouslyPaid)}</td></tr>
+        <tr><td><b>Balance After Deposit</b></td><td style="text-align:right"><b>${moneyPrecise(bd.balanceAfter)}</b></td></tr>
       </tbody>
     </table>`;
   }
   if(inv.invoiceType==='Progress'){
     return `<table class="quote-doc-table qc-mini-table" style="max-width:380px">
       <tbody>
-        <tr><td>Project Total</td><td style="text-align:right">${money(bd.projectTotal)}</td></tr>
-        <tr><td>Deposit Already Paid</td><td style="text-align:right">${money(bd.previouslyPaid)}</td></tr>
-        <tr><td>Current Progress Payment</td><td style="text-align:right">${money(t.total)}</td></tr>
-        <tr><td><b>Remaining Final Balance</b></td><td style="text-align:right"><b>${money(bd.balanceAfter)}</b></td></tr>
+        <tr><td>Project Total</td><td style="text-align:right">${moneyPrecise(bd.projectTotal)}</td></tr>
+        <tr><td>Deposit Already Paid</td><td style="text-align:right">${moneyPrecise(bd.previouslyPaid)}</td></tr>
+        <tr><td>Current Progress Payment</td><td style="text-align:right">${moneyPrecise(t.total)}</td></tr>
+        <tr><td><b>Remaining Final Balance</b></td><td style="text-align:right"><b>${moneyPrecise(bd.balanceAfter)}</b></td></tr>
       </tbody>
     </table>`;
   }
@@ -1188,10 +1188,10 @@ function invoiceTypeFramingHtml(inv){
     const fullyPaid = bd.balanceAfter<=0.005 && t.totalPaid>0.004;
     return `<table class="quote-doc-table qc-mini-table" style="max-width:380px">
       <tbody>
-        <tr><td>Project Total</td><td style="text-align:right">${money(bd.projectTotal)}</td></tr>
-        <tr><td>Total Previous Payments</td><td style="text-align:right">${money(bd.previouslyPaid)}</td></tr>
-        <tr><td>Final Amount Due</td><td style="text-align:right">${money(t.total)}</td></tr>
-        <tr><td><b>Balance After Payment</b></td><td style="text-align:right"><b>${money(bd.balanceAfter)}${fullyPaid?' — FULLY PAID':''}</b></td></tr>
+        <tr><td>Project Total</td><td style="text-align:right">${moneyPrecise(bd.projectTotal)}</td></tr>
+        <tr><td>Total Previous Payments</td><td style="text-align:right">${moneyPrecise(bd.previouslyPaid)}</td></tr>
+        <tr><td>Final Amount Due</td><td style="text-align:right">${moneyPrecise(t.total)}</td></tr>
+        <tr><td><b>Balance After Payment</b></td><td style="text-align:right"><b>${moneyPrecise(bd.balanceAfter)}${fullyPaid?' — FULLY PAID':''}</b></td></tr>
       </tbody>
     </table>`;
   }
@@ -1218,7 +1218,7 @@ function invoicePaymentScheduleBlockHtml(inv){
       } else tag = 'PENDING';
       color = tag==='PAID' ? 'var(--green)' : tag==='PARTIAL' ? '#d98a12' : 'var(--muted)';
     }
-    return `<tr><td>${escapeHtml(st.label)}</td><td style="text-align:right">${money(st.amount)}</td><td style="text-align:right;color:${color};font-weight:700">${tag}</td></tr>`;
+    return `<tr><td>${escapeHtml(st.label)}</td><td style="text-align:right">${moneyPrecise(st.amount)}</td><td style="text-align:right;color:${color};font-weight:700">${tag}</td></tr>`;
   }).join('');
   return `<h4 class="quote-doc-h">Payment Schedule</h4><table class="quote-doc-table qc-mini-table" style="max-width:460px">
     <thead><tr><th>Stage</th><th style="text-align:right">Amount</th><th style="text-align:right">Status</th></tr></thead>
@@ -1250,7 +1250,7 @@ function buildInvoiceSections(inv){
     contHeadingHtml:`<h4 class="quote-doc-h">Items (continued)</h4>`,
     wrapOpenHtml:`<table class="quote-doc-table"><thead><tr><th>No.</th><th>Description</th><th>Timeline / Period</th><th>Qty</th><th>Amount</th></tr></thead><tbody>`,
     wrapCloseHtml:`</tbody></table>`,
-    items: (inv.items||[]).length ? (inv.items||[]).map((it,i)=>({ html:`<tr><td>${i+1}</td><td>${escapeHtml(it.description||'')}</td><td>${escapeHtml(it.period||'—')}</td><td>${it.qty!=null?it.qty:1}</td><td>${money(it.amount)}</td></tr>` }))
+    items: (inv.items||[]).length ? (inv.items||[]).map((it,i)=>({ html:`<tr><td>${i+1}</td><td>${escapeHtml(it.description||'')}</td><td>${escapeHtml(it.period||'—')}</td><td>${it.qty!=null?it.qty:1}</td><td>${moneyPrecise(it.amount)}</td></tr>` }))
       : [{ html:`<tr><td colspan="5" style="text-align:center;color:var(--muted)">No line items.</td></tr>` }],
   });
 
@@ -1260,11 +1260,11 @@ function buildInvoiceSections(inv){
   sections.push({ id:'totals', kind:'block',
     html:`<table class="quote-doc-table qc-mini-table" style="max-width:340px;margin-left:auto">
       <tbody>
-        <tr><td>Subtotal</td><td style="text-align:right">${money(totals.subtotal)}</td></tr>
-        ${totals.discount>0 ? `<tr><td>Discount / Promotion</td><td style="text-align:right">-${money(totals.discount)}</td></tr>` : ''}
-        <tr><td><b>Total Amount</b></td><td style="text-align:right"><b>${money(totals.total)}</b></td></tr>
-        <tr><td>Total Paid</td><td style="text-align:right;color:var(--green)">${money(totals.totalPaid)}</td></tr>
-        <tr><td><b>Balance Due</b></td><td style="text-align:right"><b>${money(totals.balance)}</b></td></tr>
+        <tr><td>Subtotal</td><td style="text-align:right">${moneyPrecise(totals.subtotal)}</td></tr>
+        ${totals.discount>0 ? `<tr><td>Discount / Promotion</td><td style="text-align:right">-${moneyPrecise(totals.discount)}</td></tr>` : ''}
+        <tr><td><b>Total Amount</b></td><td style="text-align:right"><b>${moneyPrecise(totals.total)}</b></td></tr>
+        <tr><td>Total Paid</td><td style="text-align:right;color:var(--green)">${moneyPrecise(totals.totalPaid)}</td></tr>
+        <tr><td><b>Balance Due</b></td><td style="text-align:right"><b>${moneyPrecise(totals.balance)}</b></td></tr>
       </tbody>
     </table>` });
 

@@ -303,7 +303,7 @@ function pipelineBoardColumnsHtml(boardLeads){
       <div class="pipeline-col-head">
         <div>
           <div class="col-title">${escapeHtml(pipelineStageLabel(st))}</div>
-          <div class="text-muted" style="font-size:10.5px;margin-top:2px">${money(total)}</div>
+          <div class="text-muted" style="font-size:10.5px;margin-top:2px">${moneyPrecise(total)}</div>
         </div>
         <div class="col-count">${cards.length}</div>
       </div>
@@ -419,7 +419,7 @@ function pipelineCardHtml(l){
       </div>` : ''}
       <span class="pcard-svc">${escapeHtml(serviceShortName(l.interestedService))}</span>
       <div class="pcard-row">
-        <span class="pcard-value">${money(l.estimatedValue)}</span>
+        <span class="pcard-value">${moneyPrecise(l.estimatedValue)}</span>
         <div class="avatar-sm" style="background:${userColor(l.assignedSales)}" title="${escapeHtml(l.assignedSales)}">${userInitials(l.assignedSales)}</div>
       </div>
       <div class="pcard-row" style="margin-top:6px">
@@ -526,7 +526,7 @@ function openAddToPipelineModal(opts={}){
             <span class="cell-link" id="atpUnselect" style="font-size:12px">Change</span>
           </div>
           <div class="text-muted" style="margin-top:6px;font-size:12px">
-            Interested Service: ${escapeHtml(serviceDisplayName(selectedLead.interestedService))} · Est. Value: ${money(selectedLead.estimatedValue)}<br>
+            Interested Service: ${escapeHtml(serviceDisplayName(selectedLead.interestedService))} · Est. Value: ${moneyPrecise(selectedLead.estimatedValue)}<br>
             Assigned Sales: ${escapeHtml(selectedLead.assignedSales||'—')} · Current Status: ${statusBadge(selectedLead.status, pipelineStageLabel(selectedLead.status))}
           </div>
         </div>`;
@@ -907,7 +907,7 @@ function renderPaTable(overlay){
               <td class="cell-strong">${escapeHtml(l.clientName)}</td>
               <td>${escapeHtml(l.businessName)}</td>
               <td>${escapeHtml(l.interestedService?serviceDisplayName(l.interestedService):'—')}</td>
-              <td class="cell-strong">${money(l.estimatedValue)}</td>
+              <td class="cell-strong">${moneyPrecise(l.estimatedValue)}</td>
               <td>${statusBadge(l.status, pipelineStageLabel(l.status))}</td>
               <td class="cell-nowrap">${l.archivedAt ? fmtDate(l.archivedAt) : '—'}</td>
               <td>${escapeHtml(l.archivedBy||'—')}${l.archiveReason ? `<div class="cell-sub" title="${escapeHtml(l.archiveReason)}">${escapeHtml(l.archiveReason)}</div>` : ''}</td>

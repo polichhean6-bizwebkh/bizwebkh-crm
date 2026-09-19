@@ -70,9 +70,9 @@ function renderProjectsTable(){
               <td class="cell-link" data-open="${p.id}">${p.id}${!p.leadId ? '<div class="cell-sub">Direct</div>':''}</td>
               <td class="cell-strong">${escapeHtml(p.clientName)}<div class="cell-sub">${escapeHtml(p.businessName)}</div></td>
               <td>${escapeHtml(serviceDisplayName(p.projectType))}</td>
-              <td class="cell-strong">${money(s.confirmedValue)}</td>
-              <td style="font-weight:700;color:${s.totalPaid>0?'var(--green)':'inherit'}">${money(s.totalPaid)}</td>
-              <td style="font-weight:700;color:${s.remaining>0?'#d98a12':'var(--green)'}">${money(s.remaining)}</td>
+              <td class="cell-strong">${moneyPrecise(s.confirmedValue)}</td>
+              <td style="font-weight:700;color:${s.totalPaid>0?'var(--green)':'inherit'}">${moneyPrecise(s.totalPaid)}</td>
+              <td style="font-weight:700;color:${s.remaining>0?'#d98a12':'var(--green)'}">${moneyPrecise(s.remaining)}</td>
               <td><div class="flex-row"><div class="avatar-sm" style="background:${userColor(p.assignedSales)}">${userInitials(p.assignedSales)}</div>${escapeHtml(p.assignedSales)}</div></td>
               <td>${statusBadge(p.stage)}</td>
               <td>${paymentBadge(s.status)}</td>
@@ -103,7 +103,7 @@ function createProjectFromLead(leadId, onDone){
       <p class="text-muted" style="margin-top:0;font-size:13px">This creates a new Project record linked to lead ${lead.id}. The lead's history stays intact — nothing is overwritten.</p>
       <div class="form-grid">
         <div class="form-field"><label class="required">Project Code</label><input id="cp_code" value="${escapeHtml(suggestNextProjectCode())}" style="text-transform:uppercase"></div>
-        <div class="form-field"><label class="required">Confirmed Value ($)</label><input type="number" id="cp_value" value="${lead.estimatedValue||0}"></div>
+        <div class="form-field"><label class="required">Confirmed Value ($)</label><input type="number" step="0.01" id="cp_value" value="${lead.estimatedValue||0}"></div>
         <div class="form-field"><label class="required">Deposit %</label><input type="number" id="cp_depositPct" value="50"></div>
         <div class="form-field"><label>Start Date</label><input type="date" id="cp_start" value="${new Date().toISOString().slice(0,10)}"></div>
         <div class="form-field full"><label>Expected Delivery</label><input type="date" id="cp_delivery" value="${daysFromNow(21)}"></div>
@@ -134,7 +134,7 @@ function createProjectFromLead(leadId, onDone){
 
       createProjectRecord({ code, lead, confirmedValue, depositPct, startDate, expectedDelivery });
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: code, refLabel:`${code} — ${lead.businessName}`,
-        type:'Project Created', description:`${CURRENT_USER.name} created project ${code} from lead ${lead.id}. Confirmed Value: ${money(confirmedValue)}.`, toValue:'Confirmed' });
+        type:'Project Created', description:`${CURRENT_USER.name} created project ${code} from lead ${lead.id}. Confirmed Value: ${moneyPrecise(confirmedValue)}.`, toValue:'Confirmed' });
 
       toast(`Project ${code} created.`, 'success');
       closeModal();
@@ -335,7 +335,7 @@ function paymentHistoryTableHtml(ledger){
             <tr style="${p.voided?'opacity:.55':''}">
               <td class="cell-strong">${escapeHtml(p.paymentNumber||'—')}</td>
               <td>${escapeHtml(p.type)}</td>
-              <td class="cell-strong" style="${p.voided?'text-decoration:line-through':''}">${money(p.amount)}</td>
+              <td class="cell-strong" style="${p.voided?'text-decoration:line-through':''}">${moneyPrecise(p.amount)}</td>
               <td>${fmtDate(p.date)}</td>
               <td>${escapeHtml(p.method||'—')}</td>
               <td>${escapeHtml(p.reference||'—')}</td>
@@ -386,7 +386,7 @@ function openEditPaymentModal(paymentId, proj, onDone){
           ${infoRow('Client / Business', `${escapeHtml(proj.clientName||'—')}${proj.businessName?' — '+escapeHtml(proj.businessName):''}`)}
         </div>
         <div>
-          ${infoRow('Current Project Value', money(proj.confirmedValue))}
+          ${infoRow('Current Project Value', moneyPrecise(proj.confirmedValue))}
         </div>
       </div>
       <div class="form-grid">
@@ -435,7 +435,7 @@ function openEditPaymentModal(paymentId, proj, onDone){
       const otherPaid = paymentsForProject(proj.id).filter(p=>p.id!==payment.id).reduce((s,p)=>s+p.amount,0);
       const newTotal = otherPaid + newAmount;
       if(newTotal > proj.confirmedValue + 0.004){
-        if(!confirm(`This payment is greater than the remaining project balance.\n\nProject Value: ${money(proj.confirmedValue)}\nTotal Paid (with this edit): ${money(newTotal)}\n\nSave anyway?`)) return;
+        if(!confirm(`This payment is greater than the remaining project balance.\n\nProject Value: ${moneyPrecise(proj.confirmedValue)}\nTotal Paid (with this edit): ${moneyPrecise(newTotal)}\n\nSave anyway?`)) return;
       }
 
       // Track every field that actually changed for the audit trail (spec
@@ -443,7 +443,7 @@ function openEditPaymentModal(paymentId, proj, onDone){
       const changes = [];
       if(newNumber !== (payment.paymentNumber||'')) changes.push({ field:'Payment Number', from: payment.paymentNumber||'—', to: newNumber });
       if(newType !== payment.type) changes.push({ field:'Type', from: payment.type||'—', to: newType });
-      if(newAmount !== payment.amount) changes.push({ field:'Amount', from: money(payment.amount), to: money(newAmount) });
+      if(newAmount !== payment.amount) changes.push({ field:'Amount', from: moneyPrecise(payment.amount), to: moneyPrecise(newAmount) });
       if(newDate !== (payment.date||'')) changes.push({ field:'Payment Date', from: fmtDate(payment.date)||'—', to: fmtDate(newDate) });
       if(newMethod !== (payment.method||'')) changes.push({ field:'Method', from: payment.method||'—', to: newMethod });
       if(newReference !== (payment.reference||'')) changes.push({ field:'Reference', from: payment.reference||'—', to: newReference||'—' });
@@ -490,7 +490,7 @@ function openVoidPaymentModal(paymentId, proj, onDone){
   const html = `
     <div class="modal-head"><h3>Void Payment</h3><button class="modal-close" id="vpClose">&times;</button></div>
     <div class="modal-body">
-      <p style="margin-top:0">Void <b>${escapeHtml(payment.paymentNumber||'')} — ${money(payment.amount)}</b>?</p>
+      <p style="margin-top:0">Void <b>${escapeHtml(payment.paymentNumber||'')} — ${moneyPrecise(payment.amount)}</b>?</p>
       <p class="text-muted" style="font-size:12.5px">This is not a permanent delete — the record stays in the ledger marked "Voided" for audit purposes, but it will no longer count toward Total Paid.</p>
       <div class="form-field"><label class="required">Reason</label><textarea id="vp_reason" placeholder="e.g. Duplicate entry, payment reversed by bank…"></textarea></div>
     </div>
@@ -512,7 +512,7 @@ function openVoidPaymentModal(paymentId, proj, onDone){
       // reflects that too (e.g. back down from Paid to Partially Paid).
       if(payment.invoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(payment.invoiceId);
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: proj.id, refLabel:`${proj.id} — ${proj.businessName}`,
-        type:'Payment Voided', description:`${CURRENT_USER.name} voided payment ${payment.paymentNumber||payment.id} (${money(payment.amount)}). Reason: ${reason}` });
+        type:'Payment Voided', description:`${CURRENT_USER.name} voided payment ${payment.paymentNumber||payment.id} (${moneyPrecise(payment.amount)}). Reason: ${reason}` });
       toast('Payment voided.', 'success');
       closeModal();
       if(onDone) onDone();
@@ -531,9 +531,9 @@ function projectKeyInfoHtml(proj, summary){
   return `
     <div class="pd-keyinfo">
       <div>
-        ${infoRow('Project Value', money(summary.confirmedValue))}
-        ${infoRow('Paid', money(summary.totalPaid))}
-        ${infoRow('Remaining', money(summary.remaining))}
+        ${infoRow('Project Value', moneyPrecise(summary.confirmedValue))}
+        ${infoRow('Paid', moneyPrecise(summary.totalPaid))}
+        ${infoRow('Remaining', moneyPrecise(summary.remaining))}
         ${infoRow('Payment Status', summary.status)}
       </div>
       <div>
@@ -563,7 +563,7 @@ function projectNotesDetailsHtml(proj){
         ${infoRow('Source', proj.leadId ? 'From lead '+proj.leadId : 'Direct project (no lead)')}
       </div>
     </div>
-    ${proj.estimatedValue!=null && proj.estimatedValue!==proj.confirmedValue ? `<p class="text-muted" style="font-size:11.5px;margin:10px 0 0">Originally estimated at ${money(proj.estimatedValue)} before confirmation.</p>` : ''}
+    ${proj.estimatedValue!=null && proj.estimatedValue!==proj.confirmedValue ? `<p class="text-muted" style="font-size:11.5px;margin:10px 0 0">Originally estimated at ${moneyPrecise(proj.estimatedValue)} before confirmation.</p>` : ''}
     ${proj.quotationRef ? `<p class="text-muted" style="font-size:11.5px;margin:4px 0 0">Confirmed from quotation ${escapeHtml(proj.quotationRef)}.</p>` : ''}
     <div class="divider"></div>
     <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Notes</div>
@@ -789,7 +789,7 @@ function openEditProjectModal(code){
         <div class="form-field"><label>Phone</label><input id="ep_phone" value="${escapeHtml(proj.phone||'')}"></div>
         <div class="form-field"><label class="required">Industry / SME Type</label><select id="ep_industry">${INDUSTRIES.map(s=>`<option ${proj.industry===s?'selected':''}>${s}</option>`).join('')}</select></div>
         <div class="form-field"><label class="required">Project Type</label><select id="ep_projectType">${SERVICE_TYPES.map(s=>`<option value="${escapeHtml(s)}" ${proj.projectType===s?'selected':''}>${escapeHtml(serviceDisplayName(s))}</option>`).join('')}</select></div>
-        <div class="form-field"><label class="required">Confirmed Value ($)</label><input type="number" id="ep_value" value="${proj.confirmedValue}"></div>
+        <div class="form-field"><label class="required">Confirmed Value ($)</label><input type="number" step="0.01" id="ep_value" value="${proj.confirmedValue}"></div>
         ${assignedSalesFieldHtml({ id:'ep_sales', currentValue: proj.assignedSales })}
         <div class="form-field"><label>Start Date</label><input type="date" id="ep_start" value="${proj.startDate||''}"></div>
         <div class="form-field"><label>Expected Delivery</label><input type="date" id="ep_delivery" value="${proj.expectedDelivery||''}"></div>
@@ -830,7 +830,7 @@ function openEditProjectModal(code){
         type:'Note Added', description:`${CURRENT_USER.name} updated project ${proj.id} details.` });
       if(newValue!==oldValue){
         logActivity({ userName: CURRENT_USER.name, refType:'project', refId: proj.id, refLabel:`${proj.id} — ${proj.businessName}`,
-          type:'Project Value Changed', description:`${CURRENT_USER.name} changed Project Value for ${proj.id} from ${money(oldValue)} to ${money(newValue)}.`,
+          type:'Project Value Changed', description:`${CURRENT_USER.name} changed Project Value for ${proj.id} from ${moneyPrecise(oldValue)} to ${moneyPrecise(newValue)}.`,
           fromValue: String(oldValue), toValue: String(newValue) });
       }
       toast('Project updated.', 'success');
@@ -970,12 +970,12 @@ function openConfirmProjectModal(lead){
         <div>
           ${infoRow('Project Type', serviceDisplayName(lead.interestedService))}
           ${infoRow('Assigned Sales', lead.assignedSales)}
-          ${infoRow('Estimated Value', money(lead.estimatedValue))}
+          ${infoRow('Estimated Value', moneyPrecise(lead.estimatedValue))}
         </div>
       </div>
       <div class="divider"></div>
       <div class="form-grid">
-        <div class="form-field"><label class="required">Confirmed Project Value ($)</label><input type="number" id="cf_value" value="${lead.estimatedValue||0}"></div>
+        <div class="form-field"><label class="required">Confirmed Project Value ($)</label><input type="number" step="0.01" id="cf_value" value="${lead.estimatedValue||0}"></div>
         <div class="form-field"><label class="required">Project Code</label><input id="cf_code" value="${escapeHtml(suggestedCode)}" ${hasExistingCode?'disabled':''} style="text-transform:uppercase">${hasExistingCode?`<span class="form-hint">Already assigned to this lead — reused as-is.</span>`:''}</div>
         <div class="form-field"><label>Deposit %</label><input type="number" id="cf_depositPct" value="50"></div>
         <div class="form-field"><label>Start Date</label><input type="date" id="cf_start" value="${new Date().toISOString().slice(0,10)}"></div>
@@ -1025,10 +1025,10 @@ function openConfirmProjectModal(lead){
 
       // 3. activity: system created project (on both the project and the lead)
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: code, refLabel:`${code} — ${lead.businessName}`,
-        type:'Project Created', description:`${CURRENT_USER.name} changed status: ${prevStatus} → Confirmed. System created Project: ${code} (Confirmed Value: ${money(confirmedValue)}).`,
+        type:'Project Created', description:`${CURRENT_USER.name} changed status: ${prevStatus} → Confirmed. System created Project: ${code} (Confirmed Value: ${moneyPrecise(confirmedValue)}).`,
         toValue:'Confirmed', remark });
       logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
-        type:'Project Created', description:`System created Project: ${code} (Confirmed Value: ${money(confirmedValue)}) from lead ${lead.id}.` });
+        type:'Project Created', description:`System created Project: ${code} (Confirmed Value: ${moneyPrecise(confirmedValue)}) from lead ${lead.id}.` });
 
       toast(`Lead confirmed — Project ${code} created automatically.`, 'success');
       refreshAfterLeadOrProjectChange();
@@ -1103,7 +1103,7 @@ function openCreateProjectManualModal(){
         <div class="form-field"><label>Phone</label><input id="mp_phone"></div>
         <div class="form-field"><label class="required">Industry / SME Type</label><select id="mp_industry">${INDUSTRIES.map(s=>`<option>${s}</option>`).join('')}</select></div>
         <div class="form-field"><label class="required">Project Type</label><select id="mp_projectType">${SERVICE_TYPES.map(s=>`<option value="${escapeHtml(s)}">${escapeHtml(serviceDisplayName(s))}</option>`).join('')}</select></div>
-        <div class="form-field"><label class="required">Confirmed Value ($)</label><input type="number" id="mp_value" placeholder="e.g. 599" min="1"></div>
+        <div class="form-field"><label class="required">Confirmed Value ($)</label><input type="number" step="0.01" id="mp_value" placeholder="e.g. 599" min="1"></div>
         <div class="form-field"><label>Deposit %</label><input type="number" id="mp_depositPct" value="50"></div>
         ${assignedSalesFieldHtml({ id:'mp_sales', currentValue: CURRENT_USER.name })}
         <div class="form-field"><label class="required">Project Status</label><select id="mp_stage">${PROJECT_STAGES.map(s=>`<option>${s}</option>`).join('')}</select></div>
@@ -1271,8 +1271,8 @@ function openCreateProjectManualModal(){
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: code, refLabel:`${code} — ${businessName}`,
         type:'Project Created',
         description: linkedLead
-          ? `${CURRENT_USER.name} created project ${code} manually, linked to lead ${linkedLead.id}. Client: ${clientName}. Value: ${money(confirmedValue)}.`
-          : `${CURRENT_USER.name} created project ${code}. Client: ${clientName}. Value: ${money(confirmedValue)}.`,
+          ? `${CURRENT_USER.name} created project ${code} manually, linked to lead ${linkedLead.id}. Client: ${clientName}. Value: ${moneyPrecise(confirmedValue)}.`
+          : `${CURRENT_USER.name} created project ${code}. Client: ${clientName}. Value: ${moneyPrecise(confirmedValue)}.`,
         toValue: stage });
 
       if(linkedLead){

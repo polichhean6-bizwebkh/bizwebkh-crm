@@ -371,7 +371,7 @@ function renderLeadsTable(){
               <td>${escapeHtml(l.businessName)}${l.projectCode ? `<div class="cell-sub">Project ${l.projectCode}${DB.find('projects',l.projectCode) ? ' · '+escapeHtml(DB.find('projects',l.projectCode).stage) : ''}</div>`:''}</td>
               <td>${escapeHtml(industryLabel(l.industry))}</td>
               <td>${escapeHtml(serviceDisplayName(l.interestedService))}</td>
-              <td class="cell-strong">${money(l.estimatedValue)}</td>
+              <td class="cell-strong">${moneyPrecise(l.estimatedValue)}</td>
               <td><div class="flex-row"><div class="avatar-sm" style="background:${userColor(l.assignedSales)}">${userInitials(l.assignedSales)}</div>${escapeHtml(l.assignedSales)}</div></td>
               <td>${statusBadge(l.status, pipelineStageLabel(l.status))}${l.archived ? `<div class="cell-sub" style="color:var(--muted)">Archived</div>` : ''}</td>
               <td>${urgencyChip(l.nextFollowup)}</td>
@@ -466,7 +466,7 @@ function openLeadFormModal(leadId){
           <select id="lf_industry">${INDUSTRIES.map(s=>`<option ${lead?.industry===s?'selected':''}>${s}</option>`).join('')}</select></div>
         <div class="form-field"><label class="required">Interested Service</label>
           <select id="lf_service">${SERVICE_TYPES.map(s=>`<option value="${escapeHtml(s)}" ${lead?.interestedService===s?'selected':''}>${escapeHtml(serviceDisplayName(s))}</option>`).join('')}</select></div>
-        <div class="form-field"><label class="required">Estimated Value ($)</label><input type="number" id="lf_value" value="${lead?.estimatedValue||''}"></div>
+        <div class="form-field"><label class="required">Estimated Value ($)</label><input type="number" step="0.01" id="lf_value" value="${lead?.estimatedValue||''}"></div>
         <div class="form-field"><label class="required">Lead Source</label>
           <select id="lf_source">${LEAD_SOURCES.map(s=>`<option ${lead?.leadSource===s?'selected':''}>${s}</option>`).join('')}</select></div>
         ${assignedSalesFieldHtml({ id:'lf_sales', currentValue: lead?.assignedSales })}
@@ -682,7 +682,7 @@ function leadOverviewTab(lead){
       <div>
         <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Sales Information</div>
         ${infoRow('Interested Service', serviceDisplayName(lead.interestedService))}
-        ${infoRow('Estimated Value', money(lead.estimatedValue))}
+        ${infoRow('Estimated Value', moneyPrecise(lead.estimatedValue))}
         ${infoRow('Assigned Sales', lead.assignedSales)}
         ${infoRow('Expected Close Date', fmtDate(lead.expectedCloseDate))}
         ${infoRow('Current Status', lead.status)}
@@ -725,7 +725,7 @@ function leadQuotationTab(lead){
   return `
     <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Quotation</div>
     ${infoRow('Quotation Status', lead.quotationStatus)}
-    ${infoRow('Quotation Amount', lead.quotationAmount ? money(lead.quotationAmount) : '—')}
+    ${infoRow('Quotation Amount', lead.quotationAmount ? moneyPrecise(lead.quotationAmount) : '—')}
     ${infoRow('Quotation File / Ref', lead.quotationRef || '—')}
     ${infoRow('Demo Link', lead.demoLink || '—')}
     <div class="divider"></div>
@@ -735,9 +735,9 @@ function leadQuotationTab(lead){
     ${proj ? `
       ${infoRow('Project Code', proj.id)}
       ${infoRow('Project Status', proj.stage)}
-      ${infoRow('Project Value', money(summary.confirmedValue))}
-      ${infoRow('Total Paid', money(summary.totalPaid))}
-      ${infoRow('Remaining Balance', money(summary.remaining))}
+      ${infoRow('Project Value', moneyPrecise(summary.confirmedValue))}
+      ${infoRow('Total Paid', moneyPrecise(summary.totalPaid))}
+      ${infoRow('Remaining Balance', moneyPrecise(summary.remaining))}
       ${infoRow('Payment Status', summary.status)}
     ` : `<p class="text-muted" style="font-size:13px">No project created yet for this lead.</p>`}
   `;

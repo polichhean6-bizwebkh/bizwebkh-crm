@@ -18,16 +18,16 @@ function money(n){
   if(n===null || n===undefined || n==='') return '$0';
   return '$' + Number(n).toLocaleString('en-US', {maximumFractionDigits:0});
 }
-// Quotation money formatting fix (CRM – Quotation Money Formatting Fix):
-// money() above rounds to whole dollars everywhere it's used across the
-// CRM (Projects, Payments, Dashboard, Invoices, etc.) — that's a
-// long-established, unrelated display convention this fix must not touch.
-// Quotation money (Development, Domain, Hosting, Maintenance, Year 1/2/3
-// totals, discounts, payment schedule stages) must always show exactly 2
-// decimal places instead, so a real value like $11.28 is never silently
-// shown as $11. Never uses parseInt()/Math.round() to a whole number —
-// only rounds to the nearest cent for display, exactly like toFixed(2)
-// but with thousands separators.
+// Global money formatting fix (CRM – Global Money Precision Fix):
+// money() above still rounds to whole dollars, but it is now effectively
+// legacy — every place across the CRM that displays an exact financial
+// amount (Projects, Payments, Dashboard, Invoices, Quotations, Leads,
+// Pipeline, etc.) has been switched to moneyPrecise() below, so a real
+// value like $11.28 or $107.48 is never silently shown as $11 / $107.
+// money() is kept only for the rare non-financial-amount context that may
+// still want whole-dollar rounding. moneyPrecise() never uses
+// parseInt()/Math.round() to a whole number — only rounds to the nearest
+// cent for display, exactly like toFixed(2) but with thousands separators.
 function moneyPrecise(n){
   if(n===null || n===undefined || n==='') return '$0.00';
   return '$' + Number(n).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
@@ -624,8 +624,8 @@ function renderUsersPage(){
               <td>${followupsCompleted}</td>
               <td>${quotationsSent}</td>
               <td>${myProjects.length}</td>
-              <td class="cell-strong">${money(collected)}</td>
-              <td>${money(pipelineValue)}</td>
+              <td class="cell-strong">${moneyPrecise(collected)}</td>
+              <td>${moneyPrecise(pipelineValue)}</td>
             </tr>`;
           }).join('')}
         </tbody>
@@ -753,7 +753,7 @@ function settingsRenewalCell(s, field, editable){
   if(val===null || val===undefined) return '<span class="text-muted" style="font-size:12px">To be confirmed</span>';
   return editable
     ? `<input type="number" class="sel" style="width:90px" data-field="${field}" value="${val}">`
-    : money(val);
+    : moneyPrecise(val);
 }
 function settingsPricesTab(){
   const services = DB.all('services');
@@ -770,7 +770,7 @@ function settingsPricesTab(){
           ${services.map(s=>`
             <tr data-svc="${s.id}">
               <td class="cell-strong">${escapeHtml(s.name)}${s.priceIsStartingFrom?' <span class="text-muted" style="font-weight:400;font-size:11px">(from)</span>':''}</td>
-              <td>${editable?`<input type="number" class="sel" style="width:90px" data-field="basePrice" value="${s.basePrice}">`:money(s.basePrice)}</td>
+              <td>${editable?`<input type="number" class="sel" style="width:90px" data-field="basePrice" value="${s.basePrice}">`:moneyPrecise(s.basePrice)}</td>
               <td>${settingsRenewalCell(s, 'year2Price', editable)}</td>
               <td>${settingsRenewalCell(s, 'year3Price', editable)}</td>
               <td>${s.salesCanQuote?'✓ Yes':'No'}</td>
