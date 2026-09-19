@@ -159,16 +159,16 @@ function getDashboardPath(){ return '../dashboard/index.html'; }
 const ROLE_PERMISSIONS = {
   'founder_admin': null, // null = full access, every nav key (includes Settings -> Users & Roles)
   'sales': [
-    'dashboard','leads','pipeline','projects','quotations','invoices','payments','activity'
+    'dashboard','leads','pipeline','projects','quotations','invoices','receipts','payments','activity'
   ],
   'sales_rep': [
-    'dashboard','leads','pipeline','projects','quotations','invoices','payments','activity'
+    'dashboard','leads','pipeline','projects','quotations','invoices','receipts','payments','activity'
   ],
   'partner_operations': [
-    'dashboard','leads','pipeline','projects','quotations','invoices','payments','activity','users'
+    'dashboard','leads','pipeline','projects','quotations','invoices','receipts','payments','activity','users'
   ],
   'finance': [
-    'dashboard','invoices','payments','activity'
+    'dashboard','invoices','receipts','payments','activity'
   ],
 };
 

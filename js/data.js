@@ -203,6 +203,13 @@ const PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'ABA', 'Wing', 'Other'];
 // paymentSummaryFor() below.
 const PAYMENT_TYPES = ['Deposit', 'Partial Payment', 'Full Payment', 'Final Payment', 'Renewal', 'Other'];
 
+// Receipt status — deliberately NOT the same as Payment Status (Not Paid/
+// Partially Paid/Fully Paid, a project/invoice-level concept derived from
+// the ledger) or Invoice Status. A receipt is simply "Issued" until someone
+// explicitly cancels it (Founder/Admin only — see canCancelReceipt() in
+// receipts.js); never any other value.
+const RECEIPT_STATUSES = ['Issued', 'Cancelled'];
+
 // Status of an individual confirmed function / scope item inside a project.
 const FUNCTION_STATUSES = ['Confirmed', 'In Development', 'Completed', 'Future / Phase 2'];
 const DEFAULT_FUNCTION_STATUS = 'Confirmed';
@@ -250,7 +257,9 @@ const ACTIVITY_TYPES = [
   // Users & Roles Management (Settings -> Users & Roles) — logged
   // server-side by the staff-manage Edge Function, never by the client.
   'User Invited', 'Invitation Resent', 'User Role Changed',
-  'User Deactivated', 'User Reactivated', 'Password Reset Requested'
+  'User Deactivated', 'User Reactivated', 'Password Reset Requested',
+  // Receipts module — logged client-side by js/receipts.js.
+  'Receipt Generated', 'Receipt Reissued', 'Receipt Cancelled'
 ];
 
 /* ---------------------------------------------------------------------- */
@@ -887,6 +896,7 @@ function slug(s){ return String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').repl
 const COLLECTION_TABLE = {
   leads: 'leads', projects: 'projects', payments: 'payments', services: 'services',
   leadActivities: 'lead_activities', quotations: 'quotations', invoices: 'invoices',
+  receipts: 'receipts',
 };
 
 function userIdToName(id){
@@ -1202,6 +1212,58 @@ function generateInvoiceNumber(projectCode, nameForShort, dateStr){
   return `${base}-R${n}`;
 }
 
+// Receipts — each row is a thin reference to an existing Payment record
+// (payment_id) plus display/denormalization fields (client/business name,
+// project code, an optional linked invoice_id) and its OWN lifecycle
+// (status: Issued/Cancelled, created_by/created_at, cancelled_by/at/reason).
+// It deliberately does NOT store amount/type/method/reference/note — those
+// are read LIVE from the linked payment (and paymentSummaryFor() for the
+// Project Value/Previously Paid/Total Paid/Remaining Balance block) every
+// time a receipt is rendered, so a receipt can never drift out of sync with
+// the payment ledger and no financial calculation is ever duplicated here
+// (see receipts.js — receiptPaymentAndSummary()).
+function rowToReceipt(row){
+  return {
+    id: row.id, receiptNumber: row.receipt_number,
+    paymentId: row.payment_id, projectCode: row.project_code, invoiceId: row.invoice_id || null,
+    clientName: row.client_name || '', businessName: row.business_name || '',
+    receiptDate: row.receipt_date, status: row.status || 'Issued',
+    createdBy: userIdToName(row.created_by) || 'Unassigned', createdAt: row.created_at,
+    cancelledBy: userIdToName(row.cancelled_by), cancelledAt: row.cancelled_at || null,
+    cancelReason: row.cancel_reason || null,
+    reissueOfReceiptId: row.reissue_of_receipt_id || null,
+  };
+}
+function receiptToRow(r){
+  return {
+    id: r.id, receipt_number: r.receiptNumber,
+    payment_id: r.paymentId, project_code: r.projectCode || null, invoice_id: r.invoiceId || null,
+    client_name: r.clientName || null, business_name: r.businessName || null,
+    receipt_date: r.receiptDate, status: r.status || 'Issued',
+    created_by: userNameToId(r.createdBy), created_at: r.createdAt || undefined,
+    cancelled_by: userNameToId(r.cancelledBy), cancelled_at: r.cancelledAt || null,
+    cancel_reason: r.cancelReason || null,
+    reissue_of_receipt_id: r.reissueOfReceiptId || null,
+  };
+}
+
+// BW-RC-{PROJECTCODE}-{YYYYMMDD}-{SEQ} (spec: Receipts module) — mirrors
+// generateInvoiceNumber's/generateQuoteNumber's collision-avoidance
+// convention exactly: SEQ is a 2-digit, per project+day counter (01, 02...)
+// found by scanning existing receipt numbers for that exact base, so it
+// never returns a number that already exists (e.g. BW-RC-{code}-{date}-01,
+// then -02 for a second receipt against the same project on the same day).
+function generateReceiptNumber(projectCode, dateStr){
+  const d = dateStr ? new Date(dateStr) : new Date();
+  const ymd = d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
+  const code = projectCode || 'DIRECT';
+  const base = `BW-RC-${code}-${ymd}`;
+  const taken = new Set(DB.all('receipts').map(r=>r.receiptNumber));
+  let n = 1;
+  while(taken.has(`${base}-${String(n).padStart(2,'0')}`)) n++;
+  return `${base}-${String(n).padStart(2,'0')}`;
+}
+
 // Local copies of app.js's initialsOf()/avatarColorFor() — DB.init() (and
 // therefore rowToUser) runs during the dashboard bootstrap BEFORE app.js is
 // loaded (see dashboard/index.html), so this file can't rely on those
@@ -1230,14 +1292,14 @@ function rowToUser(row){
 const DB = {
   _cache: { leads:[], projects:[], payments:[], activities:[], services:[],
             settings:{}, users:[], quotations:[], followups:[], quotationReviews:[], leadActivities:[],
-            invoices:[] },
+            invoices:[], receipts:[] },
   _initialized: false,
 
   // Populates _cache from Supabase. Must be awaited before any UI code runs
   // (see dashboard/index.html's bootstrap script) — every DB.all()/find()
   // call after that point reads synchronously from _cache.
   async init(){
-    const [leadsRes, projectsRes, paymentsRes, activitiesRes, servicesRes, settingsRes, profilesRes, leadActivitiesRes, quotationsRes, invoicesRes] = await Promise.all([
+    const [leadsRes, projectsRes, paymentsRes, activitiesRes, servicesRes, settingsRes, profilesRes, leadActivitiesRes, quotationsRes, invoicesRes, receiptsRes] = await Promise.all([
       supabaseClient.from('leads').select('*'),
       supabaseClient.from('projects').select('*'),
       supabaseClient.from('payments').select('*'),
@@ -1248,9 +1310,10 @@ const DB = {
       supabaseClient.from('lead_activities').select('*').order('created_at', { ascending:false }).limit(2000),
       supabaseClient.from('quotations').select('*').order('created_at', { ascending:false }),
       supabaseClient.from('invoices').select('*').order('created_at', { ascending:false }),
+      supabaseClient.from('receipts').select('*').order('created_at', { ascending:false }),
     ]);
 
-    [leadsRes, projectsRes, paymentsRes, activitiesRes, servicesRes, settingsRes, profilesRes, leadActivitiesRes, quotationsRes, invoicesRes].forEach(r=>{
+    [leadsRes, projectsRes, paymentsRes, activitiesRes, servicesRes, settingsRes, profilesRes, leadActivitiesRes, quotationsRes, invoicesRes, receiptsRes].forEach(r=>{
       if(r && r.error) console.error('Supabase fetch error', r.error);
     });
 
@@ -1264,6 +1327,7 @@ const DB = {
     this._cache.leadActivities = (leadActivitiesRes.data || []).map(rowToLeadActivity);
     this._cache.quotations = (quotationsRes.data || []).map(rowToQuotation);
     this._cache.invoices = (invoicesRes.data || []).map(rowToInvoice);
+    this._cache.receipts = (receiptsRes.data || []).map(rowToReceipt);
     this._cache.settings = {
       discountLimitPct: (settingsRes.data && settingsRes.data.discount_limit_pct) || 10,
       bankDetails: (settingsRes.data && settingsRes.data.bank_details) || null,
@@ -1355,7 +1419,7 @@ const DB = {
 
     const table = COLLECTION_TABLE[collection];
     if(!table) return record; // unknown/local-only collection — cache-only, no remote sync
-    const toRow = { leads: leadToRow, projects: projectToRow, payments: paymentToRow, services: serviceToRow, quotations: quotationToRow, invoices: invoiceToRow }[collection];
+    const toRow = { leads: leadToRow, projects: projectToRow, payments: paymentToRow, services: serviceToRow, quotations: quotationToRow, invoices: invoiceToRow, receipts: receiptToRow }[collection];
     supabaseClient.from(table).upsert(toRow(record))
       .then(({error})=>{ if(error) console.error(`Supabase upsert failed for ${collection}`, error); })
       .catch(e=> console.error(`Supabase upsert failed for ${collection}`, e));

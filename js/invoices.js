@@ -272,7 +272,10 @@ function renderInvoicesPage(){
         <option value="">All Projects</option>
         ${projects.map(p=>`<option value="${p.id}" ${INV_FILTER_STATE.project===p.id?'selected':''}>${p.id} — ${escapeHtml(p.businessName)}</option>`).join('')}
       </select>
-      <input id="invFltSearch" placeholder="Search invoice #, client, business…" value="${escapeHtml(INV_FILTER_STATE.search)}" style="min-width:220px">
+      <div class="search-box">
+        ${icon('search')}
+        <input type="text" id="invFltSearch" placeholder="Search invoice #, client, business…" value="${escapeHtml(INV_FILTER_STATE.search)}">
+      </div>
     </div>
     <div id="invTableWrap"></div>
   `;
@@ -930,7 +933,7 @@ function openInvoiceDetailModal(id){
         ${collapsibleSectionHtml('inv-items', `Items (${(inv.items||[]).length})`, invoiceItemsReadonlyHtml(inv))}
         ${collapsibleSectionHtml('inv-summary', 'Invoice Summary', `<p style="font-size:12.5px;white-space:pre-wrap">${escapeHtml(inv.summary||'—')}</p>`)}
         ${collapsibleSectionHtml('inv-notes', 'Notes', `<p style="font-size:12.5px;white-space:pre-wrap">${escapeHtml(inv.notes||'—')}</p>`)}
-        ${collapsibleSectionHtml('inv-payments', `Linked Payments (${payments.length})`, invoiceLinkedPaymentsHtml(payments))}
+        ${collapsibleSectionHtml('inv-payments', `Payments / Receipts (${payments.length})`, invoiceLinkedPaymentsHtml(payments))}
       </div>
     </div>
     <div class="modal-foot"><button class="btn btn-secondary" id="idClose2">Close</button></div>
@@ -939,6 +942,7 @@ function openInvoiceDetailModal(id){
     overlay.querySelector('#idClose').onclick = closeModal;
     overlay.querySelector('#idClose2').onclick = closeModal;
     wireCollapsibleSections(overlay);
+    if(typeof wireReceiptActionButtons==='function') wireReceiptActionButtons(overlay, ()=> openInvoiceDetailModal(inv.id));
 
     const actionsEl = overlay.querySelector('#idActions');
     const btns = [];
@@ -992,9 +996,18 @@ function invoiceLinkedPaymentsHtml(payments){
   return `
     <div class="table-wrap scroll-x">
       <table class="data-table">
-        <thead><tr><th>Payment #</th><th>Type</th><th>Amount</th><th>Date</th><th>Method</th><th>Recorded By</th></tr></thead>
+        <thead><tr><th>Payment #</th><th>Type</th><th>Amount</th><th>Date</th><th>Method</th><th>Recorded By</th><th>Receipt No.</th><th>Action</th></tr></thead>
         <tbody>
-          ${payments.map(p=>`<tr><td class="cell-strong">${escapeHtml(p.paymentNumber||'—')}</td><td>${escapeHtml(p.type)}</td><td class="cell-strong">${money(p.amount)}</td><td>${fmtDate(p.date)}</td><td>${escapeHtml(p.method||'—')}</td><td>${escapeHtml(p.recordedBy||'—')}</td></tr>`).join('')}
+          ${payments.map(p=>`<tr>
+            <td class="cell-strong">${escapeHtml(p.paymentNumber||'—')}</td>
+            <td>${escapeHtml(p.type)}</td>
+            <td class="cell-strong">${money(p.amount)}</td>
+            <td>${fmtDate(p.date)}</td>
+            <td>${escapeHtml(p.method||'—')}</td>
+            <td>${escapeHtml(p.recordedBy||'—')}</td>
+            <td>${typeof receiptNumberCellHtml==='function' ? receiptNumberCellHtml(p.id) : '—'}</td>
+            <td>${typeof receiptActionButtonHtml==='function' ? receiptActionButtonHtml(p.id) : ''}</td>
+          </tr>`).join('')}
         </tbody>
       </table>
     </div>

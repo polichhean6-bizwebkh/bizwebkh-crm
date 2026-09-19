@@ -279,7 +279,7 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
         if(!proceed) return;
       }
 
-      recordPaymentEntry({ projectId, paymentNumber, amount, date, method, type, reference, note: notes, userName: CURRENT_USER.name, invoiceId });
+      const savedPayment = recordPaymentEntry({ projectId, paymentNumber, amount, date, method, type, reference, note: notes, userName: CURRENT_USER.name, invoiceId });
       // Recompute the linked invoice's Total Paid/Balance/Status (spec §8) —
       // this is a real reference to the SAME payment row just recorded
       // above, never a duplicate. Unlinked payments (invoiceId===null,
@@ -302,7 +302,7 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
       if(type==='Deposit' && proj.stage==='Confirmed') suggestedStage = 'Deposit Paid';
       else if(newSummary.remaining<=0 && proj.stage==='Final Payment Pending') suggestedStage = 'Completed';
 
-      openPaymentRecordedModal({ proj, amount, summary: newSummary, suggestedStage, onAfterClose: ()=>{
+      openPaymentRecordedModal({ proj, amount, summary: newSummary, suggestedStage, paymentId: savedPayment.id, onAfterClose: ()=>{
         if(onDone) onDone();
         if(currentRoute()==='payments') renderPaymentsPage();
         if(currentRoute()==='dashboard') router();
@@ -322,7 +322,12 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
 /* point in the app — only what triggers it (a button, not confirm())      */
 /* changed.                                                                 */
 /* ---------------------------------------------------------------------- */
-function openPaymentRecordedModal({ proj, amount, summary, suggestedStage, onAfterClose }){
+// `paymentId` (optional, spec: Receipts module) — the just-saved payment's
+// own id, used only to offer a "Generate Receipt" action below. Every
+// pre-existing call site that doesn't pass it (none currently) would simply
+// skip that button; receipts.js may also not be loaded at all (typeof-
+// guarded), in which case this modal behaves byte-identical to before.
+function openPaymentRecordedModal({ proj, amount, summary, suggestedStage, paymentId=null, onAfterClose }){
   const checkIcon = `<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 
   const finish = (message)=>{
@@ -330,6 +335,8 @@ function openPaymentRecordedModal({ proj, amount, summary, suggestedStage, onAft
     toast(message, 'success');
     if(onAfterClose) onAfterClose();
   };
+
+  const showReceiptAction = paymentId && typeof receiptActionButtonHtml==='function';
 
   const html = `
     <div class="modal-body" style="text-align:center;padding-top:28px">
@@ -350,6 +357,7 @@ function openPaymentRecordedModal({ proj, amount, summary, suggestedStage, onAft
       </div>` : ''}
     </div>
     <div class="modal-foot ${suggestedStage?'pr-modal-foot':''}">
+      ${showReceiptAction ? receiptActionButtonHtml(paymentId, 'btn btn-outline') : ''}
       ${suggestedStage ? `
         <button class="btn btn-secondary" id="prKeep">Keep Current Status</button>
         <button class="btn btn-primary" id="prUpdate">Update to ${escapeHtml(suggestedStage)}</button>
@@ -358,6 +366,7 @@ function openPaymentRecordedModal({ proj, amount, summary, suggestedStage, onAft
   `;
 
   openModal(html, { onMount:(overlay)=>{
+    if(showReceiptAction && typeof wireReceiptActionButtons==='function') wireReceiptActionButtons(overlay);
     if(suggestedStage){
       overlay.querySelector('#prKeep').onclick = ()=> finish('Payment recorded successfully.');
       overlay.querySelector('#prUpdate').onclick = ()=>{

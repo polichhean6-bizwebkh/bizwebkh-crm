@@ -328,7 +328,7 @@ function paymentHistoryTableHtml(ledger){
     <div class="table-wrap scroll-x">
       <table class="data-table payment-history-table">
         <thead>
-          <tr><th>Payment #</th><th>Type</th><th>Amount</th><th>Payment Date</th><th>Method</th><th>Reference</th><th>Action</th></tr>
+          <tr><th>Payment #</th><th>Type</th><th>Amount</th><th>Payment Date</th><th>Method</th><th>Reference</th><th>Receipt No.</th><th>Action</th></tr>
         </thead>
         <tbody>
           ${ledger.map(p=>`
@@ -339,19 +339,23 @@ function paymentHistoryTableHtml(ledger){
               <td>${fmtDate(p.date)}</td>
               <td>${escapeHtml(p.method||'—')}</td>
               <td>${escapeHtml(p.reference||'—')}</td>
+              <td>${typeof receiptNumberCellHtml==='function' ? receiptNumberCellHtml(p.id) : '—'}</td>
               <td>
-                ${p.voided
-                  ? `<span class="badge st-cancelled"><span class="badge-dot"></span>Voided</span>`
-                  : canEdit
-                    ? `<div class="flex-row" style="gap:2px">
-                         <button class="btn btn-ghost btn-sm" data-edit-payment="${p.id}" title="Edit payment" aria-label="Edit payment" style="padding:5px 8px">${icon('edit')}</button>
-                         <button class="btn btn-ghost btn-sm" style="color:var(--red);padding:5px 8px" data-void-payment="${p.id}" title="Void payment" aria-label="Void payment">${icon('x')}</button>
-                       </div>`
-                    : `<span class="text-muted" style="font-size:11.5px">—</span>`}
+                <div class="flex-row" style="gap:2px;flex-wrap:wrap">
+                  ${p.voided
+                    ? `<span class="badge st-cancelled"><span class="badge-dot"></span>Voided</span>`
+                    : canEdit
+                      ? `<div class="flex-row" style="gap:2px">
+                           <button class="btn btn-ghost btn-sm" data-edit-payment="${p.id}" title="Edit payment" aria-label="Edit payment" style="padding:5px 8px">${icon('edit')}</button>
+                           <button class="btn btn-ghost btn-sm" style="color:var(--red);padding:5px 8px" data-void-payment="${p.id}" title="Void payment" aria-label="Void payment">${icon('x')}</button>
+                         </div>`
+                      : ''}
+                  ${!p.voided && typeof receiptActionButtonHtml==='function' ? receiptActionButtonHtml(p.id) : ''}
+                </div>
               </td>
             </tr>
-            ${p.voided ? `<tr><td colspan="7" style="padding-top:0"><span class="text-muted" style="font-size:11px">Voided by ${escapeHtml(p.voidedBy||'—')} on ${fmtDate(p.voidedAt)}${p.voidReason?' — '+escapeHtml(p.voidReason):''}</span></td></tr>` : `<tr><td colspan="7" style="padding-top:0"><span class="text-muted" style="font-size:11px">Recorded by ${escapeHtml(p.recordedBy||'—')}</span></td></tr>`}
-            ${p.note ? `<tr><td colspan="7" style="padding-top:0"><span class="text-muted" style="font-size:11px">${escapeHtml(p.note)}</span></td></tr>` : ''}
+            ${p.voided ? `<tr><td colspan="8" style="padding-top:0"><span class="text-muted" style="font-size:11px">Voided by ${escapeHtml(p.voidedBy||'—')} on ${fmtDate(p.voidedAt)}${p.voidReason?' — '+escapeHtml(p.voidReason):''}</span></td></tr>` : `<tr><td colspan="8" style="padding-top:0"><span class="text-muted" style="font-size:11px">Recorded by ${escapeHtml(p.recordedBy||'—')}</span></td></tr>`}
+            ${p.note ? `<tr><td colspan="8" style="padding-top:0"><span class="text-muted" style="font-size:11px">${escapeHtml(p.note)}</span></td></tr>` : ''}
           `).join('')}
         </tbody>
       </table>
@@ -366,6 +370,7 @@ function wirePaymentHistory(tabBody, proj){
   tabBody.querySelectorAll('[data-void-payment]').forEach(btn=>{
     btn.onclick = ()=> openVoidPaymentModal(btn.dataset.voidPayment, proj, ()=> renderProjectDetail(proj.id));
   });
+  if(typeof wireReceiptActionButtons==='function') wireReceiptActionButtons(tabBody, ()=> renderProjectDetail(proj.id));
 }
 
 function openEditPaymentModal(paymentId, proj, onDone){
