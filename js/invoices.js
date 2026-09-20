@@ -564,6 +564,36 @@ function icApplyInvoiceType(typeKey){
   if(!s._notesTouched && !s.notes.trim()) s.notes = icDefaultNotes(s);
 }
 
+// Invoice total vs. expected payment-schedule stage amount (spec §1) —
+// purely informational, NEVER blocking, and never auto-corrects the amount.
+// Only compared when the invoice is tied to a known stage (Deposit/
+// Progress/Final) that itself has a real expected amount — a Custom
+// invoice, or a project with no schedule on file, has nothing to compare
+// against and simply shows no warning.
+function icStageAmountWarning(s, breakdown){
+  if(!s.projectCode || s.invoiceType==='Custom') return null;
+  const opt = invoiceStageOption(s.projectCode, s.invoiceType);
+  if(!opt || opt.amount==null) return null;
+  const expected = Math.round(Number(opt.amount)*100)/100;
+  const invoiceTotal = breakdown.currentAmount;
+  const diff = Math.round((invoiceTotal - expected)*100)/100;
+  if(Math.abs(diff) <= 0.01) return null;
+  return { expected, invoiceTotal, diff };
+}
+// Non-blocking inline warning banner — reuses the same amber-soft badge
+// palette already used for "Awaiting"/pending-style states elsewhere in the
+// app (--amber/--amber-soft, see css/styles.css), just as a small block
+// instead of a pill. Never a confirm() dialog, never prevents saving for
+// any role, and never auto-corrects the amount.
+function icStageAmountWarningHtml(w){
+  if(!w) return '';
+  return `
+    <div style="margin-top:8px;padding:8px 10px;border-radius:var(--radius-sm);background:var(--amber-soft);color:#8a5a08;font-size:11.5px">
+      <b>Invoice total differs from the expected payment amount.</b>
+      <div style="margin-top:3px">Expected: ${moneyPrecise(w.expected)} · Invoice Total: ${moneyPrecise(w.invoiceTotal)} · Difference: ${moneyPrecise(Math.abs(w.diff))}${w.diff>0?' over':' under'}</div>
+    </div>`;
+}
+
 function icInvoiceNumberPreview(s){
   if(s.invoiceNumber) return s.invoiceNumber;
   return generateInvoiceNumber(s.projectCode || null, s.businessName || s.clientName, s.invoiceDate);
@@ -667,6 +697,7 @@ function renderCreateInvoiceModal(){
       <div class="qc-split">
         <div class="qc-edit-col" ${IC_TAB!=='edit'?'data-hide-narrow="1"':''}>
 
+          <p class="text-muted" style="font-size:11px;margin:0 0 10px">Recommended flow: Invoice → Record Payment → Generate Receipt. Invoice is optional — a payment can be recorded directly against a Project.</p>
           <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">A. Project Information</div>
           <div class="form-grid">
             <div class="form-field full"><label class="required">Project</label>
@@ -719,12 +750,13 @@ function renderCreateInvoiceModal(){
           <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Payment Summary</div>
           <div class="form-grid">
             <div class="form-field"><label>Project Total</label><input value="${moneyPrecise(breakdown.projectTotal)}" disabled></div>
-            <div class="form-field"><label>Previously Paid</label><input value="${moneyPrecise(breakdown.previouslyPaid)}" disabled></div>
+            <div class="form-field"><label>Previously Paid on Project</label><input value="${moneyPrecise(breakdown.previouslyPaid)}" disabled></div>
             <div class="form-field"><label>Current Invoice Amount</label><input value="${moneyPrecise(breakdown.currentAmount)}" disabled></div>
             <div class="form-field"><label>Total Paid After This Payment <span class="text-muted" style="font-weight:400">(projected)</span></label><input value="${moneyPrecise(breakdown.projectedTotalPaidAfter)}" disabled></div>
             <div class="form-field"><label>Remaining Balance</label><input value="${moneyPrecise(breakdown.remainingAfter)}" disabled></div>
           </div>
           <p class="text-muted" style="font-size:11px;margin:6px 0 0">"Total Paid After This Payment" is a projection — it assumes this invoice gets paid in full. Only real recorded/linked payments ever count as actually paid.</p>
+          ${icStageAmountWarningHtml(icStageAmountWarning(s, breakdown))}
 
           <div class="divider"></div>
           <div class="flex-row" style="justify-content:space-between;margin-bottom:8px">
@@ -887,8 +919,7 @@ function saveInvoiceFromState(forceStatus){
 
   toast(existing ? 'Invoice updated.' : 'Invoice created.', 'success');
   closeModal();
-  if(currentRoute()==='invoices') renderInvoicesPage();
-  if(currentRoute()==='dashboard') router();
+  refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
   openInvoiceDetailModal(record.id);
 }
 
@@ -951,9 +982,21 @@ function openInvoiceDetailModal(id){
     btns.push(`<button class="btn btn-ghost btn-sm" id="iaDup">Duplicate</button>`);
     if(canEditInvoice(inv)) btns.push(`<button class="btn btn-ghost btn-sm" id="iaEdit">Edit</button>`);
     if(totals.balance>0.004 && inv.status!=='Draft' && inv.status!=='Cancelled') btns.push(`<button class="btn btn-primary btn-sm" id="iaPay">Record Payment</button>`);
+    // Only offered when the SAME project has payments not yet linked to any
+    // invoice (invoiceId===null) — Founder/Admin only, reuses the exact same
+    // relinkPaymentInvoice() core the Payment History / Edit Payment control
+    // uses (js/payments.js), just picking the payment from this side instead.
+    const hasUnlinkedPayments = inv.projectCode && DB.all('payments').some(p=> p.projectId===inv.projectCode && !p.voided && !p.invoiceId);
+    if(isFounder() && hasUnlinkedPayments) btns.push(`<button class="btn btn-outline btn-sm" id="iaLinkExisting">Link Existing Payment</button>`);
     if(inv.status!=='Cancelled' && inv.status!=='Paid' && canCancelInvoice()) btns.push(`<button class="btn btn-danger btn-sm" id="iaCancel">Cancel Invoice</button>`);
     if(canDeleteInvoice()) btns.push(`<button class="btn btn-danger btn-sm" id="iaDelete">Delete</button>`);
     actionsEl.innerHTML = btns.join('');
+
+    const linkExistingBtn = overlay.querySelector('#iaLinkExisting');
+    if(linkExistingBtn) linkExistingBtn.onclick = ()=>{
+      closeModal();
+      openLinkExistingPaymentModal(inv.id, ()=> openInvoiceDetailModal(inv.id));
+    };
 
     overlay.querySelector('#iaPreview').onclick = ()=> openInvoicePreview(inv.id, false);
     overlay.querySelector('#iaPdf').onclick = ()=> openInvoicePreview(inv.id, true);
@@ -972,7 +1015,7 @@ function openInvoiceDetailModal(id){
         type:'Invoice Deleted', description:`${CURRENT_USER.name} deleted invoice ${inv.invoiceNumber}.` });
       toast('Invoice deleted.', 'success');
       closeModal();
-      if(currentRoute()==='invoices') renderInvoicesPage();
+      refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
     };
   }});
 }
@@ -1041,7 +1084,7 @@ function openCancelInvoiceModal(id){
         type:'Invoice Cancelled', description:`${CURRENT_USER.name} cancelled invoice ${inv.invoiceNumber}. Reason: ${reason}` });
       toast('Invoice cancelled.', 'success');
       closeModal();
-      if(currentRoute()==='invoices') renderInvoicesPage();
+      refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
       openInvoiceDetailModal(inv.id);
     };
   }});

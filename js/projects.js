@@ -153,8 +153,7 @@ function createProjectFromLead(leadId, onDone){
       toast(`Project ${code} created.`, 'success');
       closeModal();
       if(onDone) onDone();
-      if(currentRoute()==='projects') renderProjectsTable();
-      if(currentRoute()==='dashboard') router();
+      refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
     };
   }});
 }
@@ -540,8 +539,11 @@ function openEditPaymentModal(paymentId, proj, onDone){
       toast('Payment updated.', 'success');
       closeModal();
       if(onDone) onDone();
-      if(currentRoute()==='payments') renderPaymentsPage();
-      if(currentRoute()==='dashboard') router();
+      // Data-freshness fix — refresh whichever page is actually behind this
+      // modal (Dashboard, Payments, Projects, Invoices…), not just two of
+      // them; refreshAfterLeadOrProjectChange() re-renders from the
+      // already-updated DB._cache, no network call.
+      refreshAfterLeadOrProjectChange();
     };
   }});
 }
@@ -579,8 +581,7 @@ function openVoidPaymentModal(paymentId, proj, onDone){
       toast('Payment voided.', 'success');
       closeModal();
       if(onDone) onDone();
-      if(currentRoute()==='payments') renderPaymentsPage();
-      if(currentRoute()==='dashboard') router();
+      refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
     };
   }});
 }
@@ -946,8 +947,7 @@ function applyProjectStageChange(proj, newStage){
         fromValue: prevStage, toValue: newStage, remark
       });
       toast(`Project ${proj.id} moved to "${newStage}".`, 'success');
-      if(currentRoute()==='projects') renderProjectsTable();
-      if(currentRoute()==='dashboard') router();
+      refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
     }
   });
 }
@@ -1129,14 +1129,24 @@ function openConfirmProjectModal(lead){
   }});
 }
 
-// Re-render whatever page/modal is currently open after a lead↔project
-// mutation, since the change can affect Pipeline, Leads, Projects and
-// Dashboard simultaneously.
+// Data-freshness fix ("CRM – Immediate Data Refresh After Save"): re-render
+// whatever page is currently active after a lead/project/payment/invoice/
+// receipt mutation, since a single change can ripple into Pipeline, Leads,
+// Projects, Payments, Invoices, Receipts and Dashboard simultaneously (e.g.
+// a payment affects Project Paid/Remaining, its linked Invoice's status,
+// AND Dashboard's Collected Revenue/Outstanding Balance all at once). This
+// used to only cover 4 routes (leads/pipeline/projects/dashboard), which is
+// exactly why recording/editing/voiding a payment from a Project Detail
+// modal never updated the Payments page or an open Invoice behind it until
+// a manual browser refresh. router() re-runs the CURRENT route's render
+// function straight from DB._cache — the same cache DB.upsert() already
+// updated synchronously before this is ever called — so this is a pure,
+// free (no Supabase call) re-render, never a network round-trip and never
+// a full page reload. The modal overlay itself lives outside #pageContent
+// (see openModal()/closeModal() in app.js), so this never disturbs a modal
+// that's still open on top of the page.
 function refreshAfterLeadOrProjectChange(){
-  if(currentRoute()==='leads') renderLeadsTable();
-  if(currentRoute()==='pipeline') renderPipelinePage();
-  if(currentRoute()==='projects') renderProjectsTable();
-  if(currentRoute()==='dashboard') router();
+  router();
 }
 
 /* ---------------------------------------------------------------------- */

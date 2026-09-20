@@ -15,6 +15,164 @@
 
 let FINANCIAL_FILTER_STATE = { date:'all', status:'' };
 
+/* ---------------------------------------------------------------------- */
+/* Invoice Type <-> Payment Type consistency (soft guidance only) — used   */
+/* when Record Payment is launched from an Invoice (presetInvoiceId) to    */
+/* preselect a sensible Payment Type. Never enforced: the dropdown stays   */
+/* fully editable and saving is never blocked, only a soft inline warning  */
+/* is shown if the user picks something else (see openRecordPaymentModal). */
+/* ---------------------------------------------------------------------- */
+const INVOICE_TYPE_TO_PAYMENT_TYPE = { Deposit:'Deposit', Progress:'Partial Payment', Final:'Final Payment', Custom:null };
+
+/* ---------------------------------------------------------------------- */
+/* Payment <-> Invoice relinking (Founder/Admin only) — the ONE place a    */
+/* payment's invoiceId is ever changed after it was first recorded. Only   */
+/* invoices belonging to the SAME project as the payment may be selected — */
+/* never cross-project. Relinking NEVER touches amount/type/date/method/   */
+/* reference/note, NEVER touches any receipt already generated against     */
+/* this payment (a receipt's own invoiceId is captured once at generation  */
+/* time and deliberately never rewritten — see js/receipts.js), and NEVER  */
+/* changes the project's Paid/Remaining (those are ledger-amount-based     */
+/* only via paymentSummaryFor(), unaffected by which invoice a payment     */
+/* points to). Both the old and new invoice's status are recalculated via  */
+/* recalcInvoiceStatus() exactly as an amount edit already does.           */
+/* ---------------------------------------------------------------------- */
+function relinkPaymentInvoice(paymentId, newInvoiceId, userName){
+  const payment = DB.find('payments', paymentId);
+  if(!payment) return { ok:false, error:'Payment not found.' };
+  newInvoiceId = newInvoiceId || null;
+  const oldInvoiceId = payment.invoiceId || null;
+  if(newInvoiceId){
+    const targetInv = DB.find('invoices', newInvoiceId);
+    if(!targetInv) return { ok:false, error:'Invoice not found.' };
+    if(targetInv.projectCode !== payment.projectId){
+      return { ok:false, error:'That invoice belongs to a different project — a payment can only be linked to an invoice on its own project.' };
+    }
+  }
+  if(newInvoiceId === oldInvoiceId) return { ok:true, unchanged:true };
+
+  payment.invoiceId = newInvoiceId;
+  DB.upsert('payments', payment);
+
+  if(oldInvoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(oldInvoiceId);
+  if(newInvoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(newInvoiceId);
+
+  const oldInv = oldInvoiceId ? DB.find('invoices', oldInvoiceId) : null;
+  const newInv = newInvoiceId ? DB.find('invoices', newInvoiceId) : null;
+  const proj = DB.find('projects', payment.projectId);
+  logActivity({ userName, refType:'project', refId: payment.projectId, refLabel: proj ? `${proj.id} — ${proj.businessName}` : payment.projectId,
+    type:'Payment Invoice Link Updated',
+    description:`${userName} changed the invoice link for payment ${payment.paymentNumber||payment.id} on project ${payment.projectId}: ${oldInv?oldInv.invoiceNumber:'None'} → ${newInv?newInv.invoiceNumber:'None'}.` });
+
+  return { ok:true, payment, oldInv, newInv };
+}
+
+// Eligible target invoices for relinking a given payment — any live
+// (non-Cancelled) invoice on the SAME project, plus the payment's own
+// currently-linked invoice even if it has since been cancelled (so it never
+// silently disappears from the dropdown).
+function eligibleInvoicesForPaymentLink(payment){
+  if(!payment) return [];
+  return DB.all('invoices').filter(i=> i.projectCode===payment.projectId && (i.status!=='Cancelled' || i.id===payment.invoiceId));
+}
+
+// Standalone "Link/Change Invoice" modal — reused by both Project Payment
+// History (Edit Payment's own inline control also covers this, but this
+// modal is the one Invoice Detail's "Link Existing Payment" action reuses,
+// spec Payment/Invoice refinements §2/§7) and any other surface that only
+// has a payment id in hand, without needing to reopen the full Edit Payment
+// form. Founder/Admin only — mirrors canEditPayments()/openEditPaymentModal.
+function openLinkPaymentInvoiceModal(paymentId, onDone){
+  if(!canEditPayments(CURRENT_USER.role)){ toast('Only Founder/Admin can change a payment\'s invoice link.', 'error'); return; }
+  const payment = DB.find('payments', paymentId);
+  if(!payment) return;
+  const proj = DB.find('projects', payment.projectId);
+  const options = eligibleInvoicesForPaymentLink(payment);
+  const currentInv = payment.invoiceId ? DB.find('invoices', payment.invoiceId) : null;
+
+  const html = `
+    <div class="modal-head"><h3>Link / Change Invoice</h3><button class="modal-close" id="lpiClose">&times;</button></div>
+    <div class="modal-body">
+      <p class="text-muted" style="margin-top:0;font-size:13px">${escapeHtml(payment.paymentNumber||payment.id)} — ${moneyPrecise(payment.amount)} · ${payment.projectId}${proj?' — '+escapeHtml(proj.businessName):''}</p>
+      <p class="text-muted" style="font-size:12px">Currently linked to: <b>${currentInv?escapeHtml(currentInv.invoiceNumber):'No Invoice'}</b></p>
+      <div class="form-field"><label>Invoice</label>
+        <select id="lpi_invoice">
+          <option value="">— No Invoice —</option>
+          ${options.map(i=>`<option value="${i.id}" ${payment.invoiceId===i.id?'selected':''}>${escapeHtml(i.invoiceNumber)}</option>`).join('')}
+        </select>
+      </div>
+      <p class="text-muted" style="font-size:11.5px">Changing this link never affects the payment's amount, type, date or method, and never changes any receipt already generated for it. Only invoices belonging to this same project can be selected.</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-secondary" id="lpiCancel">Cancel</button>
+      <button class="btn btn-primary" id="lpiSave">Save Link</button>
+    </div>
+  `;
+  openModal(html, { onMount:(overlay)=>{
+    overlay.querySelector('#lpiClose').onclick = closeModal;
+    overlay.querySelector('#lpiCancel').onclick = closeModal;
+    overlay.querySelector('#lpiSave').onclick = ()=>{
+      const newInvoiceId = overlay.querySelector('#lpi_invoice').value || null;
+      const result = relinkPaymentInvoice(payment.id, newInvoiceId, CURRENT_USER.name);
+      if(!result.ok){ toast(result.error, 'error'); return; }
+      toast(result.unchanged ? 'No change to the invoice link.' : 'Invoice link updated.', 'success');
+      closeModal();
+      if(onDone) onDone();
+      // Data-freshness fix: relinking recalculates BOTH invoices' statuses
+      // (see relinkPaymentInvoice) and can change what Invoices/Projects/
+      // Dashboard show — refreshAfterLeadOrProjectChange() refreshes
+      // whichever page is currently behind this modal, from the
+      // already-updated cache, no network call.
+      refreshAfterLeadOrProjectChange();
+    };
+  }});
+}
+
+// Invoice-initiated counterpart to the above (spec §7 "Link Existing
+// Payment") — picks from this project's UNLINKED payments (invoiceId===
+// null) and links the chosen one to THIS invoice, reusing the exact same
+// relinkPaymentInvoice() core so the logic is never duplicated. Founder/
+// Admin only.
+function openLinkExistingPaymentModal(invoiceId, onDone){
+  if(!isFounder()){ toast('Only Founder/Admin can link an existing payment.', 'error'); return; }
+  const inv = DB.find('invoices', invoiceId);
+  if(!inv) return;
+  const candidates = DB.all('payments').filter(p=> p.projectId===inv.projectCode && !p.voided && !p.invoiceId);
+
+  const html = `
+    <div class="modal-head"><h3>Link Existing Payment</h3><button class="modal-close" id="lepClose">&times;</button></div>
+    <div class="modal-body">
+      <p class="text-muted" style="margin-top:0;font-size:13px">Invoice ${escapeHtml(inv.invoiceNumber)} — ${inv.projectCode}</p>
+      ${candidates.length ? `
+      <div class="form-field"><label class="required">Unlinked Payment</label>
+        <select id="lep_payment">
+          ${candidates.map(p=>`<option value="${p.id}">${escapeHtml(p.paymentNumber||p.id)} — ${moneyPrecise(p.amount)} (${fmtDate(p.date)})</option>`).join('')}
+        </select>
+      </div>
+      <p class="text-muted" style="font-size:11.5px">Only payments recorded on this same project with no invoice link yet are shown. Linking never changes the payment's amount, type, date or method.</p>
+      ` : `<p class="text-muted" style="font-size:12.5px">There are no unlinked payments on this project to attach.</p>`}
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-secondary" id="lepCancel">Cancel</button>
+      ${candidates.length ? `<button class="btn btn-primary" id="lepSave">Link Payment</button>` : ''}
+    </div>
+  `;
+  openModal(html, { onMount:(overlay)=>{
+    overlay.querySelector('#lepClose').onclick = closeModal;
+    overlay.querySelector('#lepCancel').onclick = closeModal;
+    const saveBtn = overlay.querySelector('#lepSave');
+    if(saveBtn) saveBtn.onclick = ()=>{
+      const paymentId = overlay.querySelector('#lep_payment').value;
+      const result = relinkPaymentInvoice(paymentId, inv.id, CURRENT_USER.name);
+      if(!result.ok){ toast(result.error, 'error'); return; }
+      toast('Payment linked to this invoice.', 'success');
+      closeModal();
+      if(onDone) onDone();
+      refreshAfterLeadOrProjectChange(); // data-freshness fix — see openLinkPaymentInvoiceModal above
+    };
+  }});
+}
+
 function renderPaymentsPage(){
   const el = document.getElementById('pageContent');
   const projects = [...DB.all('projects')];
@@ -196,6 +354,14 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
   const eligibleInvoices = (typeof DB!=='undefined' ? DB.all('invoices') : [])
     .filter(i=> i.projectCode===projectId && i.status!=='Cancelled');
 
+  // Invoice Type / Payment Type consistency (soft guidance only, spec §4) —
+  // launched from an Invoice, preselect a sensible Payment Type from its
+  // Invoice Type. Custom invoices suggest nothing (user picks freely). The
+  // dropdown stays fully editable either way, and picking something else
+  // never blocks Save — only shows a small inline warning near the field.
+  const presetInvoice = presetInvoiceId ? DB.find('invoices', presetInvoiceId) : null;
+  const suggestedPaymentType = presetInvoice ? (INVOICE_TYPE_TO_PAYMENT_TYPE[presetInvoice.invoiceType] || null) : null;
+
   const html = `
     <div class="modal-head"><h3>Record Payment</h3><button class="modal-close" id="rpClose">&times;</button></div>
     <div class="modal-body">
@@ -204,13 +370,14 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
         <div class="form-field"><label class="required">Payment Number</label><input id="rp_number" value="${suggestedNumber}"></div>
         <div class="form-field"><label class="required">Payment Type</label>
           <select id="rp_type">
-            ${!hasDeposit ? '<option value="Deposit">Deposit</option>' : ''}
-            <option value="Partial Payment">Partial Payment</option>
+            ${!hasDeposit ? `<option value="Deposit" ${suggestedPaymentType==='Deposit'?'selected':''}>Deposit</option>` : ''}
+            <option value="Partial Payment" ${suggestedPaymentType==='Partial Payment'?'selected':''}>Partial Payment</option>
             <option value="Full Payment">Full Payment</option>
-            <option value="Final Payment">Final Payment</option>
+            <option value="Final Payment" ${suggestedPaymentType==='Final Payment'?'selected':''}>Final Payment</option>
             <option value="Renewal">Renewal</option>
             <option value="Other">Other</option>
           </select>
+          <p class="text-muted" id="rp_typeWarning" style="display:none;color:var(--amber);font-size:11px;margin:4px 0 0">This payment type differs from the invoice stage.</p>
         </div>
         <div class="form-field"><label class="required">Amount ($)</label><input type="number" id="rp_amount" value="${!hasDeposit ? Math.round(summary.confirmedValue*proj.depositPct) / 100 : summary.remaining}" min="0.01" step="0.01"></div>
         <div class="form-field"><label class="required">Payment Date</label><input type="date" id="rp_date" value="${new Date().toISOString().slice(0,10)}"></div>
@@ -242,6 +409,16 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
     // ordinal like "1st Payment". Both fields stay freely editable
     // afterward. No other Payment Type's behavior is touched.
     const rpTypeSel = overlay.querySelector('#rp_type');
+    const rpTypeWarning = overlay.querySelector('#rp_typeWarning');
+    // Soft warning only (spec §4) — never blocks Save, just flags that the
+    // chosen Payment Type no longer matches the invoice stage it was
+    // launched from. Nothing shows at all when there was no suggestion
+    // (no presetInvoiceId, or a Custom invoice).
+    const refreshTypeWarning = ()=>{
+      if(!rpTypeWarning) return;
+      rpTypeWarning.style.display = (suggestedPaymentType && rpTypeSel.value !== suggestedPaymentType) ? 'block' : 'none';
+    };
+    refreshTypeWarning();
     rpTypeSel.onchange = ()=>{
       if(rpTypeSel.value === 'Full Payment'){
         const freshSummary = paymentSummaryFor(projectId);
@@ -250,6 +427,7 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
           overlay.querySelector('#rp_number').value = 'Full Payment';
         }
       }
+      refreshTypeWarning();
     };
 
     overlay.querySelector('#rpSave').onclick = ()=>{
@@ -304,8 +482,19 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
 
       openPaymentRecordedModal({ proj, amount, summary: newSummary, suggestedStage, paymentId: savedPayment.id, onAfterClose: ()=>{
         if(onDone) onDone();
-        if(currentRoute()==='payments') renderPaymentsPage();
-        if(currentRoute()==='dashboard') router();
+        // Data-freshness fix (spec: "immediate refresh after successful
+        // mutations"): refreshAfterLeadOrProjectChange() re-runs the CURRENT
+        // route's render function fresh from DB._cache (already updated
+        // synchronously by DB.upsert() above) — no network call, no full
+        // page reload. Calling it unconditionally, instead of only for the
+        // 'payments'/'dashboard' routes, means whichever page the user is
+        // actually on (Projects, Invoices, Receipts, Dashboard, Payments…)
+        // always reflects the new payment immediately, even though this
+        // modal was opened from a Project Detail overlay sitting on top of
+        // some other page. The modal overlay itself lives outside
+        // #pageContent (see openModal()), so re-rendering the page
+        // underneath never disturbs it.
+        refreshAfterLeadOrProjectChange();
       }});
     };
   }});

@@ -150,6 +150,7 @@ function generateReceiptForPayment(paymentId, onDone){
 
   toast(isReissue ? 'Receipt reissued.' : 'Receipt generated.', 'success');
   if(onDone) onDone(rec);
+  refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
   openReceiptPreview(rec.id, false);
 }
 
@@ -200,8 +201,8 @@ function openCancelReceiptModal(id, onDone){
       cancelReceipt(rec.id, reason);
       toast('Receipt cancelled.', 'success');
       closeModal();
-      if(currentRoute()==='receipts') renderRcpTable();
       if(onDone) onDone();
+      refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
     };
   }});
 }
