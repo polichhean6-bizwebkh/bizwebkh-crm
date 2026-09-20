@@ -1658,6 +1658,17 @@ function convertQuotationToProject(id){
   const lead = q.leadId ? DB.find('leads', q.leadId) : null;
   const linkedExisting = q.projectCode ? DB.find('projects', q.projectCode) : (lead && lead.projectCode ? DB.find('projects', lead.projectCode) : null);
 
+  // Conflict protection (global project-code integrity fix, C059/C060) --
+  // a matching Project row only counts as "already this quotation's
+  // project" when it's actually linked to the SAME lead (or has no lead at
+  // all, e.g. a Direct Project later attached to a quotation). A Project
+  // belonging to a genuinely different lead is a real conflict -- stop
+  // instead of silently treating it as reusable or generating another code.
+  if(linkedExisting && lead && linkedExisting.leadId && linkedExisting.leadId !== lead.id){
+    toast(`Project Code ${linkedExisting.id} is already used by a different project (${linkedExisting.businessName}). This quotation cannot be converted with a conflicting code — please resolve the Project Code first.`, 'error');
+    return;
+  }
+
   const groups = {};
   (q.items||[]).forEach(it=>{
     if(!groups[it.module]) groups[it.module] = { id: fnId(), module: it.module, functions: [] };

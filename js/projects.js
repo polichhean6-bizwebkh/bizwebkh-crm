@@ -95,14 +95,28 @@ function renderProjectsTable(){
 function createProjectFromLead(leadId, onDone){
   const lead = DB.find('leads', leadId);
   if(!lead) return;
-  if(lead.projectCode){ toast('This lead already has a project.', 'error'); return; }
+  // Duplicate-safety fix (root-cause audit, C060): a lead can carry a
+  // projectCode string with NO matching Projects row yet (e.g. the code was
+  // assigned via Edit Project Code, or a project-creation write never
+  // landed) — that is exactly the broken state this button exists to
+  // repair, not a duplicate. Only an ACTUAL existing project row for that
+  // code means "already converted, don't duplicate." Mirrors the identical
+  // check already used by openConfirmProjectModal.
+  const existingProject = lead.projectCode ? DB.find('projects', lead.projectCode) : null;
+  if(existingProject){ toast('This lead already has a project.', 'error'); return; }
+  // Reuse the lead's already-assigned code as-is when it has one (never
+  // silently swap in a freshly-suggested different code for a lead that was
+  // already promised a specific one) — same convention as
+  // openConfirmProjectModal's hasExistingCode handling.
+  const hasExistingCode = !!lead.projectCode;
+  const suggestedCode = hasExistingCode ? lead.projectCode : suggestNextProjectCode();
 
   const html = `
     <div class="modal-head"><h3>Create Project from Lead</h3><button class="modal-close" id="cpClose">&times;</button></div>
     <div class="modal-body">
       <p class="text-muted" style="margin-top:0;font-size:13px">This creates a new Project record linked to lead ${lead.id}. The lead's history stays intact — nothing is overwritten.</p>
       <div class="form-grid">
-        <div class="form-field"><label class="required">Project Code</label><input id="cp_code" value="${escapeHtml(suggestNextProjectCode())}" style="text-transform:uppercase"></div>
+        <div class="form-field"><label class="required">Project Code</label><input id="cp_code" value="${escapeHtml(suggestedCode)}" ${hasExistingCode?'disabled':''} style="text-transform:uppercase">${hasExistingCode?`<span class="form-hint">Already assigned to this lead — reused as-is.</span>`:''}</div>
         <div class="form-field"><label class="required">Confirmed Value ($)</label><input type="number" step="0.01" id="cp_value" value="${lead.estimatedValue||0}"></div>
         <div class="form-field"><label class="required">Deposit %</label><input type="number" id="cp_depositPct" value="50"></div>
         <div class="form-field"><label>Start Date</label><input type="date" id="cp_start" value="${new Date().toISOString().slice(0,10)}"></div>
@@ -188,6 +202,33 @@ function createProjectRecord({ code, lead, confirmedValue, depositPct=50, startD
     lead.projectCode = code;
     lead.updatedAt = now;
     DB.upsert('leads', lead);
+  }
+
+  // Clear-error safety net (root-cause fix, C060: "if project creation
+  // fails, do not silently finish the action"). DB.upsert() is
+  // fire-and-forget/optimistic by design — the same convention used by
+  // every write in this app — so this does not change that convention or
+  // block the caller's own success toast/UI, which already reflect the
+  // local write. It only adds a short confirming re-check shortly after, so
+  // a genuine server-side failure surfaces as a clear, actionable warning
+  // instead of staying silent until someone happens to notice the Project
+  // missing from the Projects tab (exactly what happened here). The
+  // suggested fix — reopening the lead and using "+ Create Project" — is
+  // itself safe to retry: createProjectFromLead() now correctly detects
+  // "code assigned but no Project row yet" and reuses the same code rather
+  // than ever creating a duplicate.
+  if(typeof supabaseClient !== 'undefined' && supabaseClient){
+    setTimeout(()=>{
+      supabaseClient.from('projects').select('id').eq('id', code).maybeSingle()
+        .then(({ data, error })=>{
+          if(error || !data){
+            toast(`Warning: Project ${code} may not have saved to the server. Please check the Projects tab — if it's missing, reopen this lead and use "+ Create Project" to retry (it will not create a duplicate).`, 'error');
+          }
+        })
+        .catch(()=>{
+          toast(`Warning: Project ${code} may not have saved to the server. Please check the Projects tab — if it's missing, reopen this lead and use "+ Create Project" to retry (it will not create a duplicate).`, 'error');
+        });
+    }, 1500);
   }
 
   return proj;
@@ -318,20 +359,23 @@ function renderProjectDetail(code){
 /* ---------------------------------------------------------------------- */
 
 function paymentHistoryTableHtml(ledger){
-  if(!ledger.length) return `<p class="text-muted" style="font-size:12.5px;margin:8px 0 0">No payments recorded yet.</p>`;
+  const flowNote = `<p class="text-muted" style="font-size:11px;margin:0 0 8px">Recommended flow: Invoice → Record Payment → Generate Receipt. Invoice is optional — a payment can be recorded directly against a Project.</p>`;
+  if(!ledger.length) return flowNote + `<p class="text-muted" style="font-size:12.5px;margin:8px 0 0">No payments recorded yet.</p>`;
   const canEdit = canEditPayments(CURRENT_USER.role);
   // Columns kept to exactly what's needed at a glance (spec §8) — "Recorded
   // By" moves into the same small sub-row already used for Voided/Note
   // details below each row, rather than crowding the main row with an
   // eighth column. Edit is a small ghost-button link, not a large CTA.
-  return `
+  return flowNote + `
     <div class="table-wrap scroll-x">
       <table class="data-table payment-history-table">
         <thead>
-          <tr><th>Payment #</th><th>Type</th><th>Amount</th><th>Payment Date</th><th>Method</th><th>Reference</th><th>Receipt No.</th><th>Action</th></tr>
+          <tr><th>Payment #</th><th>Type</th><th>Amount</th><th>Payment Date</th><th>Method</th><th>Reference</th><th>Linked Invoice</th><th>Receipt No.</th><th>Action</th></tr>
         </thead>
         <tbody>
-          ${ledger.map(p=>`
+          ${ledger.map(p=>{
+            const linkedInv = p.invoiceId ? DB.find('invoices', p.invoiceId) : null;
+            return `
             <tr style="${p.voided?'opacity:.55':''}">
               <td class="cell-strong">${escapeHtml(p.paymentNumber||'—')}</td>
               <td>${escapeHtml(p.type)}</td>
@@ -339,6 +383,7 @@ function paymentHistoryTableHtml(ledger){
               <td>${fmtDate(p.date)}</td>
               <td>${escapeHtml(p.method||'—')}</td>
               <td>${escapeHtml(p.reference||'—')}</td>
+              <td>${linkedInv ? escapeHtml(linkedInv.invoiceNumber) : '—'}</td>
               <td>${typeof receiptNumberCellHtml==='function' ? receiptNumberCellHtml(p.id) : '—'}</td>
               <td>
                 <div class="flex-row" style="gap:2px;flex-wrap:wrap">
@@ -347,6 +392,7 @@ function paymentHistoryTableHtml(ledger){
                     : canEdit
                       ? `<div class="flex-row" style="gap:2px">
                            <button class="btn btn-ghost btn-sm" data-edit-payment="${p.id}" title="Edit payment" aria-label="Edit payment" style="padding:5px 8px">${icon('edit')}</button>
+                           <button class="btn btn-ghost btn-sm" data-link-invoice="${p.id}" title="Link / Change Invoice" aria-label="Link or change invoice" style="padding:5px 8px;font-size:11px">Link</button>
                            <button class="btn btn-ghost btn-sm" style="color:var(--red);padding:5px 8px" data-void-payment="${p.id}" title="Void payment" aria-label="Void payment">${icon('x')}</button>
                          </div>`
                       : ''}
@@ -354,9 +400,9 @@ function paymentHistoryTableHtml(ledger){
                 </div>
               </td>
             </tr>
-            ${p.voided ? `<tr><td colspan="8" style="padding-top:0"><span class="text-muted" style="font-size:11px">Voided by ${escapeHtml(p.voidedBy||'—')} on ${fmtDate(p.voidedAt)}${p.voidReason?' — '+escapeHtml(p.voidReason):''}</span></td></tr>` : `<tr><td colspan="8" style="padding-top:0"><span class="text-muted" style="font-size:11px">Recorded by ${escapeHtml(p.recordedBy||'—')}</span></td></tr>`}
-            ${p.note ? `<tr><td colspan="8" style="padding-top:0"><span class="text-muted" style="font-size:11px">${escapeHtml(p.note)}</span></td></tr>` : ''}
-          `).join('')}
+            ${p.voided ? `<tr><td colspan="9" style="padding-top:0"><span class="text-muted" style="font-size:11px">Voided by ${escapeHtml(p.voidedBy||'—')} on ${fmtDate(p.voidedAt)}${p.voidReason?' — '+escapeHtml(p.voidReason):''}</span></td></tr>` : `<tr><td colspan="9" style="padding-top:0"><span class="text-muted" style="font-size:11px">Recorded by ${escapeHtml(p.recordedBy||'—')}</span></td></tr>`}
+            ${p.note ? `<tr><td colspan="9" style="padding-top:0"><span class="text-muted" style="font-size:11px">${escapeHtml(p.note)}</span></td></tr>` : ''}
+            `;}).join('')}
         </tbody>
       </table>
     </div>
@@ -370,6 +416,9 @@ function wirePaymentHistory(tabBody, proj){
   tabBody.querySelectorAll('[data-void-payment]').forEach(btn=>{
     btn.onclick = ()=> openVoidPaymentModal(btn.dataset.voidPayment, proj, ()=> renderProjectDetail(proj.id));
   });
+  tabBody.querySelectorAll('[data-link-invoice]').forEach(btn=>{
+    btn.onclick = ()=> openLinkPaymentInvoiceModal(btn.dataset.linkInvoice, ()=> renderProjectDetail(proj.id));
+  });
   if(typeof wireReceiptActionButtons==='function') wireReceiptActionButtons(tabBody, ()=> renderProjectDetail(proj.id));
 }
 
@@ -377,6 +426,12 @@ function openEditPaymentModal(paymentId, proj, onDone){
   if(!canEditPayments(CURRENT_USER.role)){ toast('Only Founder/Admin can edit payments.', 'error'); return; }
   const payment = DB.all('payments').find(p=>p.id===paymentId);
   if(!payment) return;
+  // Payment <-> Invoice relinking (Founder/Admin only) — a SEPARATE control
+  // from the amount/date/etc. fields below, saved through its own action so
+  // it never gets bundled into a "Payment Updated" edit and never touches
+  // amount/type/date/method/reference/note or any receipt already generated
+  // for this payment (see relinkPaymentInvoice() in js/payments.js).
+  const linkedInvoice = payment.invoiceId ? DB.find('invoices', payment.invoiceId) : null;
   const html = `
     <div class="modal-head"><h3>Edit Payment — ${escapeHtml(payment.paymentNumber||'')}</h3><button class="modal-close" id="epyClose">&times;</button></div>
     <div class="modal-body">
@@ -388,6 +443,10 @@ function openEditPaymentModal(paymentId, proj, onDone){
         <div>
           ${infoRow('Current Project Value', moneyPrecise(proj.confirmedValue))}
         </div>
+      </div>
+      <div class="flex-row" style="justify-content:space-between;align-items:center;margin-bottom:14px;padding:8px 10px;background:var(--panel-alt,rgba(0,0,0,.02));border-radius:var(--radius-sm)">
+        <span style="font-size:12.5px">Linked Invoice: <b>${linkedInvoice?escapeHtml(linkedInvoice.invoiceNumber):'None'}</b></span>
+        <span class="cell-link" style="font-size:12px" id="epyLinkInvoice">Link / Change Invoice</span>
       </div>
       <div class="form-grid">
         <div class="form-field"><label class="required">Payment Number</label><input id="epy_number" value="${escapeHtml(payment.paymentNumber||'')}" placeholder="e.g. 1st Payment"></div>
@@ -409,6 +468,10 @@ function openEditPaymentModal(paymentId, proj, onDone){
   openModal(html, { onMount:(overlay)=>{
     overlay.querySelector('#epyClose').onclick = closeModal;
     overlay.querySelector('#epyCancel').onclick = closeModal;
+    overlay.querySelector('#epyLinkInvoice').onclick = ()=>{
+      closeModal();
+      openLinkPaymentInvoiceModal(payment.id, ()=>{ if(onDone) onDone(); });
+    };
     overlay.querySelector('#epySave').onclick = ()=>{
       // Second line of defense — the button is already hidden from Sales in
       // the table, but never trust the UI alone for a founder-only action.
@@ -904,6 +967,17 @@ function openConfirmProjectModal(lead){
   // matching Project row means "already converted" (the genuine duplicate-
   // protection case below).
   const existingProject = lead.projectCode ? DB.find('projects', lead.projectCode) : null;
+
+  // ----- conflict protection: the code is a real Project, but for a       -----
+  // ----- DIFFERENT lead (should be prevented upstream by                  -----
+  // ----- isProjectCodeTaken(), but this is the last line of defense       -----
+  // ----- before ever treating a stranger's Project as "already this       -----
+  // ----- lead's" -- global project-code integrity fix, spec §"Add         -----
+  // ----- validation so this mismatch cannot happen again").               -----
+  if(existingProject && existingProject.leadId && existingProject.leadId !== lead.id){
+    toast(`Project Code ${lead.projectCode} is already used by a different project (${existingProject.businessName}). This lead cannot be confirmed with a conflicting code — please assign a different Project Code first.`, 'error');
+    return;
+  }
 
   // ----- duplicate protection: this lead already converted to a project -----
   if(existingProject){

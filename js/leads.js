@@ -471,8 +471,8 @@ function openLeadFormModal(leadId){
           <select id="lf_source">${LEAD_SOURCES.map(s=>`<option ${lead?.leadSource===s?'selected':''}>${s}</option>`).join('')}</select></div>
         ${assignedSalesFieldHtml({ id:'lf_sales', currentValue: lead?.assignedSales })}
         <div class="form-field"><label class="required">Current Status</label>
-          <select id="lf_status" ${editing?'disabled':''}>${LEAD_STATUSES.map(s=>`<option value="${escapeHtml(s)}" ${(lead?.status||'New Lead')===s?'selected':''}>${escapeHtml(pipelineStageLabel(s))}</option>`).join('')}</select>
-          ${editing?'<span class="form-hint">Use the status button on the lead detail page to change status (it will be logged).</span>':''}
+          <select id="lf_status" ${editing?'disabled':''}>${(editing ? LEAD_STATUSES : NEW_LEAD_CREATION_STATUSES).map(s=>`<option value="${escapeHtml(s)}" ${(lead?.status||'New Lead')===s?'selected':''}>${escapeHtml(pipelineStageLabel(s))}</option>`).join('')}</select>
+          ${editing?'<span class="form-hint">Use the status button on the lead detail page to change status (it will be logged).</span>':`<span class="form-hint">"Confirmed / Won" is not selectable here — a new lead always starts earlier in the pipeline, then reaches Confirmed through the normal status-change flow so its Project is created automatically and safely.</span>`}
         </div>
         <div class="form-field"><label>Next Follow-up Date</label><input type="date" id="lf_followup" min="${todayLocalISO()}" value="${lead?.nextFollowup||''}"></div>
         <div class="form-field full"><label>Notes</label><textarea id="lf_notes">${escapeHtml(lead?.notes||'')}</textarea></div>
@@ -607,7 +607,7 @@ function renderLeadDetail(leadId){
           <button class="btn btn-secondary btn-sm" id="ldEdit">Edit</button>
           ${!['Lost','Confirmed'].includes(lead.status) ? `<button class="btn btn-outline btn-sm" id="ldChangeStatus">Change Status</button>`:''}
           ${lead.status==='Qualified' && isFounder() ? `<button class="btn btn-primary btn-sm" id="ldAddToPipeline">Add to Pipeline</button>` : ''}
-          ${['Confirmed','Deposit Paid','In Development','Final Payment Pending','Completed'].includes(lead.status) && !lead.projectCode ? `<button class="btn btn-primary btn-sm" id="ldCreateProject">+ Create Project</button>` : ''}
+          ${['Confirmed','Deposit Paid','In Development','Final Payment Pending','Completed'].includes(lead.status) && !(lead.projectCode && DB.find('projects', lead.projectCode)) ? `<button class="btn btn-primary btn-sm" id="ldCreateProject">+ Create Project</button>` : ''}
         </div>
       </div>
 
@@ -911,6 +911,46 @@ function advanceLeadToPipeline(lead, projectCode){
 /* ---------------------------------------------------------------------- */
 function openEditProjectCodeModal(lead, onDone){
   if(!isFounder()){ toast('Only Founder/Admin can edit Project Code.', 'error'); return; }
+
+  // Global project-code integrity fix (C059/C060 incident): once a real
+  // Project row exists for this lead's code, this Project Code is the
+  // canonical identifier referenced by the Project itself and (once they
+  // exist) its Quotations/Invoices/Payments/Receipts/Activity Log. This
+  // modal only ever updated the lead's own projectCode field -- it never
+  // renamed the Project row or any linked record -- so changing it here
+  // silently split Pipeline from Projects (exactly what happened to
+  // C059/C060: the lead said C059 while the Project row stayed C060, with
+  // nothing to ever reconcile them). Rather than attempt a risky cross-table
+  // primary-key rename from client-side code, changing the code is now
+  // blocked once conversion has actually happened; a genuinely necessary
+  // rename at that point should be done as a deliberate, verified DB
+  // migration, not a routine UI edit. Before conversion (a reserved code
+  // with no Project row yet) this modal works exactly as before.
+  const linkedProject = lead.projectCode ? DB.find('projects', lead.projectCode) : null;
+  if(linkedProject){
+    const html = `
+      <div class="modal-head"><h3>Project Code Locked</h3><button class="modal-close" id="epcLockedClose">&times;</button></div>
+      <div class="modal-body">
+        <p style="margin-top:0">Project Code <b>${escapeHtml(lead.projectCode)}</b> is already linked to an existing Project — it can no longer be changed from here.</p>
+        <div class="panel" style="padding:14px 16px;background:#f7faff;border:1px solid var(--line)">
+          <div class="cell-strong" style="font-size:15px">${escapeHtml(lead.projectCode)}</div>
+          <div class="text-muted" style="font-size:12.5px;margin-top:2px">${escapeHtml(linkedProject.businessName)}</div>
+        </div>
+        <p class="text-muted" style="font-size:12px;margin-top:12px">Changing a Project Code after conversion would split Pipeline from Projects (and, once they exist, Quotations/Invoices/Payments/Receipts) — exactly the C059/C060 mismatch this rule now prevents. A genuine rename needs to update the Project and every linked record together; ask a developer to run it as a single verified change, not through this form.</p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-outline" id="epcLockedOpenProject">Open Project</button>
+        <button class="btn btn-secondary" id="epcLockedClose2">Close</button>
+      </div>
+    `;
+    openModal(html, { onMount:(overlay)=>{
+      overlay.querySelector('#epcLockedClose').onclick = closeModal;
+      overlay.querySelector('#epcLockedClose2').onclick = closeModal;
+      overlay.querySelector('#epcLockedOpenProject').onclick = ()=>{ closeModal(); openProjectDetailModal(lead.projectCode); };
+    }});
+    return;
+  }
+
   const required = leadStatusRequiresProjectCode(lead.status);
   // Informational only — reflects true current state across ALL leads and
   // projects (including this very lead's own already-assigned code, since
