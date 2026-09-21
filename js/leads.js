@@ -41,6 +41,16 @@ function leadMatchesDateRange(lead, range){
   if(range==='month'){
     return created.getFullYear()===now.getFullYear() && created.getMonth()===now.getMonth();
   }
+  // Last Month (spec: "CRM – Lead Records Time Filter Update") — the
+  // PREVIOUS calendar month by Lead Date, never "last 30 days". Computed
+  // via a Date rolled back one month rather than hand-subtracting from
+  // now.getMonth(), so the January -> December-of-previous-year boundary
+  // falls out for free (JS Date normalizes month=-1 to December of
+  // year-1) instead of needing a separate branch.
+  if(range==='lastMonth'){
+    const lastMonthRef = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return created.getFullYear()===lastMonthRef.getFullYear() && created.getMonth()===lastMonthRef.getMonth();
+  }
   return true;
 }
 let LEADS_PAGE = 1;
@@ -70,6 +80,7 @@ function renderLeadsPage(){
         <option value="today" ${LEADS_FILTER_STATE.dateRange==='today'?'selected':''}>Today</option>
         <option value="week" ${LEADS_FILTER_STATE.dateRange==='week'?'selected':''}>This Week</option>
         <option value="month" ${LEADS_FILTER_STATE.dateRange==='month'?'selected':''}>This Month</option>
+        <option value="lastMonth" ${LEADS_FILTER_STATE.dateRange==='lastMonth'?'selected':''}>Last Month</option>
       </select>
       <select id="fltFollowup" class="sel">
         <option value="">Any Follow-up</option>
