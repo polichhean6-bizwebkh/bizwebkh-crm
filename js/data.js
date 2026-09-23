@@ -70,6 +70,21 @@ const LEAD_STATUSES = [
   POTENTIAL_FOLLOWUP_STATUS, ON_HOLD_STATUS, 'Negotiation', 'Confirmed', 'Lost'
 ];
 
+// Root-cause fix (CRM – Investigate Confirmed/Won Pipeline Not Creating
+// Project, C060): the Add Lead form used to let staff pick ANY status —
+// including 'Confirmed' — as a brand-new lead's starting status. Every
+// other path into 'Confirmed' goes through applyLeadStatusChange(), which
+// special-cases 'Confirmed' to open openConfirmProjectModal() and reliably
+// auto-create (or safely reuse) the linked Project. Creating a lead that is
+// already 'Confirmed' from the very first save skipped that flow entirely,
+// so its Project was silently never created — exactly what happened to
+// lead L053 / Project C060. A brand-new lead can therefore never start
+// life already 'Confirmed' — it must always reach that status via the
+// normal, logged status-change flow. Deliberately scoped to 'Confirmed'
+// only (the actual reported bug) — every other status, including 'Lost',
+// is left exactly as selectable as before.
+const NEW_LEAD_CREATION_STATUSES = LEAD_STATUSES.filter(s=> s!=='Confirmed');
+
 // Statuses that belong on the Kanban pipeline board. Pipeline now starts
 // from Quote and Demo Sent onward — New Lead / Contacted / Qualified are
 // deliberately NOT here: they are early-stage prospects, managed only in
@@ -259,7 +274,11 @@ const ACTIVITY_TYPES = [
   'User Invited', 'Invitation Resent', 'User Role Changed',
   'User Deactivated', 'User Reactivated', 'Password Reset Requested',
   // Receipts module — logged client-side by js/receipts.js.
-  'Receipt Generated', 'Receipt Reissued', 'Receipt Cancelled'
+  'Receipt Generated', 'Receipt Reissued', 'Receipt Cancelled',
+  // Payment/Invoice refinements (Payment <-> Invoice relinking, Founder/
+  // Admin only) — logged client-side by relinkPaymentInvoice() in
+  // js/payments.js.
+  'Payment Invoice Link Updated'
 ];
 
 /* ---------------------------------------------------------------------- */
