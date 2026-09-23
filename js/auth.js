@@ -216,3 +216,20 @@ function canEditPayments(role){ return PAYMENT_EDIT_ROLES.includes(role); }
 /* the options (role-aware UI — see leads.js assignedSalesFieldHtml()).   */
 /* ---------------------------------------------------------------------- */
 function canChooseAssignedSales(role){ return role !== 'sales'; }
+
+/* ---------------------------------------------------------------------- */
+/* isFounder() — the single shared Founder/Admin check used throughout    */
+/* the app (leads.js, app.js Settings/Users&Roles, etc.). BUG FIX ("CRM – */
+/* Fix + Add Lead Button Regression"): this function was called in 15+    */
+/* places across js/app.js and js/leads.js but was never actually         */
+/* defined anywhere in the codebase — every call threw                    */
+/* "ReferenceError: isFounder is not defined" at runtime. Add/Edit Lead's */
+/* click handler (openLeadFormModal -> assignedSalesFieldHtml ->          */
+/* assignableSalesUserNames) always hit this immediately and unconditio-  */
+/* nally, so the button appeared to silently do nothing — the exception   */
+/* aborted the click handler before openModal() was ever reached, with no */
+/* user-visible error. Defining it once here (reads the same global       */
+/* CURRENT_USER every other role check in this app already relies on)     */
+/* fixes every call site at once, instead of patching each one inline.    */
+/* ---------------------------------------------------------------------- */
+function isFounder(){ return CURRENT_USER.role === 'founder_admin'; }
