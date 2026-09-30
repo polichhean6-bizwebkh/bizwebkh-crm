@@ -199,7 +199,19 @@ function openModal(innerHtml, { large=false, xl=false, onMount=null } = {}){
   overlay.className = 'modal-overlay';
   overlay.id = 'activeModalOverlay';
   overlay.innerHTML = `<div class="modal-box ${xl?'modal-xl':(large?'modal-lg':'')}">${innerHtml}</div>`;
-  overlay.addEventListener('mousedown', (e)=>{ if(e.target===overlay) closeModal(); });
+  // Uses requestCloseModal() (not closeModal() directly) so a modal that has
+  // registered an unsaved-changes guard (see setModalCloseGuard below — used
+  // by Create/Edit Quotation, spec "CRM – Prevent Accidental Loss of
+  // Unsaved Quotation") gets a chance to intercept a background-overlay
+  // click. `e.target===overlay` already guarantees this only fires for a
+  // mousedown that started directly on the dark backdrop itself — a
+  // mousedown anywhere inside .modal-box (or any descendant) has a
+  // different e.target and never reaches this branch, so a click inside the
+  // modal can never bubble into an accidental close. For every modal that
+  // never calls setModalCloseGuard() (the overwhelming majority of the app)
+  // requestCloseModal() behaves identically to calling closeModal()
+  // directly — zero behavior change there.
+  overlay.addEventListener('mousedown', (e)=>{ if(e.target===overlay) requestCloseModal(); });
   document.body.appendChild(overlay);
   if(onMount) onMount(overlay);
   return overlay;
@@ -207,6 +219,42 @@ function openModal(innerHtml, { large=false, xl=false, onMount=null } = {}){
 function closeModal(){
   const el = document.getElementById('activeModalOverlay');
   if(el) el.remove();
+  // Clearing the guard here (rather than only where it's consulted) means
+  // every legitimate "this modal is truly done" path — Discard, a
+  // successful Save, or requestCloseModal() itself once the guard has
+  // approved the close — always leaves no guard behind for whatever opens
+  // next. A modal that re-renders itself in place (e.g. Create/Edit
+  // Quotation remounting on every field change) calls openModal() again on
+  // every remount, which calls closeModal() first purely to swap out the
+  // old DOM node — that re-clears the guard, but the remounting code always
+  // re-registers it in its own onMount right after, in the same synchronous
+  // call, so there is no window where a real close could slip through
+  // unguarded.
+  MODAL_CLOSE_GUARD = null;
+}
+// Unsaved-changes close guard — a single optional callback for whichever
+// modal is currently open (mirrors the existing single #activeModalOverlay
+// singleton). Only Create/Edit Quotation registers one today; every other
+// modal leaves this null, so requestCloseModal() is a plain closeModal()
+// for them. The guard itself is responsible for deciding whether to allow
+// the close (return anything but `false`) or to intercept it — typically by
+// showing its own confirmation UI via openChildModal(), which never touches
+// the parent overlay/state — and returning `false`.
+let MODAL_CLOSE_GUARD = null;
+function setModalCloseGuard(fn){ MODAL_CLOSE_GUARD = fn; }
+// The X button, the background-overlay click, and Escape all route through
+// this (instead of calling closeModal() directly) so the guard, if any, is
+// always consulted the same way regardless of which of the three the user
+// used. closeModal() itself stays guard-free and unconditional — it's still
+// used internally (remounts, a successful save moving on to a different
+// modal, Discard) exactly as before, so none of the app's many existing
+// closeModal() call sites change behavior.
+function requestCloseModal(){
+  if(MODAL_CLOSE_GUARD){
+    const guard = MODAL_CLOSE_GUARD;
+    if(guard()===false) return; // guard intercepted the close and is showing its own confirmation UI
+  }
+  closeModal();
 }
 
 // Child modal — a modal opened ON TOP of an already-open modal (e.g. "Add
@@ -241,8 +289,10 @@ document.addEventListener('keydown', (e)=>{
   if(e.key==='Escape'){
     // A child modal (if open) always takes Escape first, so Escape closes
     // one modal at a time instead of dismissing the parent underneath it.
+    // The top-level modal goes through requestCloseModal() (see above) so
+    // Esc is guarded exactly like the X button and the background click.
     if(document.getElementById('activeChildModalOverlay')) closeChildModal();
-    else closeModal();
+    else requestCloseModal();
   }
 });
 

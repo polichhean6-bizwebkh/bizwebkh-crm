@@ -145,6 +145,134 @@ let QC_TAB = 'edit'; // 'edit' | 'preview' — used on narrow screens only
 let QC_ZOOM = 'fit';
 const QC_A4_PAGE_WIDTH_PX = 794; // 210mm at 96dpi — the physical page width the preview scales from
 
+/* ---------------------------------------------------------------------- */
+/* Unsaved-changes protection (spec: "CRM – Prevent Accidental Loss of     */
+/* Unsaved Quotation") — a snapshot of QC_STATE taken the moment a         */
+/* Create/Edit Quotation session genuinely BEGINS (a brand-new blank form, */
+/* a form prefilled from a lead, or an existing quotation loaded for       */
+/* editing), compared against the CURRENT QC_STATE whenever the user tries */
+/* to close via the background overlay, the X button, Cancel, or Escape.   */
+/* QC_TAB/QC_ZOOM (view-only: which tab is active, preview zoom level) are */
+/* deliberately separate module-level variables, never part of QC_STATE,   */
+/* so switching tabs or zooming the live preview can never itself mark the */
+/* form dirty — only an actual change to a real quotation field can.       */
+/* `null` means "no active tracked session" (modal not open, or the        */
+/* session already concluded via Save/Discard) — the guard always allows a */
+/* normal close in that state, so this can never misfire for any other     */
+/* modal in the app (only Create/Edit Quotation ever sets it).             */
+let QC_DIRTY_BASELINE = null;
+
+// Deliberately snapshots the WHOLE of QC_STATE — every field the spec lists
+// as "meaningful" (source, lead/client, client name, business name, phone,
+// Telegram, industry, assigned sales, package, quotation date, valid until,
+// demo link, scope/items, pricing/year budget, notes, and any custom field)
+// already lives directly on QC_STATE, and nothing else does: the derived
+// preview/total numbers (evalRes, totals, schedule, the quote-number
+// preview) are recomputed fresh from QC_STATE on every render rather than
+// stored on it, so they can never leak into this snapshot and can never by
+// themselves mark the form dirty.
+//
+// Uses a key-order-independent stringify rather than plain JSON.stringify.
+// QC_STATE.annualCost in particular is re-normalized (normalizeAnnualCost())
+// on every render purely so the live-editing handlers have a consistent
+// object shape to mutate — this rebuilds the object with the SAME values
+// but a different property insertion order, which plain JSON.stringify
+// treats as "changed" even though nothing the user can see or control
+// actually changed. That's exactly the "automatically generated ... alone
+// should not unnecessarily mark the form dirty" case the spec calls out, so
+// the comparison here is made order-independent instead of chasing every
+// such normalization individually.
+function qcStableStringify(value){
+  if(Array.isArray(value)) return '[' + value.map(qcStableStringify).join(',') + ']';
+  if(value && typeof value==='object'){
+    return '{' + Object.keys(value).sort().map(k=> JSON.stringify(k)+':'+qcStableStringify(value[k])).join(',') + '}';
+  }
+  return JSON.stringify(value);
+}
+function qcSnapshot(state){ return qcStableStringify(state); }
+
+// Call once, right after QC_STATE is set to its STARTING values for a new
+// editing session (before the first render) — never on every remount, or
+// every keystroke would immediately reset the baseline to "no changes yet"
+// and the warning could never fire.
+function qcArmDirtyTracking(){ QC_DIRTY_BASELINE = qcSnapshot(QC_STATE); }
+function qcIsDirty(){ return QC_DIRTY_BASELINE!==null && qcSnapshot(QC_STATE)!==QC_DIRTY_BASELINE; }
+// Ends the tracked session outright (Discard, or a successful Save moving
+// on to a different modal) — no more guard/beforeunload protection until a
+// new session is armed.
+function qcEndDirtyTracking(){ QC_DIRTY_BASELINE = null; qcSetBeforeUnloadGuard(false); }
+
+// Browser-level protection (spec: "if practical") — a standard beforeunload
+// prompt, enabled ONLY while a quotation session is actually dirty, and
+// removed the instant it isn't (save, discard, or the user simply closes
+// with no changes) so it can never nag on unrelated navigation elsewhere in
+// the app.
+function qcBeforeUnloadHandler(e){ e.preventDefault(); e.returnValue = ''; return ''; }
+function qcSetBeforeUnloadGuard(on){
+  window.removeEventListener('beforeunload', qcBeforeUnloadHandler);
+  if(on) window.addEventListener('beforeunload', qcBeforeUnloadHandler);
+}
+
+// The registered modal-close guard (setModalCloseGuard, app.js) for
+// Create/Edit Quotation — consulted by requestCloseModal() whenever the
+// user tries to close via the background overlay, the X button, or Escape
+// (Cancel calls requestCloseModal() directly too, see wireCreateQuotation
+// Modal below). Returning anything but `false` allows the close to proceed
+// immediately; returning `false` blocks it and shows the confirmation
+// dialog instead, exactly like every other guard-consuming caller.
+function quotationModalCloseGuard(){
+  if(!qcIsDirty()) { qcEndDirtyTracking(); return true; }
+  openQuotationUnsavedChangesDialog();
+  return false;
+}
+
+// The "Unsaved quotation" confirmation dialog — rendered as a CHILD modal
+// (openChildModal/closeChildModal, see the big comment on those in app.js)
+// so it can never touch or reset the parent Create/Edit Quotation modal's
+// own overlay, scroll position, or in-progress form state, exactly the
+// same established pattern already used for "Add Scope Item".
+function openQuotationUnsavedChangesDialog(){
+  const html = `
+    <div class="modal-head"><h3>Unsaved quotation</h3></div>
+    <div class="modal-body">
+      <p>You have unsaved changes. Would you like to save this quotation as a draft before closing?</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-secondary" id="qucContinue">Continue Editing</button>
+      <button class="btn btn-danger" id="qucDiscard">Discard Changes</button>
+      <button class="btn btn-primary" id="qucSave">Save as Draft</button>
+    </div>
+  `;
+  openChildModal(html, { onMount:(overlay)=>{
+    // Continue Editing — closes only the warning dialog; the parent modal
+    // and every entered field are completely untouched (we never wrote to
+    // QC_STATE or the parent overlay at all).
+    overlay.querySelector('#qucContinue').onclick = ()=> closeChildModal();
+    // Discard Changes — closes the warning dialog, ends the tracked
+    // session, discards QC_STATE, and force-closes the parent (closeModal()
+    // is guard-free/unconditional, which is correct here: the user just
+    // explicitly chose to discard, so no further confirmation should fire).
+    overlay.querySelector('#qucDiscard').onclick = ()=>{
+      closeChildModal();
+      qcEndDirtyTracking();
+      QC_STATE = null;
+      closeModal();
+    };
+    // Save as Draft — reuses the EXACT SAME saveQuotationFromState() the
+    // form's own bottom Save button calls (no second draft-save
+    // implementation). That function already: validates required fields
+    // and toasts+returns on failure (leaving the parent modal open with the
+    // error visible — exactly "if save fails, keep modal open and show the
+    // error"), and on success ends the dirty session + closes the parent
+    // modal itself (see the two lines added there). We only close the
+    // warning dialog first so it doesn't linger through either outcome.
+    overlay.querySelector('#qucSave').onclick = ()=>{
+      closeChildModal();
+      saveQuotationFromState(QC_STATE);
+    };
+  }});
+}
+
 // Any lead/opportunity that a quotation can be created against — never
 // creates a duplicate lead: this always searches EXISTING Lead Records
 // (spec §3), Pipeline opportunities preferred/sorted first, never filtered
@@ -575,6 +703,10 @@ function openCreateQuotationModal(prefill={}){
   if(QC_STATE.leadId) applyLeadToQC(QC_STATE.leadId);
   QC_TAB = 'edit';
   QC_ZOOM = 'fit';
+  // Arm the unsaved-changes baseline AFTER the starting state above
+  // (including applyLeadToQC's prefill) is fully settled, and BEFORE the
+  // first render — so opening this modal, alone, is never itself "dirty".
+  qcArmDirtyTracking();
   renderCreateQuotationModal();
 }
 
@@ -795,10 +927,19 @@ function renderCreateQuotationModal(){
   `;
 
   openModal(html, { xl:true, onMount:(overlay)=>{
+    // Re-armed on EVERY render (this modal fully remounts on most field
+    // changes) rather than only once on open — openModal()'s own
+    // closeModal() call at the top of every remount clears whatever guard
+    // was previously registered (see the comment on closeModal() in
+    // app.js), so it must be re-registered here, synchronously, before
+    // control returns to whatever triggered the remount. Cheap and
+    // idempotent either way.
+    setModalCloseGuard(quotationModalCloseGuard);
+    qcSetBeforeUnloadGuard(qcIsDirty());
     const editCol = overlay.querySelector('.qc-edit-col');
     if(editCol && prevScrollTop!=null) editCol.scrollTop = prevScrollTop;
-    overlay.querySelector('#cqClose').onclick = closeModal;
-    overlay.querySelector('#cqCancel').onclick = closeModal;
+    overlay.querySelector('#cqClose').onclick = requestCloseModal;
+    overlay.querySelector('#cqCancel').onclick = requestCloseModal;
     overlay.querySelectorAll('[data-qctab]').forEach(t=> t.onclick = ()=>{ QC_TAB = t.dataset.qctab; renderCreateQuotationModal(); });
     overlay.querySelectorAll('[data-zoom]').forEach(b=> b.onclick = ()=>{
       const z = b.dataset.zoom;
@@ -932,6 +1073,14 @@ function renderCreateQuotationModal(){
 
 function refreshQcPreview(overlay){
   const s = QC_STATE;
+  // refreshQcPreview (not a full remount) is the shared path for every
+  // field that updates live without disturbing scroll/zoom (client name,
+  // phone, domain name, every Annual Cost Breakdown amount, etc.) — the
+  // beforeunload guard is re-evaluated here too, not only in onMount's
+  // full-remount path (see wireCreateQuotationModal/renderCreateQuotation
+  // Modal), so typing into one of these fields enables browser-level
+  // protection immediately rather than only after the next full remount.
+  qcSetBeforeUnloadGuard(qcIsDirty());
   const totals = qcComputeQuoteTotals(s);
   overlay.querySelector('#cq_authorityBanner').innerHTML = authorityBannerHtml({...totals.evalRes, finalPrice: totals.year1Total});
   // Keep the three per-year mini totals in the Annual Cost Breakdown panel
@@ -1366,6 +1515,14 @@ function saveQuotationFromState(s){
     remark: evalRes.requiresFounderReview ? 'Founder review required.' : null });
 
   toast(`Quotation ${quotation.quoteNumber} saved as Draft.`, 'success');
+  // Ends unsaved-changes tracking (resets the dirty baseline, removes the
+  // beforeunload listener) on every successful save — whether triggered by
+  // the form's own bottom Save button (no warning ever shown, so nothing to
+  // reset there either way) or by "Save as Draft" from the unsaved-changes
+  // warning dialog. closeModal() right after is the SAME unconditional call
+  // this already made — guard-free by design, since the save just
+  // succeeded and there is nothing left to protect.
+  qcEndDirtyTracking();
   closeModal();
   if(currentRoute()==='quotations'){ renderQuotSummaryCards(); renderQuotTable(); }
   openQuotationDetailModal(quotation.id);
@@ -1537,7 +1694,14 @@ function openQuotationDetailModal(id){
     overlay.querySelector('#qaPreview').onclick = ()=> openQuotationPreview(q.id);
     overlay.querySelector('#qaPdf').onclick = ()=> openQuotationPreview(q.id, true);
     const editBtn = overlay.querySelector('#qaEdit');
-    if(editBtn) editBtn.onclick = ()=>{ QC_STATE = loadStateFromQuotation(q); QC_STATE.projectCode = q.projectCode; QC_TAB='edit'; renderCreateQuotationModal(); };
+    // Edit mode gets the exact same unsaved-changes protection as a brand
+    // new quotation (spec: "Also protect edit mode") — arm the baseline
+    // against the freshly-loaded existing values BEFORE the first render,
+    // so simply opening Edit (no changes yet) is never itself "dirty", and
+    // nothing here overwrites the saved record unless the user explicitly
+    // saves (saveQuotationFromState only ever runs on an explicit Save
+    // click, never as a side effect of opening/closing this form).
+    if(editBtn) editBtn.onclick = ()=>{ QC_STATE = loadStateFromQuotation(q); QC_STATE.projectCode = q.projectCode; QC_TAB='edit'; qcArmDirtyTracking(); renderCreateQuotationModal(); };
     const submitBtn = overlay.querySelector('#qaSubmit');
     if(submitBtn) submitBtn.onclick = ()=> submitForApproval(q.id);
     const sendBtn = overlay.querySelector('#qaSend');
