@@ -30,6 +30,16 @@ function kpiCardHtml(k){
   // above (`${k.color}1a`), just an even fainter tint (05 ≈ 2% opacity) so
   // the "stronger" card reads as emphasized, not as a separate colored box.
   const strongStyle = k.strong ? `style="--kpi-accent:${k.color};background:${k.color}0d"` : '';
+  // Sales Pipeline Value label-accent task: `k.labelColor`, when set, tints
+  // the label text in the same accent-color family as the card's own icon
+  // and bumps its weight to 700 so it reads as the strongest line under the
+  // dollar amount. This is a deliberately SEPARATE, darker hex from
+  // `k.color` (which still only drives the icon) — `k.color` alone is too
+  // light at 12px bold to meet WCAG AA contrast against the white card
+  // background, so each caller passing `labelColor` picks a same-hue shade
+  // dark enough to read clearly. Opt-in per card (only the 5 Sales Pipeline
+  // Value cards set it below) so every other KPI card's label is unaffected.
+  const labelStyle = k.labelColor ? ` style="color:${k.labelColor};font-weight:700"` : '';
   return `
     <div class="${cardClass}" ${strongStyle} ${clickAttrs}>
       <div class="kpi-top">
@@ -37,7 +47,7 @@ function kpiCardHtml(k){
       </div>
       <div class="kpi-value">${k.value}</div>
       ${k.count!=null ? `<div class="kpi-count">${escapeHtml(k.count)}</div>` : ''}
-      <div class="kpi-label">${k.label}</div>
+      <div class="kpi-label"${labelStyle}>${k.label}</div>
       ${k.sub ? `<div class="kpi-sub">${escapeHtml(k.sub)}</div>` : ''}
     </div>`;
 }
@@ -167,17 +177,25 @@ function renderDashboard(){
   //    page (no existing per-stage filter mechanism to route to — same
   //    reasoning as the original Financial Performance rebuild).
   const oppWord = n => n===1 ? 'opportunity' : 'opportunities';
+  // `labelColor` below is a same-hue, AA-contrast-safe darker shade of each
+  // card's own `color` (icon accent), used only for the label text — see
+  // kpiCardHtml's comment. Mapping (dashboard label-accent task):
+  //   Total Open Pipeline      orange  #ff8a3d icon -> #c2410c label
+  //   Awaiting Client Feedback blue    #1d7bff icon -> #1d4ed8 label
+  //   Follow-Up / Interested   amber   #d98a12 icon -> #b45309 label
+  //   Negotiation              purple  #7c5cff icon -> #6d28d9 label
+  //   Other Open Pipeline      slate   #5a6b8c icon -> #475569 label
   const salesPipelineKpis = [
     { label:'Total Open Pipeline', value: moneyPrecise(pipelineValue), count:`${openLeads.length} ${oppWord(openLeads.length)}`,
-      sub:'All active opportunities', icon:'columns', color:'#ff8a3d', go:'pipeline', goLabel:'Pipeline', strong:true },
+      sub:'All active opportunities', icon:'columns', color:'#ff8a3d', labelColor:'#c2410c', go:'pipeline', goLabel:'Pipeline', strong:true },
     { label: pipelineStageLabel(QUOTE_AND_DEMO_SENT_STATUS), value: moneyPrecise(quoteDemoSentValue), count:`${quoteDemoSentLeads.length} ${oppWord(quoteDemoSentLeads.length)}`,
-      sub:'Currently at this stage', icon:'list', color:'#1d7bff', go:'pipeline', goLabel:'Pipeline' },
+      sub:'Currently at this stage', icon:'list', color:'#1d7bff', labelColor:'#1d4ed8', go:'pipeline', goLabel:'Pipeline' },
     { label: pipelineStageLabel(POTENTIAL_FOLLOWUP_STATUS), value: moneyPrecise(potentialFollowupValue), count:`${potentialFollowupLeads.length} ${oppWord(potentialFollowupLeads.length)}`,
-      sub:'Currently awaiting follow-up', icon:'clock', color:'#d98a12', go:'pipeline', goLabel:'Pipeline' },
+      sub:'Currently awaiting follow-up', icon:'clock', color:'#d98a12', labelColor:'#b45309', go:'pipeline', goLabel:'Pipeline' },
     { label:'Negotiation', value: moneyPrecise(negotiationValue), count:`${negotiationLeads.length} ${oppWord(negotiationLeads.length)}`,
-      sub:'Currently under negotiation', icon:'grid', color:'#7c5cff', go:'pipeline', goLabel:'Pipeline' },
+      sub:'Currently under negotiation', icon:'grid', color:'#7c5cff', labelColor:'#6d28d9', go:'pipeline', goLabel:'Pipeline' },
     { label:'Other Open Pipeline', value: moneyPrecise(otherOpenPipelineValue), count:`${otherOpenLeads.length} ${oppWord(otherOpenLeads.length)}`,
-      sub:'Other active pipeline stages', icon:'grid', color:'#5a6b8c', go:'pipeline', goLabel:'Pipeline' },
+      sub:'Other active pipeline stages', icon:'grid', color:'#5a6b8c', labelColor:'#475569', go:'pipeline', goLabel:'Pipeline' },
   ];
   // B. REVENUE PERFORMANCE — unchanged definitions/calculations from the
   //    immediately preceding task, just relabeled as its own section.
