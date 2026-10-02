@@ -1483,6 +1483,41 @@ function normalizeProjectCode(raw){
   return String(raw==null ? '' : raw).trim().toUpperCase();
 }
 
+// Root-cause fix (Pipeline/Projects code-consistency audit, Rabbit Travel
+// Cambodia incident): normalizeProjectCode() above only trims/uppercases --
+// it never enforced the CRM's own "C" + digits convention, so a value like
+// "062" (missing the C, or any other shape) passed every existing check
+// silently. That is exactly how a Lead's reserved code drifted away from
+// its own already-created Project's id undetected (confirmed via the
+// Activity Log: Project C060 was created correctly, then a later manual
+// Edit Project Code save accepted "062" with no format check at all).
+// Every place a NEW or EDITED project code is accepted from a user must
+// reject anything that doesn't match this shape -- called AFTER
+// normalizeProjectCode(), and only against a non-empty value (blank is
+// handled separately by each call site's own "required" check).
+function isValidProjectCodeFormat(code){
+  return /^C\d+$/.test(code);
+}
+
+// Root-cause fix, part 2: every "is this lead already converted to a
+// Project?" check in the app used to look up the Project by matching the
+// LEAD's own (possibly already-drifted) `projectCode` string -- which goes
+// silently blind the moment that string stops matching the Project's real
+// `id` (precisely the broken state this audit found, and precisely why
+// the previous C059/C060 lock could still be bypassed once a code had
+// already drifted once). A Project's `leadId` is set once, at creation,
+// and never edited again -- so looking it up by that structural
+// relationship instead of by the copy-of-a-string is the actual single
+// source of truth, and can never be fooled by a later edit to either
+// side. Falls back to the old code-match lookup only for a Project with
+// no leadId at all (a Direct Project not linked to any lead).
+function findLinkedProjectForLead(lead){
+  if(!lead) return null;
+  const byRelationship = DB.all('projects').find(p=>p.leadId===lead.id);
+  if(byRelationship) return byRelationship;
+  return lead.projectCode ? DB.find('projects', lead.projectCode) : null;
+}
+
 // True if `code` (case-insensitively) is already in use by a DIFFERENT
 // lead's reserved projectCode or a DIFFERENT project's id. Pass
 // excludeLeadId/excludeProjectId to allow a lead/project to keep its own

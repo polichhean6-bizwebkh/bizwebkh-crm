@@ -402,6 +402,14 @@ function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus,
           toast(`Project Code is required to move to "${toStatus}".`, 'error');
           return;
         }
+        // A2. must be the CRM's own "C"+digits convention -- root-cause fix
+        // (Rabbit Travel Cambodia incident: a malformed code with no "C"
+        // accepted here is the earliest point one can ever be assigned).
+        if(!isValidProjectCodeFormat(normalized)){
+          codeInput.style.borderColor='var(--red)';
+          toast(`Project Code must be in the format C followed by digits (e.g. C062). "${normalized}" is not a valid Project Code.`, 'error');
+          return;
+        }
         // B. cannot duplicate an existing code (case-insensitive, checked
         // against both other leads' reserved codes AND every project id).
         if(isProjectCodeTaken(normalized, { excludeLeadId: refId })){

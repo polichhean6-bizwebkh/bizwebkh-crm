@@ -937,7 +937,12 @@ function openEditProjectCodeModal(lead, onDone){
   // rename at that point should be done as a deliberate, verified DB
   // migration, not a routine UI edit. Before conversion (a reserved code
   // with no Project row yet) this modal works exactly as before.
-  const linkedProject = lead.projectCode ? DB.find('projects', lead.projectCode) : null;
+  // Hardened lookup (root-cause fix, Rabbit Travel Cambodia incident): use
+  // the structural lead<->project relationship (findLinkedProjectForLead),
+  // not a match against this lead's own possibly-already-drifted
+  // projectCode string -- the exact reason this lock previously failed to
+  // catch a code that had already drifted away from its Project's real id.
+  const linkedProject = findLinkedProjectForLead(lead);
   if(linkedProject){
     const html = `
       <div class="modal-head"><h3>Project Code Locked</h3><button class="modal-close" id="epcLockedClose">&times;</button></div>
@@ -1004,6 +1009,15 @@ function openEditProjectCodeModal(lead, onDone){
       if(!normalized && required){
         codeInput.style.borderColor='var(--red)';
         toast(`Project Code is required for a lead at "${pipelineStageLabel(lead.status)}".`, 'error');
+        return;
+      }
+      // Root-cause fix (Rabbit Travel Cambodia incident): reject a code
+      // that doesn't match the CRM's own "C"+digits convention BEFORE it
+      // can ever be saved -- this is the exact gap that let "062" (missing
+      // the C) through undetected the first time.
+      if(normalized && !isValidProjectCodeFormat(normalized)){
+        codeInput.style.borderColor='var(--red)';
+        toast(`Project Code must be in the format C followed by digits (e.g. C062). "${normalized}" is not a valid Project Code.`, 'error');
         return;
       }
       if(normalized && isProjectCodeTaken(normalized, { excludeLeadId: lead.id })){

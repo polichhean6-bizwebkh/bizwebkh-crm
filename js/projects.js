@@ -102,7 +102,10 @@ function createProjectFromLead(leadId, onDone){
   // repair, not a duplicate. Only an ACTUAL existing project row for that
   // code means "already converted, don't duplicate." Mirrors the identical
   // check already used by openConfirmProjectModal.
-  const existingProject = lead.projectCode ? DB.find('projects', lead.projectCode) : null;
+  // Hardened lookup (root-cause fix, Rabbit Travel Cambodia incident):
+  // use the structural lead<->project relationship, not a match against
+  // this lead's own possibly-drifted projectCode string.
+  const existingProject = findLinkedProjectForLead(lead);
   if(existingProject){ toast('This lead already has a project.', 'error'); return; }
   // Reuse the lead's already-assigned code as-is when it has one (never
   // silently swap in a freshly-suggested different code for a lead that was
@@ -135,6 +138,11 @@ function createProjectFromLead(leadId, onDone){
       const codeInput = overlay.querySelector('#cp_code');
       const code = normalizeProjectCode(codeInput.value);
       if(!code){ codeInput.style.borderColor='var(--red)'; toast('Project Code is required.', 'error'); return; }
+      if(!isValidProjectCodeFormat(code)){
+        codeInput.style.borderColor='var(--red)';
+        toast(`Project Code must be in the format C followed by digits (e.g. C062). "${code}" is not a valid Project Code.`, 'error');
+        return;
+      }
       if(isProjectCodeTaken(code, { excludeLeadId: lead.id })){
         codeInput.style.borderColor='var(--red)';
         toast(`Project Code ${code} already exists. Please use a unique Project Code.`, 'error');
@@ -966,7 +974,12 @@ function openConfirmProjectModal(lead){
   // row yet; that's the normal case now, not a duplicate. Only an actual
   // matching Project row means "already converted" (the genuine duplicate-
   // protection case below).
-  const existingProject = lead.projectCode ? DB.find('projects', lead.projectCode) : null;
+  // Hardened lookup (root-cause fix, Rabbit Travel Cambodia incident):
+  // use the structural lead<->project relationship, not a match against
+  // this lead's own possibly-drifted projectCode string -- otherwise a
+  // lead whose code already drifted away from its real linked Project
+  // could silently get a SECOND project created for it here.
+  const existingProject = findLinkedProjectForLead(lead);
 
   // ----- conflict protection: the code is a real Project, but for a       -----
   // ----- DIFFERENT lead (should be prevented upstream by                  -----
@@ -1069,6 +1082,11 @@ function openConfirmProjectModal(lead){
       const codeInput = overlay.querySelector('#cf_code');
       const code = normalizeProjectCode(codeInput.value);
       if(!code){ codeInput.style.borderColor='var(--red)'; toast('Project Code is required.', 'error'); return; }
+      if(!isValidProjectCodeFormat(code)){
+        codeInput.style.borderColor='var(--red)';
+        toast(`Project Code must be in the format C followed by digits (e.g. C062). "${code}" is not a valid Project Code.`, 'error');
+        return;
+      }
       // A code this lead already carries is never a "duplicate" of itself
       // (excludeLeadId) — this only actually blocks a genuinely different
       // code that collides with some other lead/project.
@@ -1288,6 +1306,11 @@ function openCreateProjectManualModal(){
       const codeInput = overlay.querySelector('#mp_code');
       const code = normalizeProjectCode(codeInput.value);
       if(!code){ codeInput.style.borderColor='var(--red)'; toast('Project Code is required.', 'error'); return; }
+      if(!isValidProjectCodeFormat(code)){
+        codeInput.style.borderColor='var(--red)';
+        toast(`Project Code must be in the format C followed by digits (e.g. C062). "${code}" is not a valid Project Code.`, 'error');
+        return;
+      }
       // A code the linked lead already reserved for itself is never a
       // "duplicate" of itself (excludeLeadId) — only a genuinely different
       // collision (another lead/project) is blocked.
