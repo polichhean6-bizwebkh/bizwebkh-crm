@@ -1425,10 +1425,43 @@ function saveQuotationFromState(s){
   // never Development again.
   const annualCost = normalizeAnnualCost(s.annualCost);
   const year1Charge = qcAnnualYear1Charge(annualCost.year1);
-  const year1Total = evalRes.priceIsTBC ? null : Math.round((evalRes.finalPrice + year1Charge)*100)/100;
+
+  // Root-cause fix (Year 1 Total audit, "survives editing" requirement):
+  // the Create/Edit Quotation items editor never lets ANY role type a
+  // price into an open-scope ("TBC") function -- the only place that ever
+  // resolves one is the Approve / Confirm Final Price modal, which only
+  // ever writes the resolved number into q.year1Total (an aggregate), not
+  // back into that item's own `price` field (which stays null forever --
+  // there is nowhere in the UI to put a per-item number). Without this,
+  // re-opening an already-resolved quotation in Edit and saving it again
+  // -- even for an unrelated change like fixing a typo -- would recompute
+  // evalRes fresh from those still-null item prices and silently revert a
+  // correctly-priced, Approved quotation back to "TBC", wiping out the
+  // Founder-confirmed Year 1 Total. Guard against that specific case: only
+  // when editing an EXISTING quotation that was already resolved
+  // (existing.year1Total is a real number) AND the fresh computation says
+  // TBC again AND the reason is the SAME open-scope item(s) that were
+  // already unresolved before (not some brand-new function the edit just
+  // added), carry the previously-confirmed Year 1 Total/schedule forward
+  // instead of recomputing from the still-null item price. Any edit that
+  // adds a genuinely NEW unresolved item still correctly re-opens TBC/
+  // Founder review for that new item, exactly as it should.
+  const existingForTbcCheck = s.editingId ? DB.find('quotations', s.editingId) : null;
+  const newTbcNames = new Set(activeItems.filter(i=> i.price===null || i.price===undefined).map(i=>i.name));
+  const existingTbcNames = existingForTbcCheck
+    ? new Set((existingForTbcCheck.items||[]).filter(i=> i.price===null || i.price===undefined).map(i=>i.name))
+    : new Set();
+  const introducesNewUnresolvedItem = [...newTbcNames].some(n=> !existingTbcNames.has(n));
+  const preservePriorResolution = !!(existingForTbcCheck && existingForTbcCheck.year1Total!=null && evalRes.priceIsTBC && !introducesNewUnresolvedItem);
+
+  const year1Total = preservePriorResolution
+    ? existingForTbcCheck.year1Total
+    : (evalRes.priceIsTBC ? null : Math.round((evalRes.finalPrice + year1Charge)*100)/100);
   const year2Total = qcAnnualYearTotal(annualCost.year2);
   const year3Total = qcAnnualYearTotal(annualCost.year3);
-  const schedule = computePaymentSchedule(evalRes.priceIsTBC?0:year1Total, s.paymentPreset, s.customStages);
+  const schedule = preservePriorResolution
+    ? (existingForTbcCheck.paymentSchedule && existingForTbcCheck.paymentSchedule.length ? existingForTbcCheck.paymentSchedule : computePaymentSchedule(year1Total, s.paymentPreset, s.customStages))
+    : computePaymentSchedule(evalRes.priceIsTBC?0:year1Total, s.paymentPreset, s.customStages);
   const code = s.projectCode || s.leadId || ('DIRECT'+Date.now().toString().slice(-4));
   // Legacy-mirror maintenance object — kept in sync with annualCost so every
   // existing consumer (buildQuoteSections' Year 2/3 math for records not
@@ -1484,6 +1517,20 @@ function saveQuotationFromState(s){
     domainName: s.domainName,
     domainCost: annualCost.year1.domain, domainIncluded: annualCost.year1.domainMode!=='separate', domainRenewalEstimate: annualCost.year2.domain,
     maintenance: legacyMaintenance,
+    // Root-cause fix (Year 1 Total audit): priceIsTBC was never an
+    // independent field on the saved record -- rowToQuotation() only ever
+    // DERIVES it (year1_total==null) on a real Supabase round-trip (a page
+    // refresh). DB.upsert()'s optimistic in-memory cache update stores
+    // whatever object this function hands it verbatim, with no such
+    // round-trip, so every consumer's `if(q.priceIsTBC)` check (table,
+    // detail modal, preview, mini-cards, the button logic above) silently
+    // read `undefined` -- falsy, same as false -- for any quotation
+    // created or edited in the CURRENT session, showing "Mark as Sent" /
+    // a blank-looking total instead of "TBC" until a hard refresh forced
+    // the derive-from-Supabase path to run. Setting it explicitly here,
+    // with the EXACT SAME derivation rowToQuotation uses, makes the two
+    // paths agree immediately instead of only after a refresh.
+    priceIsTBC: year1Total==null,
     year1Total, year2Total, year3Total,
     discountPct: isFounder() ? (Number(s.discountPct)||0) : 0,
     manualAdjustment: (isFounder() && s.adjustment) ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
@@ -1494,7 +1541,14 @@ function saveQuotationFromState(s){
     exclusions: s.exclusions, importantNotes: finalNotes, paymentSchedule: schedule,
     reasons: evalRes.reasons,
     status: (existing && existing.status==='Draft') ? existing.status : 'Draft',
-    approvalStatus: evalRes.approvalStatus,
+    // Root-cause fix (Founder approval-bypass audit): a Founder's own
+    // review authority is already satisfied the moment THEY save this
+    // quotation -- they are the approver, so asking them to submit to
+    // themselves is pure friction, not a real control. Every non-Founder
+    // role is untouched: they still get evalRes.approvalStatus exactly as
+    // computed, so approval is still required whenever the package/
+    // discount/adjustment calls for it.
+    approvalStatus: isFounder() ? 'Founder Approved' : evalRes.approvalStatus,
     createdBy, approvedBy: existing ? existing.approvedBy : null,
     createdAt,
   };
@@ -1671,8 +1725,19 @@ function openQuotationDetailModal(id){
 
     if(q.status==='Draft'){
       btns.push(`<button class="btn btn-ghost btn-sm" id="qaEdit">Edit</button>`);
-      if(withinAuthority) btns.push(`<button class="btn btn-primary btn-sm" id="qaSend">Mark as Sent</button>`);
-      else btns.push(`<button class="btn btn-primary btn-sm" id="qaSubmit">Submit for Approval</button>`);
+      if(withinAuthority){
+        // Root-cause fix (Year 1 Total audit): approval authority
+        // (withinAuthority) and price resolution (priceIsTBC) are two
+        // separate gates. A TBC quotation must never reach "Mark as
+        // Sent" with no fixed price -- it still needs the one real
+        // price-entry mechanism the app has (openFounderReviewModal),
+        // just reached directly instead of via a pointless Awaiting
+        // Approval parking stop.
+        if(q.priceIsTBC) btns.push(`<button class="btn btn-primary btn-sm" id="qaApprove">Confirm Final Price</button>`);
+        else btns.push(`<button class="btn btn-primary btn-sm" id="qaSend">Mark as Sent</button>`);
+      } else {
+        btns.push(`<button class="btn btn-primary btn-sm" id="qaSubmit">Submit for Approval</button>`);
+      }
     }
     if(q.status==='Awaiting Approval' && isFounder()){
       btns.push(`<button class="btn btn-primary btn-sm" id="qaApprove">Approve</button>`);
@@ -1733,6 +1798,10 @@ function submitForApproval(id){
 
 function markAsSent(id){
   const q = DB.find('quotations', id);
+  if(q.priceIsTBC){
+    toast('This quotation still has no fixed Year 1 Total — use "Confirm Final Price" before marking it as sent.', 'error');
+    return;
+  }
   q.status = 'Sent';
   DB.upsert('quotations', q);
   logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
@@ -1765,22 +1834,47 @@ function openFounderReviewModal(id, mode){
       const comment = overlay.querySelector('#fr_comment').value.trim();
       if(!comment){ toast('A review note is required.', 'error'); return; }
       const priceInput = overlay.querySelector('#fr_price');
+      // Snapshot BEFORE mutating q.status below -- this modal is now reached
+      // from two different prior states (Awaiting Approval via the normal
+      // submit flow, or Draft directly via a Founder's own "Confirm Final
+      // Price"), so the activity log's fromValue must reflect whichever one
+      // actually happened, not be hardcoded to the old single path.
+      const previousStatus = q.status;
       if(mode==='approve'){
-        if(priceInput && priceInput.value){ q.year1Total = Number(priceInput.value); q.priceIsTBC = false; }
+        if(priceInput && priceInput.value){
+          q.year1Total = Number(priceInput.value);
+          q.priceIsTBC = false;
+          // Recalculate — the stored payment schedule was built at save
+          // time off whatever year1Total existed then (0, for a TBC
+          // quote); re-derive it from the SAME stage percentages against
+          // the newly-confirmed total so deposit/remaining balance are
+          // correct immediately, not stale.
+          q.paymentSchedule = computePaymentSchedule(
+            q.year1Total,
+            q.paymentPreset,
+            (q.paymentSchedule||[]).map(st=>({ label:st.label, pct:st.pct }))
+          );
+        } else if(q.priceIsTBC){
+          // Root-cause fix: a TBC quotation has no fixed price to
+          // "approve as quoted" -- a real number is required before it
+          // can ever be marked Approved/Sent.
+          toast('This quotation has no fixed price yet. Enter the final Year 1 Total to approve it.', 'error');
+          return;
+        }
         q.approvalStatus = 'Founder Approved';
         q.status = 'Approved';
         q.approvedBy = CURRENT_USER.name;
         DB.upsert('quotations', q);
         logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
           type:'Quotation Approved', description:`${CURRENT_USER.name} approved quotation ${q.quoteNumber} at ${moneyPrecise(q.year1Total)}.`,
-          fromValue:'Awaiting Approval', toValue:'Approved', remark: comment });
+          fromValue: previousStatus, toValue:'Approved', remark: comment });
       } else {
         q.approvalStatus = 'Founder Rejected';
         q.status = 'Rejected';
         DB.upsert('quotations', q);
         logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
           type:'Quotation Rejected', description:`${CURRENT_USER.name} rejected quotation ${q.quoteNumber}.`,
-          fromValue: q.status, toValue:'Rejected', remark: comment });
+          fromValue: previousStatus, toValue:'Rejected', remark: comment });
       }
       closeModal();
       toast('Saved.', 'success');
