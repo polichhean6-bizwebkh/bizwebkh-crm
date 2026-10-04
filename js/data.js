@@ -458,6 +458,32 @@ const ADDITIONAL_FUNCTIONS_CATALOG = [
   { id:'AF36', name:'Advanced order status workflow', priceType:'manual', salesCanQuote:true, defaultPrice:null },
   { id:'AF37', name:'Automation', priceType:'manual', salesCanQuote:true, defaultPrice:null },
   { id:'AF38', name:'Subscription / recurring billing', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  // Business Email Setup (task: "BizWeb CRM -- Add Business Email Setup as
+  // Quotation Add-On", 2026-10-04). priceType:'fixed' with a real default
+  // price ($30, Founder/Admin-editable in Settings -> Quotations / Service
+  // Price List per package once synced -- never hardcoded a second place).
+  // The full client-facing scope -- what's included, and the explicit
+  // exclusions (mailbox migration, recovery of an existing/broken system,
+  // Google Workspace / Microsoft 365 administration, advanced routing/
+  // groups, large historical migration, and the fact that hosting/provider
+  // subscription + renewal are separate, at provider cost) -- lives in this
+  // ONE name string, since that's the only field rendered everywhere this
+  // item appears (item editor, quotation detail modal, printed quotation
+  // Scope of Work). editableOnQuotation:true is passed as an explicit
+  // override at every sharedAddon('AF39', ...) call site below (a 'fixed'
+  // item defaults to NOT editable, same as every other fixed add-on in
+  // this catalog -- this one is deliberately the exception, per spec).
+  { id:'AF39', name:"Business Email Setup \u2013 up to 3 mailboxes on the client's domain, including standard DNS/MX and SPF/DKIM/DMARC configuration where supported, plus basic webmail/email-client setup guidance. Email hosting/provider subscription and annual renewal are separate, billed at provider actual cost. Excludes mailbox migration, recovery/troubleshooting of an existing broken email system, Google Workspace or Microsoft 365 administration, advanced routing/groups, and large historical email migration (quoted separately).", priceType:'fixed', salesCanQuote:true, defaultPrice:30 },
+  // Additional Business Email Mailbox -- the quotation item architecture
+  // has no quantity field on a scope item (confirmed: no qty/quantity
+  // concept anywhere in quotations.js/data.js), so per the task's own
+  // fallback instruction this stays a single MANUAL-price add-on rather
+  // than building a new quantity system just for this: the quotation
+  // creator totals the extra mailboxes needed x the $5 reference rate and
+  // enters that single agreed amount. priceType:'manual' already defaults
+  // editableOnQuotation to true (same as every other manual item), so no
+  // override is needed at its sharedAddon() call sites.
+  { id:'AF40', name:'Additional Business Email Mailbox \u2014 beyond the 3 included with Business Email Setup (reference $5 per extra mailbox; enter the total agreed amount)', priceType:'manual', salesCanQuote:true, defaultPrice:null },
 ];
 
 const SERVICE_PRICE_LIST = [
@@ -465,28 +491,43 @@ const SERVICE_PRICE_LIST = [
     salesCanQuote:true, maxDiscountPct:10, defaultDelivery:'7 days', status:'Active',
     functions:[ svcFn('Single-page website with multiple sections (Home, About, Services, Gallery/Contact)'),
                 svcFn(KHMER_ENGLISH_SCOPE_ITEM), svcFn('Responsive desktop/mobile design'), svcFn('Basic SEO setup'),
-                svcFn('Year 1 Hosting'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+                svcFn('Year 1 Hosting'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)'),
+                sharedAddon('AF39', {editableOnQuotation:true}),
+                sharedAddon('AF40'),
+            ] },
   { id:'SVC02', name:'Pro Website', projectType:'Pro Website', category:'Website', basePrice:199, year2Price:60, year3Price:60,
     salesCanQuote:true, maxDiscountPct:10, defaultDelivery:'10 days', status:'Active',
     functions:[ svcFn('Multi-page website — up to 5 pages (e.g. Home, About, Services, Gallery/Projects, Contact)'),
                 svcFn(KHMER_ENGLISH_SCOPE_ITEM), svcFn('Responsive desktop/mobile design'), svcFn('Basic SEO setup'),
-                svcFn('Year 1 Hosting'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+                svcFn('Year 1 Hosting'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)'),
+                sharedAddon('AF39', {editableOnQuotation:true}),
+                sharedAddon('AF40'),
+            ] },
   { id:'SVC03', name:'Pro Max Website', projectType:'Pro Max Website', category:'Website', basePrice:299, year2Price:75, year3Price:75,
     salesCanQuote:true, maxDiscountPct:10, defaultDelivery:'14 days', status:'Active',
     functions:[ svcFn('Multi-page website — up to 8 pages, with enhanced sections and static News/Blog-style content where required'),
                 svcFn(KHMER_ENGLISH_SCOPE_ITEM), svcFn('Responsive desktop/mobile design'), svcFn('Basic SEO setup'),
-                svcFn('Year 1 Hosting'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+                svcFn('Year 1 Hosting'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)'),
+                sharedAddon('AF39', {editableOnQuotation:true}),
+                sharedAddon('AF40'),
+            ] },
   { id:'SVC04', name:'Dynamic Website + CMS', projectType:'Dynamic Website / CMS', category:'CMS', basePrice:399, year2Price:120, year3Price:120,
     salesCanQuote:true, maxDiscountPct:10, defaultDelivery:'14 days', status:'Active',
     functions:[ svcFn('Up to 5 core public pages'), svcFn('Secure CMS / Admin Dashboard'), svcFn('Database / backend'),
                 svcFn('Agreed editable modules (e.g. Services, News, Projects, Gallery, Team) per client scope'),
                 svcFn(KHMER_ENGLISH_SCOPE_ITEM),
-                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)'),
+                sharedAddon('AF39', {editableOnQuotation:true}),
+                sharedAddon('AF40'),
+            ] },
   { id:'SVC05', name:'Booking Website + Admin', projectType:'Booking System', category:'Booking', basePrice:499, year2Price:150, year3Price:150,
     salesCanQuote:true, maxDiscountPct:10, defaultDelivery:'18 days', status:'Active',
     functions:[ svcFn('Up to 5 core public pages'), svcFn('Booking form'), svcFn('Date/time selection'), svcFn('Customer information'),
                 svcFn('Basic admin dashboard'), svcFn('Booking list'), svcFn('Calendar'), svcFn('Booking status'),
-                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)'),
+                sharedAddon('AF39', {editableOnQuotation:true}),
+                sharedAddon('AF40'),
+            ] },
   /* Renamed from "Customer Management System" to proper CRM terminology
      (CRM = Customer Relationship Management, a distinct product from CMS =
      Content Management System — SVC04 above). `name` is the full display
@@ -512,13 +553,19 @@ const SERVICE_PRICE_LIST = [
     salesCanQuote:true, maxDiscountPct:10, defaultDelivery:'21 days', status:'Active',
     functions:[ svcFn('Product catalog'), svcFn('Product admin dashboard'), svcFn('Search / filter (where agreed in scope)'),
                 svcFn('Order/inquiry redirect to Telegram / Facebook / WhatsApp'),
-                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)'),
+                sharedAddon('AF39', {editableOnQuotation:true}),
+                sharedAddon('AF40'),
+            ] },
   { id:'SVC08', name:'E-Commerce Level 2 – Standard Online Store', projectType:'E-Commerce Level 2', category:'E-Commerce', basePrice:1199, year2Price:240, year3Price:240,
     salesCanQuote:true, maxDiscountPct:10, defaultDelivery:'30 days', status:'Active', priceIsStartingFrom:true,
     functions:[ svcFn('Product catalog'), svcFn('Shopping cart'), svcFn('Checkout'),
                 svcFn('Payment method: to be explicitly confirmed with client (e.g. COD, Manual KHQR, Bank Transfer, or Online Gateway)'),
                 svcFn('Standard customer login'), svcFn('Order management'),
-                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)'),
+                sharedAddon('AF39', {editableOnQuotation:true}),
+                sharedAddon('AF40'),
+            ] },
   // Root-cause fix (BizWeb CRM -- Replace Founder Review with Configurable
   // Package Add-On Pricing, 2026-10-02 approval): SVC09-SVC12 below no
   // longer gate pricing on founderReviewRequired/salesCanQuote at all --
@@ -549,6 +596,8 @@ const SERVICE_PRICE_LIST = [
       sharedAddon('AF17', {name:'Extra user roles'}),
       sharedAddon('AF22', {name:'Custom reports / analytics'}),
       sharedAddon('AF37', {name:'Automation'}),
+      sharedAddon('AF39', {editableOnQuotation:true}),
+      sharedAddon('AF40'),
     ] },
   { id:'SVC10', name:'E-Commerce Level 4 – Advanced / Integrated', projectType:'E-Commerce Level 4', category:'E-Commerce', basePrice:2000, year2Price:null, year3Price:null,
     salesCanQuote:false, maxDiscountPct:0, defaultDelivery:'Quote after scoping', status:'Active', priceIsStartingFrom:true,
@@ -572,6 +621,8 @@ const SERVICE_PRICE_LIST = [
       sharedAddon('AF27', {name:'Wallet system'}),
       sharedAddon('AF21', {name:'Large data migration'}),
       sharedAddon('AF32', {name:'Heavy storage / server requirement'}),
+      sharedAddon('AF39', {editableOnQuotation:true}),
+      sharedAddon('AF40'),
     ] },
   { id:'SVC11', name:'Custom Business System', projectType:'Custom Business System', category:'Custom', basePrice:899, year2Price:null, year3Price:null,
     salesCanQuote:false, maxDiscountPct:0, defaultDelivery:'Quote after scoping', status:'Active', priceIsStartingFrom:true,
@@ -591,6 +642,8 @@ const SERVICE_PRICE_LIST = [
       sharedAddon('AF16', {name:'Multi-branch'}),
       sharedAddon('AF21', {name:'Large data import'}),
       sharedAddon('AF32', {name:'Heavy file / storage usage'}),
+      sharedAddon('AF39', {editableOnQuotation:true}),
+      sharedAddon('AF40'),
     ] },
   // Mobile App / Advanced Platform: deliberately has no included-at-$0
   // backend/domain/hosting line like every other package — those, and
@@ -616,6 +669,8 @@ const SERVICE_PRICE_LIST = [
       svcFn('Admin portal / web dashboard', {priceType:'manual', defaultSelected:false}),
       sharedAddon('AF19', {name:'Third-party API integration'}),
       sharedAddon('AF32', {name:'Large media / storage requirement'}),
+      sharedAddon('AF39', {editableOnQuotation:true}),
+      sharedAddon('AF40'),
     ] },
 ];
 
