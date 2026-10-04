@@ -813,35 +813,76 @@ function settingsRenewalCell(s, field, editable){
     ? `<input type="number" class="sel" style="width:90px" data-field="${field}" value="${val}">`
     : moneyPrecise(val);
 }
+// Root-cause fix (BizWeb CRM -- Replace Founder Review with Configurable
+// Package Add-On Pricing, req #5): this is now genuinely "the single
+// pricing reference used across the whole CRM" -- serviceByProjectType()
+// in data.js reads this same DB.all('services') list, so an edit made
+// here immediately affects every quotation built after it. The old
+// "Founder Review Required?" column is removed (that whole workflow no
+// longer exists for quotation pricing); each package's own add-ons are
+// now expandable per row for Price Type / Default Price / Default
+// Selected / Editable on Quotation -- never hardcoded in a JS file again.
 function settingsPricesTab(){
   const services = DB.all('services');
   const editable = isFounder();
   return `
-    <p class="text-muted" style="margin:14px 0">The single pricing reference used across the whole CRM — Quotations pull from this list. ${editable?'As Owner/Admin you can edit prices below.':'View-only for your role — Owner/Admin can edit.'}</p>
+    <p class="text-muted" style="margin:14px 0">The single pricing reference used across the whole CRM — Quotations pull from this list. ${editable?'As Owner/Admin you can edit prices and add-ons below.':'View-only for your role — Owner/Admin can edit.'}</p>
     <div class="table-wrap scroll-x">
       <table class="data-table">
         <thead><tr>
-          <th>Service / Package</th><th>Base Price (Yr 1)</th><th>Year 2 Renewal</th><th>Year 3 Renewal</th>
-          <th>Sales Can Quote?</th><th>Founder Review Required?</th><th>Default Delivery</th><th>Status</th>
+          <th></th><th>Service / Package</th><th>Base Price (Yr 1)</th><th>Year 2 Renewal</th><th>Year 3 Renewal</th>
+          <th>Sales Can Quote?</th><th>Default Delivery</th><th>Status</th>
         </tr></thead>
         <tbody>
           ${services.map(s=>`
             <tr data-svc="${s.id}">
+              <td><span class="icon-btn" data-toggle-addons="${s.id}" style="cursor:pointer;font-size:13px" title="Show add-ons">▸</span></td>
               <td class="cell-strong">${escapeHtml(s.name)}${s.priceIsStartingFrom?' <span class="text-muted" style="font-weight:400;font-size:11px">(from)</span>':''}</td>
               <td>${editable?`<input type="number" class="sel" style="width:90px" data-field="basePrice" value="${s.basePrice}">`:moneyPrecise(s.basePrice)}</td>
               <td>${settingsRenewalCell(s, 'year2Price', editable)}</td>
               <td>${settingsRenewalCell(s, 'year3Price', editable)}</td>
               <td>${s.salesCanQuote?'✓ Yes':'No'}</td>
-              <td>${s.founderReviewRequired?'✓ Yes':'No'}</td>
               <td>${escapeHtml(s.defaultDelivery)}</td>
               <td>${statusBadge(s.status)}</td>
-            </tr>`).join('')}
+            </tr>
+            <tr data-addons-row="${s.id}" hidden><td></td><td colspan="7">${settingsAddonsHtml(s, editable)}</td></tr>`).join('')}
         </tbody>
       </table>
     </div>
   `;
 }
+function settingsAddonsHtml(svc, editable){
+  const fns = svc.functions||[];
+  if(!fns.length) return `<div class="text-muted" style="font-size:12px;padding:8px 0">No functions configured for this package.</div>`;
+  return `
+    <div class="table-wrap scroll-x" style="margin:4px 0 12px">
+      <table class="data-table qc-mini-table">
+        <thead><tr><th>Function / Add-on</th><th>Price Type</th><th>Default Price</th><th>Default Selected</th><th>Editable on Quotation</th></tr></thead>
+        <tbody>
+          ${fns.map(f=>`
+            <tr data-fn="${f.id}" data-svc-fn="${svc.id}">
+              <td>${escapeHtml(f.name)}</td>
+              <td>${editable ? `<select class="sel" data-fn-field="priceType" style="width:110px">
+                  ${['included','fixed','manual'].map(pt=>`<option value="${pt}" ${f.priceType===pt?'selected':''}>${pt.charAt(0).toUpperCase()+pt.slice(1)}</option>`).join('')}
+                </select>` : (f.priceType||'included')}</td>
+              <td>${editable ? `<input type="number" step="0.01" class="sel" style="width:90px" data-fn-field="defaultPrice" ${f.priceType==='included'?'disabled':''} value="${f.priceType==='included'?'0':(f.defaultPrice===null||f.defaultPrice===undefined?'':f.defaultPrice)}" placeholder="${f.priceType==='manual'?'no default':''}">`
+                  : (f.priceType==='included' ? '$0' : (f.defaultPrice===null||f.defaultPrice===undefined ? '— (Manual)' : moneyPrecise(f.defaultPrice)))}</td>
+              <td>${editable ? `<input type="checkbox" data-fn-field="defaultSelected" ${f.defaultSelected!==false?'checked':''}>` : (f.defaultSelected!==false?'✓':'')}</td>
+              <td>${editable ? `<input type="checkbox" data-fn-field="editableOnQuotation" ${f.editableOnQuotation?'checked':''}>` : (f.editableOnQuotation?'✓':'')}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
 function wireSettingsPricesTab(){
+  document.querySelectorAll('#settingsTabBody [data-toggle-addons]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const row = document.querySelector(`[data-addons-row="${btn.dataset.toggleAddons}"]`);
+      if(!row) return;
+      row.hidden = !row.hidden;
+      btn.textContent = row.hidden ? '▸' : '▾';
+    };
+  });
   if(!isFounder()) return;
   document.querySelectorAll('#settingsTabBody [data-field]').forEach(input=>{
     input.onchange = ()=>{
@@ -851,6 +892,30 @@ function wireSettingsPricesTab(){
       DB.upsert('services', svc);
       toast(`${svc.name} updated.`, 'success');
     };
+  });
+  document.querySelectorAll('#settingsTabBody [data-fn-field]').forEach(input=>{
+    input.addEventListener('change', ()=>{
+      const tr = input.closest('[data-fn]');
+      const svc = DB.all('services').find(s=>s.id===tr.dataset.svcFn);
+      const fn = svc && (svc.functions||[]).find(f=>f.id===tr.dataset.fn);
+      if(!svc || !fn) return;
+      const field = input.dataset.fnField;
+      if(input.type==='checkbox'){
+        fn[field] = input.checked;
+      } else if(field==='priceType'){
+        fn.priceType = input.value;
+        // 'included' is always exactly $0; switching AWAY from 'included'
+        // clears the stale $0 back to "no default yet" rather than
+        // silently keeping a $0 fixed/manual price.
+        if(fn.priceType==='included') fn.defaultPrice = 0;
+        else if(fn.defaultPrice===0) fn.defaultPrice = null;
+      } else {
+        fn[field] = input.value===''? null : Number(input.value);
+      }
+      DB.upsert('services', svc);
+      toast(`${svc.name} — ${fn.name} updated.`, 'success');
+      if(field==='priceType') renderSettingsBody();
+    });
   });
 }
 

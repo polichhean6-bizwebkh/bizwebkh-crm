@@ -319,9 +319,52 @@ function quotationDisplayStatus(q){
   return isQuotationExpired(q) ? 'Expired' : q.status;
 }
 
+// Root-cause fix (BizWeb CRM -- Replace Founder Review with Configurable
+// Package Add-On Pricing, 2026-10-02 approval): every function/add-on now
+// carries an explicit `priceType` instead of a founder-review flag --
+//   'included' -- bundled into the base package, always $0, not priced
+//   'fixed'    -- a predefined amount (Founder/Admin-editable in Settings
+//                 -> Quotations / Service Price List, never hardcoded
+//                 again once read from there)
+//   'manual'   -- the quotation creator enters the agreed amount (agreed
+//                 with Founder/client over Telegram, per the new process)
+// `editableOnQuotation` controls whether Sales can type/override the
+// amount directly on a specific quotation (always true for 'manual';
+// defaults to false for 'fixed' unless a package explicitly opts in).
+// `defaultSelected` controls whether the add-on starts checked when the
+// package is first picked. There is deliberately NO founder-review /
+// approval field anywhere in this shape -- a function no longer blocks
+// the WHOLE quotation; at most, an unresolved 'manual' item keeps ITSELF
+// (and therefore the aggregate Year 1 Total) showing as TBC until priced.
 function svcFn(name, opts={}){
-  return { id: fnId(), name, included: opts.included!==false, salesCanQuote: opts.salesCanQuote!==false,
-           founderReviewRequired: !!opts.founderReviewRequired, defaultPrice: opts.defaultPrice===undefined ? 0 : opts.defaultPrice };
+  const priceType = opts.priceType || 'included';
+  return {
+    id: fnId(), name, priceType,
+    defaultPrice: priceType==='included' ? 0 : (opts.defaultPrice===undefined ? null : opts.defaultPrice),
+    defaultSelected: opts.defaultSelected!==false,
+    editableOnQuotation: opts.editableOnQuotation!==undefined ? !!opts.editableOnQuotation : (priceType==='manual'),
+    salesCanQuote: opts.salesCanQuote!==false,
+  };
+}
+// Looks up a definition from the SHARED catalog below and spreads it into
+// a specific package's own functions[] array -- so a reusable add-on
+// (Payment/KHQR, OTP, multi-branch, API integration, etc., req #4: "Do not
+// duplicate pricing logic unnecessarily") is defined ONCE in
+// ADDITIONAL_FUNCTIONS_CATALOG and every package that offers it just
+// references that id, instead of re-typing its own copy of the name/price/
+// priceType. `overrides` lets one package rename or re-tune a shared
+// add-on (e.g. a different defaultSelected) without forking its base
+// definition for every other package that also uses it.
+function sharedAddon(afId, overrides={}){
+  const base = ADDITIONAL_FUNCTIONS_CATALOG.find(a=>a.id===afId);
+  if(!base) throw new Error('sharedAddon: unknown shared add-on id "'+afId+'"');
+  return svcFn(overrides.name || base.name, {
+    priceType: overrides.priceType || base.priceType,
+    defaultPrice: overrides.defaultPrice!==undefined ? overrides.defaultPrice : base.defaultPrice,
+    defaultSelected: overrides.defaultSelected!==undefined ? overrides.defaultSelected : false,
+    editableOnQuotation: overrides.editableOnQuotation!==undefined ? overrides.editableOnQuotation : undefined,
+    salesCanQuote: base.salesCanQuote,
+  });
 }
 
 /* ---------------------------------------------------------------------- */
@@ -356,30 +399,91 @@ const KHMER_ENGLISH_SCOPE_ITEM = 'Khmer / English (client supplies final content
 // the DB columns are nullable, and settingsPricesTab() renders a null value
 // as a plain "To be confirmed" label instead of a $ figure/input, with no
 // change to the table's columns/layout.
+// Additional functions catalog — reusable add-ons that can be added to ANY
+// quotation regardless of the base package (req #4, "BizWeb CRM -- Replace
+// Founder Review with Configurable Package Add-On Pricing", 2026-10-02:
+// "Some functions should be reusable across several packages... Do not
+// duplicate pricing logic unnecessarily"). Declared BEFORE SERVICE_PRICE_LIST
+// so sharedAddon() can reference it while packages' own functions[] arrays
+// are being built.
+// Catalog item ids are internal-only (never stored on a saved quotation's
+// items — each added item gets its own fresh id at add-time, see
+// openAddQuotationFunctionModal() in quotations.js, or at sharedAddon()
+// time), so renaming/renumbering/removing entries here never affects any
+// already-saved quotation.
+// 'fixed' entries carry a real predefined amount, Founder/Admin-editable
+// from Settings -> Quotations / Service Price List (never hardcoded
+// business pricing beyond this one catalog + each package's own base
+// price). 'manual' entries have no predefined amount — the quotation
+// creator enters the figure agreed with Founder/client (over Telegram,
+// per the new process), and that single item (never the whole quotation)
+// shows as TBC until an amount is entered.
+const ADDITIONAL_FUNCTIONS_CATALOG = [
+  // ----- Fixed-price standard add-ons -----
+  { id:'AF01', name:'Additional informational page', priceType:'fixed', salesCanQuote:true, defaultPrice:20 },
+  { id:'AF02b', name:'Additional section', priceType:'fixed', salesCanQuote:true, defaultPrice:10 },
+  { id:'AF02', name:'Contact / inquiry form', priceType:'fixed', salesCanQuote:true, defaultPrice:0 },
+  { id:'AF03', name:'Standard CMS (content editor)', priceType:'fixed', salesCanQuote:true, defaultPrice:80 },
+  { id:'AF04', name:'Basic booking form', priceType:'fixed', salesCanQuote:true, defaultPrice:100 },
+  { id:'AF05', name:'Standard customer management', priceType:'fixed', salesCanQuote:true, defaultPrice:100 },
+  { id:'AF06', name:'Product catalog + chat ordering', priceType:'fixed', salesCanQuote:true, defaultPrice:80 },
+  { id:'AF07', name:'Standard E-Commerce Level 2 workflow', priceType:'fixed', salesCanQuote:true, defaultPrice:150 },
+  { id:'AF30', name:'Search / filter', priceType:'fixed', salesCanQuote:true, defaultPrice:0 },
+  { id:'AF34', name:'Additional third language', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF31', name:'Telegram / WhatsApp inquiry', priceType:'fixed', salesCanQuote:true, defaultPrice:0 },
+  // ----- Manual / agreed-with-Founder add-ons -----
+  { id:'AF32', name:'Additional storage / bandwidth / heavy server usage', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF08', name:'Online payment gateway integration', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF33', name:'Dynamic KHQR', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF09', name:'OTP / SMS / email verification', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF11', name:'Customer login / account / membership', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF12', name:'Inventory management', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF13', name:'POS system / integration', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF14', name:'Accounting integration', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF15', name:'Payroll module', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF16', name:'Multi-branch / multi-warehouse', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF17', name:'Advanced roles / permissions / extra user roles', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF18', name:'Approval workflow', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF19', name:'API / third-party / delivery integration', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF21', name:'Large data import / migration (500+ records or heavy data)', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF22', name:'Custom reports / analytics', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF23', name:'Customized loyalty / membership program', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF24', name:'Customized delivery fee / rules', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF25', name:'Marketplace sync / integration', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF26', name:'Return / refund workflow (advanced)', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF27', name:'Wallet system', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF28', name:'Advanced inventory / stock management', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF29', name:'ERP integration', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF35', name:'Promotions / coupons', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF36', name:'Advanced order status workflow', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF37', name:'Automation', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+  { id:'AF38', name:'Subscription / recurring billing', priceType:'manual', salesCanQuote:true, defaultPrice:null },
+];
+
 const SERVICE_PRICE_LIST = [
   { id:'SVC01', name:'Starter Website', projectType:'Starter Website', category:'Website', basePrice:99, year2Price:45, year3Price:45,
-    salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'7 days', status:'Active',
+    salesCanQuote:true, maxDiscountPct:10, defaultDelivery:'7 days', status:'Active',
     functions:[ svcFn('Single-page website with multiple sections (Home, About, Services, Gallery/Contact)'),
                 svcFn(KHMER_ENGLISH_SCOPE_ITEM), svcFn('Responsive desktop/mobile design'), svcFn('Basic SEO setup'),
                 svcFn('Year 1 Hosting'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
   { id:'SVC02', name:'Pro Website', projectType:'Pro Website', category:'Website', basePrice:199, year2Price:60, year3Price:60,
-    salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'10 days', status:'Active',
+    salesCanQuote:true, maxDiscountPct:10, defaultDelivery:'10 days', status:'Active',
     functions:[ svcFn('Multi-page website — up to 5 pages (e.g. Home, About, Services, Gallery/Projects, Contact)'),
                 svcFn(KHMER_ENGLISH_SCOPE_ITEM), svcFn('Responsive desktop/mobile design'), svcFn('Basic SEO setup'),
                 svcFn('Year 1 Hosting'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
   { id:'SVC03', name:'Pro Max Website', projectType:'Pro Max Website', category:'Website', basePrice:299, year2Price:75, year3Price:75,
-    salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'14 days', status:'Active',
+    salesCanQuote:true, maxDiscountPct:10, defaultDelivery:'14 days', status:'Active',
     functions:[ svcFn('Multi-page website — up to 8 pages, with enhanced sections and static News/Blog-style content where required'),
                 svcFn(KHMER_ENGLISH_SCOPE_ITEM), svcFn('Responsive desktop/mobile design'), svcFn('Basic SEO setup'),
                 svcFn('Year 1 Hosting'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
   { id:'SVC04', name:'Dynamic Website + CMS', projectType:'Dynamic Website / CMS', category:'CMS', basePrice:399, year2Price:120, year3Price:120,
-    salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'14 days', status:'Active',
+    salesCanQuote:true, maxDiscountPct:10, defaultDelivery:'14 days', status:'Active',
     functions:[ svcFn('Up to 5 core public pages'), svcFn('Secure CMS / Admin Dashboard'), svcFn('Database / backend'),
                 svcFn('Agreed editable modules (e.g. Services, News, Projects, Gallery, Team) per client scope'),
                 svcFn(KHMER_ENGLISH_SCOPE_ITEM),
                 svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
   { id:'SVC05', name:'Booking Website + Admin', projectType:'Booking System', category:'Booking', basePrice:499, year2Price:150, year3Price:150,
-    salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'18 days', status:'Active',
+    salesCanQuote:true, maxDiscountPct:10, defaultDelivery:'18 days', status:'Active',
     functions:[ svcFn('Up to 5 core public pages'), svcFn('Booking form'), svcFn('Date/time selection'), svcFn('Customer information'),
                 svcFn('Basic admin dashboard'), svcFn('Booking list'), svcFn('Calendar'), svcFn('Booking status'),
                 svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
@@ -399,53 +503,139 @@ const SERVICE_PRICE_LIST = [
      quotation's own scope table (spec: "They must remain two different
      products"). */
   { id:'SVC06', name:'CRM – Customer Relationship Management', shortName:'CRM System', projectType:'Customer Management System', category:'CRM', basePrice:599, year2Price:180, year3Price:180,
-    salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'21 days', status:'Active',
+    salesCanQuote:true, maxDiscountPct:10, defaultDelivery:'21 days', status:'Active',
     functions:[ svcFn('Customer records'), svcFn('Customer history'), svcFn('Customer type / VIP management'), svcFn('Package / balance management'),
                 svcFn('Transactions'), svcFn('Staff incentive / commission'), svcFn('Reports'), svcFn('Business dashboard'),
                 svcFn('Year 1 Hosting / Backend / Database'),
                 svcFn('Domain — Included in Year 1 if a public domain/entry point is needed (or Charged Separately / Client Owns Domain), per quotation') ] },
   { id:'SVC07', name:'E-Commerce Level 1 – Basic Catalog + Admin', projectType:'E-Commerce Level 1', category:'E-Commerce', basePrice:500, year2Price:150, year3Price:150,
-    salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'21 days', status:'Active',
+    salesCanQuote:true, maxDiscountPct:10, defaultDelivery:'21 days', status:'Active',
     functions:[ svcFn('Product catalog'), svcFn('Product admin dashboard'), svcFn('Search / filter (where agreed in scope)'),
                 svcFn('Order/inquiry redirect to Telegram / Facebook / WhatsApp'),
                 svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
   { id:'SVC08', name:'E-Commerce Level 2 – Standard Online Store', projectType:'E-Commerce Level 2', category:'E-Commerce', basePrice:1199, year2Price:240, year3Price:240,
-    salesCanQuote:true, founderReviewRequired:false, maxDiscountPct:10, defaultDelivery:'30 days', status:'Active', priceIsStartingFrom:true,
+    salesCanQuote:true, maxDiscountPct:10, defaultDelivery:'30 days', status:'Active', priceIsStartingFrom:true,
     functions:[ svcFn('Product catalog'), svcFn('Shopping cart'), svcFn('Checkout'),
                 svcFn('Payment method: to be explicitly confirmed with client (e.g. COD, Manual KHQR, Bank Transfer, or Online Gateway)'),
                 svcFn('Standard customer login'), svcFn('Order management'),
                 svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
-  { id:'SVC09', name:'E-Commerce Level 3 – Customized Commerce', projectType:'E-Commerce Level 3', category:'E-Commerce', basePrice:1500, year2Price:null, year3Price:null,
-    salesCanQuote:false, founderReviewRequired:true, maxDiscountPct:0, defaultDelivery:'45 days', status:'Active', priceIsStartingFrom:true,
-    functions:[ svcFn('Product catalog'), svcFn('Shopping cart'), svcFn('Checkout'),
-                svcFn('Customized workflow', {founderReviewRequired:true,defaultPrice:null}),
-                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
+  // Root-cause fix (BizWeb CRM -- Replace Founder Review with Configurable
+  // Package Add-On Pricing, 2026-10-02 approval): SVC09-SVC12 below no
+  // longer gate pricing on founderReviewRequired/salesCanQuote at all --
+  // Sales can now build ANY of these quotations directly. Base package
+  // scope stays `included` ($0, bundled into basePrice); everything the
+  // Sales & Product Package Guide (Aug 2026 training version) lists as a
+  // candidate add-on for that package is now an explicit, selectable
+  // function with its own priceType -- 'fixed' where the Guide gives a
+  // firm figure, 'manual' where it says "Check Founder" / scope varies.
+  // Shared add-ons (reused across several packages, req #4) reference the
+  // ONE definition in ADDITIONAL_FUNCTIONS_CATALOG via sharedAddon() --
+  // editing that catalog entry's price in Settings updates every package
+  // that uses it, nothing is retyped per package.
+  { id:'SVC09', name:'E-Commerce Level 3 – Customized Commerce', projectType:'E-Commerce Level 3', category:'E-Commerce', basePrice:1500, year2Price:240, year3Price:300,
+    salesCanQuote:false, maxDiscountPct:0, defaultDelivery:'25-40 days', status:'Active', priceIsStartingFrom:true,
+    functions:[
+      svcFn('Product catalog'), svcFn('Shopping cart'), svcFn('Checkout'),
+      svcFn('Year 1 Hosting / Backend / Database'),
+      svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)'),
+      // Candidate add-ons (Package Guide, E-Commerce Level 3 scope):
+      svcFn('Customized checkout flow', {priceType:'manual', defaultSelected:false}),
+      sharedAddon('AF23', {name:'Customized loyalty rules'}),
+      sharedAddon('AF35', {name:'Promotions / coupons'}),
+      sharedAddon('AF28', {name:'Advanced inventory logic'}),
+      sharedAddon('AF24', {name:'Customized delivery fee / rules'}),
+      sharedAddon('AF36', {name:'Richer / advanced order statuses'}),
+      sharedAddon('AF26', {name:'Return / refund workflow'}),
+      sharedAddon('AF17', {name:'Extra user roles'}),
+      sharedAddon('AF22', {name:'Custom reports / analytics'}),
+      sharedAddon('AF37', {name:'Automation'}),
+    ] },
   { id:'SVC10', name:'E-Commerce Level 4 – Advanced / Integrated', projectType:'E-Commerce Level 4', category:'E-Commerce', basePrice:2000, year2Price:null, year3Price:null,
-    salesCanQuote:false, founderReviewRequired:true, maxDiscountPct:0, defaultDelivery:'60 days', status:'Active', priceIsStartingFrom:true,
-    functions:[ svcFn('Full e-commerce engine'), svcFn('Third-party API integration', {founderReviewRequired:true,defaultPrice:null}),
-                svcFn('Advanced reporting', {founderReviewRequired:true,defaultPrice:null}),
-                svcFn('Year 1 Hosting / Backend / Database'), svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)') ] },
-  { id:'SVC11', name:'Custom Business System', projectType:'Custom Business System', category:'Custom', basePrice:800, year2Price:null, year3Price:null,
-    salesCanQuote:false, founderReviewRequired:true, maxDiscountPct:0, defaultDelivery:'By scope', status:'Active', priceIsStartingFrom:true,
-    functions:[ svcFn('Custom-scoped modules — defined per project scope', {founderReviewRequired:true,defaultPrice:null}),
-                svcFn('Year 1 Hosting / Backend / Database — if quoted', {founderReviewRequired:true,defaultPrice:null}),
-                svcFn('Domain — separate, if applicable', {founderReviewRequired:true,defaultPrice:null}) ] },
-  // Mobile App / Advanced Platform (spec §11 of the 2026-09-13 approval):
-  // deliberately has NO "Year 1 Hosting"/"Domain" bullet like every other
-  // package — backend/infra/domain/app-store/provider items are always
-  // "separately defined" per project here, never silently assumed
-  // included, so this package gets one explicit TBC line instead (see also
-  // the Custom/Mobile-specific defaultAnnualCostForService() override below,
-  // which correspondingly defaults Year 1 hosting/domain to NOT included
-  // for these two package types only).
+    salesCanQuote:false, maxDiscountPct:0, defaultDelivery:'Quote after scoping', status:'Active', priceIsStartingFrom:true,
+    functions:[
+      svcFn('Full e-commerce engine'),
+      svcFn('Year 1 Hosting / Backend / Database'),
+      svcFn('Domain — Included in Year 1 (or Charged Separately / Client Already Owns Domain, per quotation)'),
+      // Candidate add-ons (Package Guide, E-Commerce Level 4 scope):
+      sharedAddon('AF16', {name:'Multi-branch / multi-warehouse'}),
+      sharedAddon('AF28', {name:'Advanced inventory'}),
+      sharedAddon('AF17', {name:'Multiple roles / permissions'}),
+      sharedAddon('AF25', {name:'Marketplace integration'}),
+      sharedAddon('AF13', {name:'POS integration'}),
+      sharedAddon('AF29', {name:'ERP integration'}),
+      sharedAddon('AF14', {name:'Accounting integration'}),
+      sharedAddon('AF19', {name:'Delivery / API integration'}),
+      sharedAddon('AF08', {name:'Additional payment integration'}),
+      sharedAddon('AF22', {name:'Advanced reports'}),
+      sharedAddon('AF26', {name:'Complex return / refund workflow'}),
+      sharedAddon('AF23', {name:'Loyalty / membership program'}),
+      sharedAddon('AF27', {name:'Wallet system'}),
+      sharedAddon('AF21', {name:'Large data migration'}),
+      sharedAddon('AF32', {name:'Heavy storage / server requirement'}),
+    ] },
+  { id:'SVC11', name:'Custom Business System', projectType:'Custom Business System', category:'Custom', basePrice:899, year2Price:null, year3Price:null,
+    salesCanQuote:false, maxDiscountPct:0, defaultDelivery:'Quote after scoping', status:'Active', priceIsStartingFrom:true,
+    functions:[
+      svcFn('Custom-scoped modules — defined per project scope'),
+      svcFn('Year 1 Hosting / Backend / Database', {priceType:'manual', defaultSelected:false}),
+      svcFn('Domain — separate, if applicable', {priceType:'manual', defaultSelected:false}),
+      // Candidate add-ons (Package Guide, Custom Business System scope):
+      sharedAddon('AF17', {name:'Additional roles / permissions'}),
+      sharedAddon('AF18', {name:'Approval workflow'}),
+      sharedAddon('AF11', {name:'Customer login'}),
+      sharedAddon('AF12', {name:'Inventory'}),
+      svcFn('Custom transaction workflow', {priceType:'manual', defaultSelected:false}),
+      sharedAddon('AF22', {name:'Advanced reports'}),
+      sharedAddon('AF37', {name:'Automation'}),
+      sharedAddon('AF19', {name:'API integration'}),
+      sharedAddon('AF16', {name:'Multi-branch'}),
+      sharedAddon('AF21', {name:'Large data import'}),
+      sharedAddon('AF32', {name:'Heavy file / storage usage'}),
+    ] },
+  // Mobile App / Advanced Platform: deliberately has no included-at-$0
+  // backend/domain/hosting line like every other package — those, and
+  // every listed feature, are itemized add-ons (mostly manual) priced per
+  // project, exactly as the Guide's own "$2,000 is only a floor" framing
+  // describes. iOS App and Android App default-selected since virtually
+  // every mobile project needs at least one platform; everything else is
+  // opt-in.
   { id:'SVC12', name:'Mobile App / Advanced Platform', projectType:'Mobile App / Advanced Platform', category:'Mobile', basePrice:2000, year2Price:null, year3Price:null,
-    salesCanQuote:false, founderReviewRequired:true, maxDiscountPct:0, defaultDelivery:'By scope', status:'Active', priceIsStartingFrom:true,
-    functions:[ svcFn('iOS App', {founderReviewRequired:true,defaultPrice:null}), svcFn('Android App', {founderReviewRequired:true,defaultPrice:null}),
-                svcFn('Push Notifications', {founderReviewRequired:true,defaultPrice:null}),
-                svcFn('Backend / infrastructure — defined per project scope (domain, hosting, app-store and provider fees separately defined)', {founderReviewRequired:true,defaultPrice:null}) ] },
+    salesCanQuote:false, maxDiscountPct:0, defaultDelivery:'Quote after scoping', status:'Active', priceIsStartingFrom:true,
+    functions:[
+      svcFn('iOS App', {priceType:'manual', defaultSelected:true}),
+      svcFn('Android App', {priceType:'manual', defaultSelected:true}),
+      svcFn('Push Notifications', {priceType:'manual', defaultSelected:false}),
+      svcFn('Advanced backend / infrastructure — defined per project scope (domain, hosting, app-store and provider fees separately defined)', {priceType:'manual', defaultSelected:false}),
+      // Candidate add-ons (Package Guide, Mobile App / Advanced Platform scope):
+      sharedAddon('AF09', {name:'OTP / verification'}),
+      sharedAddon('AF08', {name:'Payment / KHQR'}),
+      sharedAddon('AF38', {name:'Subscription'}),
+      sharedAddon('AF23', {name:'Membership'}),
+      svcFn('Video call / real-time communication', {priceType:'manual', defaultSelected:false}),
+      sharedAddon('AF17', {name:'Multiple user roles'}),
+      svcFn('Admin portal / web dashboard', {priceType:'manual', defaultSelected:false}),
+      sharedAddon('AF19', {name:'Third-party API integration'}),
+      sharedAddon('AF32', {name:'Large media / storage requirement'}),
+    ] },
 ];
 
+// Root-cause fix (BizWeb CRM -- Replace Founder Review with Configurable
+// Package Add-On Pricing, req #5: "Do not hardcode final business prices
+// across JS files... Founder/Admin should be able to manage add-on prices
+// from Settings"): this now reads the REAL, Founder/Admin-editable
+// Supabase-backed services table (DB._cache.services, populated by
+// DB.init() and edited via Settings -> Quotations / Service Price List)
+// instead of the hardcoded SERVICE_PRICE_LIST constant. Previously
+// Settings edits were saved to Supabase but NEVER actually consulted by
+// any quotation -- quotations.js read only the hardcoded array, so an
+// edited price silently had zero effect on real quotes. SERVICE_PRICE_LIST
+// remains in this file as the original seed/reference data (and a safety
+// fallback below, in case DB hasn't loaded yet or a project_type is
+// missing from the DB for any reason), but it is no longer the live
+// source of truth.
 function serviceByProjectType(projectType){
+  const live = (typeof DB!=='undefined' ? DB.all('services') : []).find(s=>s.projectType===projectType);
+  if(live) return live;
   return SERVICE_PRICE_LIST.find(s=>s.projectType===projectType) || null;
 }
 
@@ -778,84 +968,37 @@ function computePaymentSchedule(total, presetKey, customStages){
   return out;
 }
 
-// Additional functions catalog — can be added to ANY quotation regardless
-// of the base package. Mirrors the spec's exact standard-vs-founder-review
-// split (section 11). `defaultPrice: null` means "TBC" (no fixed approved
-// price — Sales must never guess).
-// APPROVED FINAL, Section D, 2026-09-13 — pricing/naming below matches that
-// sheet exactly. Catalog item ids are internal-only (never stored on a
-// saved quotation's items — each added item gets its own fresh id at
-// add-time, see openAddQuotationFunctionModal() in quotations.js), so
-// renaming/renumbering/removing entries here never affects any
-// already-saved quotation. Where the approval gives a fee RANGE (e.g.
-// "$20–30/page"), the LOW end is used as the editable default; Sales/
-// Founder can raise it per quotation. AF09/AF10 (previously two separate
-// OTP/SMS entries) are merged back into one "OTP / SMS setup" entry per the
-// approval. AF20 "Mobile app" fixed add-on is REMOVED — Mobile App /
-// Advanced Platform (SVC12) is now the only path to quote a mobile app,
-// always as its own separately-scoped project (approval Section D row 68 /
-// Section 11).
-const ADDITIONAL_FUNCTIONS_CATALOG = [
-  // ----- Standard / Sales Can Quote -----
-  { id:'AF01', name:'Additional informational page', founderReviewRequired:false, salesCanQuote:true, defaultPrice:20 },
-  { id:'AF02b', name:'Additional section', founderReviewRequired:false, salesCanQuote:true, defaultPrice:10 },
-  { id:'AF02', name:'Contact / inquiry form', founderReviewRequired:false, salesCanQuote:true, defaultPrice:null },
-  { id:'AF03', name:'Standard CMS (content editor)', founderReviewRequired:false, salesCanQuote:true, defaultPrice:80 },
-  { id:'AF04', name:'Basic booking form', founderReviewRequired:false, salesCanQuote:true, defaultPrice:100 },
-  { id:'AF05', name:'Standard customer management', founderReviewRequired:false, salesCanQuote:true, defaultPrice:100 },
-  { id:'AF06', name:'Product catalog + chat ordering', founderReviewRequired:false, salesCanQuote:true, defaultPrice:80 },
-  { id:'AF07', name:'Standard E-Commerce Level 2 workflow', founderReviewRequired:false, salesCanQuote:true, defaultPrice:150 },
-  { id:'AF30', name:'Search / filter', founderReviewRequired:false, salesCanQuote:true, defaultPrice:null },
-  { id:'AF34', name:'Additional third language', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF31', name:'Telegram / WhatsApp inquiry', founderReviewRequired:false, salesCanQuote:true, defaultPrice:null },
-  { id:'AF32', name:'Additional storage / bandwidth', founderReviewRequired:false, salesCanQuote:true, defaultPrice:null },
-  // ----- Founder Review Required -----
-  { id:'AF08', name:'Online payment gateway integration', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF33', name:'Dynamic KHQR', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF09', name:'OTP / SMS setup', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF11', name:'Customer login / member accounts', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF12', name:'Inventory management', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF13', name:'POS system', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF14', name:'Accounting integration', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF15', name:'Payroll module', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF16', name:'Multi-branch / multi-location', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF17', name:'Advanced roles / permissions', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF18', name:'Approval workflow', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF19', name:'API / third-party integration', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF21', name:'500+ products / heavy data', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF22', name:'Advanced reports / export / automation', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF23', name:'Customized loyalty program', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF24', name:'Customized delivery logic', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF25', name:'Marketplace sync', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF26', name:'Advanced returns / refund handling', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF27', name:'Wallet system', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF28', name:'Advanced stock management', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-  { id:'AF29', name:'ERP / POS integration', founderReviewRequired:true, salesCanQuote:false, defaultPrice:null },
-];
 
 /* ---------------------------------------------------------------------- */
 /* Quotation rules engine                                                  */
 /* ---------------------------------------------------------------------- */
 
-// Evaluates a draft quotation's line items + discount + manual adjustment
-// and returns whether Founder review is required, why, and the final price.
-// `items` = flat array of { name, price (number|null = TBC), founderReviewRequired, source }
+// Root-cause fix (BizWeb CRM -- Replace Founder Review with Configurable
+// Package Add-On Pricing, 2026-10-02 approval): this function no longer
+// decides whether "Founder review" is required, and no longer returns an
+// approvalStatus -- that whole workflow is removed from quotation pricing
+// (Sales discusses complex/custom pricing with Founder externally over
+// Telegram, then enters the agreed figures here). It now answers two much
+// narrower, purely content-driven questions: (1) the discount/manual-
+// adjustment Sales-authority reasons -- unchanged, informational/audit
+// only, never blocked saving even before this change -- and (2) whether
+// any INDIVIDUAL selected item (a 'manual' price type with no amount
+// entered yet) is still unpriced, which is the only thing that can make
+// the aggregate Year 1 Total show as TBC (req #7: "Avoid TBC for the
+// entire quotation... If an individual function uses Manual pricing and
+// has no amount yet, show only that item as TBC").
+// `items` = flat array of { name, price (number|null = TBC), priceType, source }
 // `discountPct`, `manualAdjustment` ({amount, reason} or null)
 function evaluateQuotation({ items, basePackage, discountPct=0, manualAdjustment=null, discountLimitPct=10 }){
   const reasons = [];
   let priceIsTBC = false;
 
   items.forEach(it=>{
-    if(it.price===null || it.price===undefined){ priceIsTBC = true; }
-    if(it.founderReviewRequired){ reasons.push(`Function "${it.name}" requires Founder review.`); }
+    if(it.price===null || it.price===undefined){
+      priceIsTBC = true;
+      reasons.push(`"${it.name}" is Manual pricing and still has no amount entered.`);
+    }
   });
-
-  if(basePackage && basePackage.founderReviewRequired){
-    reasons.push(`Package "${basePackage.name}" always requires Founder review.`);
-  }
-  if(['E-Commerce Level 3','E-Commerce Level 4','Custom Business System','Mobile App / Advanced Platform'].includes(basePackage && basePackage.projectType)){
-    reasons.push(`${basePackage.name} is above standard Sales authority.`);
-  }
 
   const subtotal = items.reduce((s,it)=> s + (it.price||0), 0);
   let discountAmt = Math.round(subtotal * (discountPct/100) * 100)/100;
@@ -870,17 +1013,13 @@ function evaluateQuotation({ items, basePackage, discountPct=0, manualAdjustment
       reasons.push('Price adjustment is missing a required reason.');
     }
     if(Math.abs(manualAdjustment.amount) > subtotal*0.10){
-      reasons.push(`Manual price adjustment of $${manualAdjustment.amount} exceeds Sales authority — Founder review required.`);
+      reasons.push(`Manual price adjustment of $${manualAdjustment.amount} is unusually large (over 10% of subtotal).`);
     }
   }
 
-  if(priceIsTBC){ reasons.push('One or more functions have no fixed price ("Price: TBC").'); }
-
-  const requiresFounderReview = reasons.length>0;
   return {
     subtotal, discountAmt, finalPrice: priceIsTBC ? null : finalPrice,
-    priceIsTBC, requiresFounderReview, reasons,
-    approvalStatus: requiresFounderReview ? 'Founder Review Required' : 'Sales Approved'
+    priceIsTBC, reasons,
   };
 }
 
@@ -1078,18 +1217,24 @@ function rowToService(row){
   return {
     id: row.id, name: row.name, projectType: row.project_type, category: row.category,
     basePrice: row.base_price, year2Price: row.year2_price, year3Price: row.year3_price,
-    salesCanQuote: row.sales_can_quote, founderReviewRequired: row.founder_review_required,
+    salesCanQuote: row.sales_can_quote,
     maxDiscountPct: row.max_discount_pct, defaultDelivery: row.default_delivery,
     status: row.status, functions: row.functions || [], isActive: row.is_active,
+    priceIsStartingFrom: !!row.price_is_starting_from,
   };
 }
 function serviceToRow(s){
   return {
     id: s.id, name: s.name, project_type: s.projectType, category: s.category,
     base_price: s.basePrice, year2_price: s.year2Price, year3_price: s.year3Price,
-    sales_can_quote: s.salesCanQuote, founder_review_required: s.founderReviewRequired,
+    sales_can_quote: s.salesCanQuote,
+    // founder_review_required stays false going forward -- the column is
+    // kept (not dropped) so this migration never risks a destructive
+    // schema change, but nothing reads it for pricing any more.
+    founder_review_required: false,
     max_discount_pct: s.maxDiscountPct, default_delivery: s.defaultDelivery,
     status: s.status, functions: s.functions || [], is_active: s.isActive !== false,
+    price_is_starting_from: !!s.priceIsStartingFrom,
   };
 }
 

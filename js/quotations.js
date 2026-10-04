@@ -57,14 +57,19 @@ function renderQuotSummaryCards(){
   const wrap = document.getElementById('quotSummaryCards');
   const list = liveQuotations();
   const draft = list.filter(q=>q.status==='Draft').length;
-  const awaiting = list.filter(q=>q.status==='Awaiting Approval').length;
+  // Root-cause fix (BizWeb CRM -- Replace Founder Review with Configurable
+  // Package Add-On Pricing): "Awaiting Approval" no longer exists as a
+  // status any quotation can reach -- replaced with a "Needs Pricing"
+  // count (Draft quotations still carrying an unresolved Manual-price
+  // item), which is the one thing that can still hold up a quotation.
+  const needsPricing = list.filter(q=>q.status==='Draft' && q.priceIsTBC).length;
   const sent = list.filter(q=>quotationDisplayStatus(q)==='Sent').length;
   const accepted = list.filter(q=>q.status==='Accepted').length;
   const totalValue = list.reduce((s,q)=> s + (Number(q.year1Total)||0), 0);
   wrap.innerHTML = `
     <div class="kpi-grid summary-cards-5" style="margin-bottom:14px">
       <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px">${draft}</div><div class="kpi-label" style="margin-top:4px">Draft</div></div>
-      <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px;color:var(--amber)">${awaiting}</div><div class="kpi-label" style="margin-top:4px">Awaiting Approval</div></div>
+      <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px;color:var(--amber)">${needsPricing}</div><div class="kpi-label" style="margin-top:4px">Needs Pricing</div></div>
       <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px;color:var(--blue)">${sent}</div><div class="kpi-label" style="margin-top:4px">Sent</div></div>
       <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px;color:var(--green)">${accepted}</div><div class="kpi-label" style="margin-top:4px">Accepted</div></div>
       <div class="kpi-card" style="padding:12px 14px"><div class="kpi-value" style="font-size:20px">${moneyPrecise(totalValue)}</div><div class="kpi-label" style="margin-top:4px">Total Quoted Value</div></div>
@@ -552,7 +557,7 @@ function qcAnnualYearTotal(yr){
 // stale totals").
 function qcComputeQuoteTotals(s){
   const svc = serviceByProjectType(s.packageKey);
-  const activeItems = s.items.filter(i=>i.included!==false).map(i=>({name:i.name, price:i.price, founderReviewRequired:i.founderReviewRequired}));
+  const activeItems = s.items.filter(i=>i.included!==false).map(i=>({name:i.name, price:i.price, priceType:i.priceType}));
   const evalRes = evaluateQuotation({
     items: activeItems, basePackage: svc, discountPct: Number(s.discountPct)||0,
     manualAdjustment: s.adjustment ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
@@ -737,9 +742,18 @@ function selectPackageOnQC(projectType){
   QC_STATE.annualCost = defaultAnnualCostState(svc);
   if(!svc){ QC_STATE.items = []; QC_STATE.exclusions = []; return; }
   const baseItem = { id: fnId(), module: svc.category, name: `${svc.shortName || svc.name} (Base Package${svc.priceIsStartingFrom?' — starting from':''})`,
-    price: svc.basePrice, founderReviewRequired: svc.founderReviewRequired, included: true };
+    price: svc.basePrice, priceType:'included', editableOnQuotation:false, included: true };
+  // Root-cause fix (BizWeb CRM -- Replace Founder Review with Configurable
+  // Package Add-On Pricing): each function now keeps its OWN priceType
+  // instead of a founder-review flag -- 'included' functions are bundled
+  // at $0, 'fixed' functions start at their configured default amount,
+  // 'manual' functions start at null (shown as TBC until Sales enters the
+  // agreed figure) -- and starts selected/unselected per the package's own
+  // `defaultSelected`, not forced on for every function.
   const fnItems = svc.functions.map(f=>({ id:fnId(), module: svc.category, name:f.name,
-    price: f.defaultPrice===null ? null : 0, founderReviewRequired: f.founderReviewRequired, included: f.included }));
+    price: f.priceType==='included' ? 0 : f.defaultPrice,
+    priceType: f.priceType, editableOnQuotation: f.editableOnQuotation,
+    included: f.defaultSelected }));
   QC_STATE.items = [baseItem, ...fnItems];
   // Package-specific exclusions (APPROVED FINAL, 2026-09-13, Section E) take
   // priority over the generic per-type template — see PACKAGE_SPECIFIC_
@@ -768,7 +782,7 @@ function renderCreateQuotationModal(){
 
   const s = QC_STATE;
   const svc = serviceByProjectType(s.packageKey);
-  const activeItems = s.items.filter(i=>i.included!==false).map(i=>({name:i.name, price:i.price, founderReviewRequired:i.founderReviewRequired}));
+  const activeItems = s.items.filter(i=>i.included!==false).map(i=>({name:i.name, price:i.price, priceType:i.priceType}));
   const evalRes = evaluateQuotation({
     items: activeItems, basePackage: svc, discountPct: Number(s.discountPct)||0,
     manualAdjustment: s.adjustment ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
@@ -833,7 +847,7 @@ function renderCreateQuotationModal(){
               <label class="required">Package (from Service Price List)</label>
               <select id="cq_package" class="sel" style="width:100%">
                 <option value="">Select a package…</option>
-                ${SERVICE_PRICE_LIST.map(p=>`<option value="${p.projectType}" ${s.packageKey===p.projectType?'selected':''}>${p.name} — ${p.priceIsStartingFrom?'from ':''}$${p.basePrice}${p.salesCanQuote?'':' (Founder Review)'}</option>`).join('')}
+                ${(DB.all('services').length?DB.all('services'):SERVICE_PRICE_LIST).map(p=>`<option value="${p.projectType}" ${s.packageKey===p.projectType?'selected':''}>${p.name} — ${p.priceIsStartingFrom?'from ':''}$${p.basePrice}</option>`).join('')}
               </select>
             </div>
             <div class="form-field"><label>Project Code <span class="field-auto-badge">Auto</span></label><input value="${escapeHtml(s.projectCode||'Assigned when quotation is sent to a Pipeline project')}" readonly></div>
@@ -899,7 +913,7 @@ function renderCreateQuotationModal(){
             </div>
           </div>` : `<div id="cq_adjustmentsBody" ${s._showAdjustments?'':'hidden'} style="margin-top:10px"><input value="Discount 0% — not permitted for your role" readonly class="field-locked"></div>`}
 
-          <div id="cq_authorityBanner">${authorityBannerHtml({...totals.evalRes, finalPrice: totals.year1Total})}</div>
+          <div id="cq_authorityBanner">${pricingNotesHtml({...totals.evalRes, finalPrice: totals.year1Total})}</div>
         </div>
 
         <div class="qc-preview-col" ${QC_TAB!=='preview'?'data-hide-narrow="1"':''}>
@@ -1052,7 +1066,7 @@ function renderCreateQuotationModal(){
     };
 
     overlay.querySelector('#cq_addFn').onclick = ()=> openAddQuotationFunctionModal((fnDef)=>{
-      s.items.push({ id: fnId(), module:'Add-on', name: fnDef.name, price: fnDef.defaultPrice, founderReviewRequired: fnDef.founderReviewRequired, included:true });
+      s.items.push({ id: fnId(), module:'Add-on', name: fnDef.name, price: fnDef.defaultPrice, priceType: fnDef.priceType||'manual', editableOnQuotation: fnDef.editableOnQuotation!==undefined?fnDef.editableOnQuotation:(fnDef.priceType==='manual'), included:true });
       renderCreateQuotationModal();
     });
     wireQuotationItemsEditor(overlay, s);
@@ -1082,7 +1096,7 @@ function refreshQcPreview(overlay){
   // protection immediately rather than only after the next full remount.
   qcSetBeforeUnloadGuard(qcIsDirty());
   const totals = qcComputeQuoteTotals(s);
-  overlay.querySelector('#cq_authorityBanner').innerHTML = authorityBannerHtml({...totals.evalRes, finalPrice: totals.year1Total});
+  overlay.querySelector('#cq_authorityBanner').innerHTML = pricingNotesHtml({...totals.evalRes, finalPrice: totals.year1Total});
   // Keep the three per-year mini totals in the Annual Cost Breakdown panel
   // itself live too (spec §29: "no stale totals") — every other field in
   // that section already routes through this same function.
@@ -1144,17 +1158,21 @@ function qcWireResize(overlay){
   window.addEventListener('resize', QC_RESIZE_HANDLER);
 }
 
-function authorityBannerHtml(evalRes){
-  if(evalRes.requiresFounderReview){
-    return `<div class="panel" style="border-color:var(--orange,#d98a12);background:#fff8ec;padding:12px 14px;margin-top:12px">
-      <strong style="color:#a56206">⚠ Founder Review Required</strong>
-      <ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px;color:var(--navy)">${evalRes.reasons.map(r=>`<li>${escapeHtml(r)}</li>`).join('')}</ul>
-      <div style="margin-top:8px;font-size:13px">Estimated Year 1 Total: <b>${evalRes.priceIsTBC?'TBC':moneyPrecise(evalRes.finalPrice)}</b></div>
-    </div>`;
-  }
-  return `<div class="panel" style="border-color:var(--green,#12a775);background:#eefaf4;padding:12px 14px;margin-top:12px">
-    <strong style="color:#0d8a5f">✓ Within Sales Quoting Authority</strong>
-    <div style="margin-top:8px;font-size:13px">Year 1 Total: <b>${moneyPrecise(evalRes.finalPrice)}</b> ${evalRes.discountAmt?`(after ${moneyPrecise(evalRes.discountAmt)} discount)`:''}</div>
+// Root-cause fix (BizWeb CRM -- Replace Founder Review with Configurable
+// Package Add-On Pricing): replaces the old "Founder Review Required" /
+// "Within Sales Quoting Authority" approval-gate banner. Sales no longer
+// needs anyone's permission to build or send ANY package/quotation --
+// this is now purely informational: it lists any items still needing a
+// Manual price, or an above-limit discount/adjustment note, with no
+// blocking implication. Shows nothing at all once there's nothing to
+// flag.
+function pricingNotesHtml(evalRes){
+  if(!evalRes.reasons || !evalRes.reasons.length) return '';
+  const tbc = evalRes.priceIsTBC;
+  return `<div class="panel" style="border-color:${tbc?'var(--orange,#d98a12)':'var(--blue,#1d7bff)'};background:${tbc?'#fff8ec':'#eef4ff'};padding:12px 14px;margin-top:12px">
+    <strong style="color:${tbc?'#a56206':'#1d4ed8'}">${tbc?'⚠ Pricing Needed':'ℹ Pricing Notes'}</strong>
+    <ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px;color:var(--navy)">${evalRes.reasons.map(r=>`<li>${escapeHtml(r)}</li>`).join('')}</ul>
+    <div style="margin-top:8px;font-size:13px">Year 1 Total: <b>${tbc?'TBC':moneyPrecise(evalRes.finalPrice)}</b></div>
   </div>`;
 }
 
@@ -1173,7 +1191,7 @@ function openAddQuotationFunctionModal(onPick){
         <label>A. Add Existing Function</label>
         <select id="afq_pick" class="sel" style="width:100%">
           <option value="">Select a function…</option>
-          ${ADDITIONAL_FUNCTIONS_CATALOG.map(a=>`<option value="${a.id}">${escapeHtml(a.name)} — ${a.defaultPrice===null?'TBC (Founder review)':'$'+a.defaultPrice}</option>`).join('')}
+          ${ADDITIONAL_FUNCTIONS_CATALOG.map(a=>`<option value="${a.id}">${escapeHtml(a.name)} — ${a.priceType==='manual'?'Manual (enter amount)':'$'+a.defaultPrice}</option>`).join('')}
         </select>
       </div>
       <div class="flex-row" style="justify-content:center;margin:10px 0"><span class="text-muted" style="font-size:11.5px;font-weight:700;letter-spacing:.4px">OR</span></div>
@@ -1181,7 +1199,7 @@ function openAddQuotationFunctionModal(onPick){
         <label>B. Add Custom Function</label>
         <input id="afq_custom" placeholder="Custom item name — e.g. Loyalty points system">
       </div>
-      <p class="text-muted" style="font-size:11.5px;margin:8px 0 0">Pick one option — a custom item always requires Founder review (price shows as TBC), matching the spec's advanced-feature warning (OTP, Payment Gateway, Mobile App, Multi-Branch, Advanced API Integration, Custom Workflow, etc.).</p>
+      <p class="text-muted" style="font-size:11.5px;margin:8px 0 0">Pick one option — a custom item is always Manual pricing (enter the amount agreed with Founder/client; shows as TBC until you do).</p>
     </div>
     <div class="modal-foot">
       <button class="btn btn-secondary" id="afqCancel">Cancel</button>
@@ -1217,13 +1235,21 @@ function openAddQuotationFunctionModal(onPick){
         closeChildModal(); onPick(def); return;
       }
       if(custom){
-        closeChildModal(); onPick({ name: custom, defaultPrice: null, founderReviewRequired: true }); return;
+        closeChildModal(); onPick({ name: custom, defaultPrice: null, priceType:'manual', editableOnQuotation:true }); return;
       }
       toast('Pick an item from the catalog, or type a custom one.', 'error');
     };
   }});
 }
 
+// Root-cause fix (BizWeb CRM -- Replace Founder Review with Configurable
+// Package Add-On Pricing): a 'manual' (or any editableOnQuotation) item
+// now gets a real, live amount input right in this editor -- previously
+// NO price was ever editable here for ANY role, which is why a TBC price
+// could only ever be resolved through the old Founder-approval detour.
+// Entering a value fires an immediate full recompute (req #7: "Once an
+// amount is entered, recalculate immediately"); clearing it goes back to
+// TBC for that one item only, never the whole quotation.
 function quotationItemsEditorHtml(items){
   if(!items.length) return `<div class="empty-row">Select a package to load its included scope items.</div>`;
   return `
@@ -1231,14 +1257,21 @@ function quotationItemsEditorHtml(items){
       <table class="data-table qc-mini-table">
         <thead><tr><th>Include</th><th>Module</th><th>Item</th><th>Price</th><th></th></tr></thead>
         <tbody>
-          ${items.map(it=>`
+          ${items.map(it=>{
+            const isTbc = it.price===null || it.price===undefined;
+            const canEditPrice = it.included!==false && (it.priceType==='manual' || it.editableOnQuotation);
+            const priceCell = canEditPrice
+              ? `<input type="number" step="0.01" data-price="${it.id}" value="${isTbc?'':it.price}" placeholder="${isTbc?'Enter amount':''}" style="width:100px">`
+              : (isTbc ? 'TBC' : moneyPrecise(it.price));
+            return `
             <tr data-item="${it.id}">
               <td><input type="checkbox" data-inc="${it.id}" ${it.included!==false?'checked':''}></td>
               <td>${escapeHtml(it.module)}</td>
-              <td>${escapeHtml(it.name)}${it.founderReviewRequired?' <span class="badge chip-overdue" style="margin-left:4px">Founder Review</span>':''}</td>
-              <td>${it.price===null||it.price===undefined?'TBC':moneyPrecise(it.price)}</td>
+              <td>${escapeHtml(it.name)}${isTbc && it.included!==false?' <span class="badge chip-overdue" style="margin-left:4px">Needs Price</span>':''}</td>
+              <td>${priceCell}</td>
               <td><span class="icon-btn" data-remove-item="${it.id}" title="Remove" style="font-size:15px;cursor:pointer">&times;</span></td>
-            </tr>`).join('')}
+            </tr>`;
+          }).join('')}
         </tbody>
       </table>
     </div>
@@ -1252,6 +1285,12 @@ function wireQuotationItemsEditor(overlay, s){
   });
   overlay.querySelectorAll('[data-remove-item]').forEach(x=> x.onclick = ()=>{
     s.items = s.items.filter(i=>i.id!==x.dataset.removeItem);
+    renderCreateQuotationModal();
+  });
+  overlay.querySelectorAll('[data-price]').forEach(inp=> inp.onchange = ()=>{
+    const it = s.items.find(x=>x.id===inp.dataset.price);
+    const raw = inp.value.trim();
+    it.price = raw==='' ? null : Number(raw);
     renderCreateQuotationModal();
   });
 }
@@ -1412,7 +1451,7 @@ function saveQuotationFromState(s){
   const svc = serviceByProjectType(s.packageKey);
   const activeItems = s.items.filter(i=>i.included!==false);
   const evalRes = evaluateQuotation({
-    items: activeItems.map(i=>({name:i.name, price:i.price, founderReviewRequired:i.founderReviewRequired})),
+    items: activeItems.map(i=>({name:i.name, price:i.price, priceType:i.priceType})),
     basePackage: svc, discountPct: isFounder() ? (Number(s.discountPct)||0) : 0,
     manualAdjustment: (isFounder() && s.adjustment) ? { amount:Number(s.adjustment), reason:s.adjustmentReason } : null,
     discountLimitPct: effectiveDiscountLimit(svc),
@@ -1537,18 +1576,19 @@ function saveQuotationFromState(s){
     paymentPreset: s.paymentPreset, quotationDate: s.quotationDate, validUntil: s.validUntil,
     demoLink: s.demoLink,
     demoLinks: s.demoLinks||[],
-    items: activeItems.map(i=>({ id:i.id, module:i.module, name:i.name, price:i.price, founderReviewRequired:i.founderReviewRequired })),
+    items: activeItems.map(i=>({ id:i.id, module:i.module, name:i.name, price:i.price, priceType:i.priceType, editableOnQuotation:i.editableOnQuotation })),
     exclusions: s.exclusions, importantNotes: finalNotes, paymentSchedule: schedule,
     reasons: evalRes.reasons,
     status: (existing && existing.status==='Draft') ? existing.status : 'Draft',
-    // Root-cause fix (Founder approval-bypass audit): a Founder's own
-    // review authority is already satisfied the moment THEY save this
-    // quotation -- they are the approver, so asking them to submit to
-    // themselves is pure friction, not a real control. Every non-Founder
-    // role is untouched: they still get evalRes.approvalStatus exactly as
-    // computed, so approval is still required whenever the package/
-    // discount/adjustment calls for it.
-    approvalStatus: isFounder() ? 'Founder Approved' : evalRes.approvalStatus,
+    // Root-cause fix (BizWeb CRM -- Replace Founder Review with
+    // Configurable Package Add-On Pricing, 2026-10-02 approval): the
+    // Founder-approval workflow is removed from quotation pricing
+    // entirely -- there is no more approvalStatus field at all. Sales
+    // discusses complex/custom pricing with Founder externally (Telegram)
+    // and enters the agreed configuration directly; the only thing that
+    // can still make a quotation incomplete is an unresolved Manual-price
+    // item (see priceIsTBC below), which is a pricing-completeness state,
+    // never an approval gate.
     createdBy, approvedBy: existing ? existing.approvedBy : null,
     createdAt,
   };
@@ -1566,7 +1606,7 @@ function saveQuotationFromState(s){
   logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId: quotation.id, refLabel:`${quotation.quoteNumber} — ${quotation.businessName||quotation.clientName}`,
     type: (s.editingId && !isNewRevision) ? 'Quotation Updated' : 'Quotation Created',
     description: `${CURRENT_USER.name} ${(s.editingId && !isNewRevision)?'updated':(isNewRevision?'created revision v'+version+' of':'created')} quotation ${quotation.quoteNumber}. Year 1 Total: ${evalRes.priceIsTBC?'TBC':moneyPrecise(year1Total)}.`,
-    remark: evalRes.requiresFounderReview ? 'Founder review required.' : null });
+    remark: evalRes.priceIsTBC ? 'One or more items still need a Manual price.' : null });
 
   toast(`Quotation ${quotation.quoteNumber} saved as Draft.`, 'success');
   // Ends unsaved-changes tracking (resets the dirty baseline, removes the
@@ -1644,7 +1684,6 @@ function openQuotationDetailModal(id){
   if(!q){ toast('Quotation not found.', 'error'); return; }
   const acts = activitiesFor(id);
   const displayStatus = quotationDisplayStatus(q);
-  const withinAuthority = q.approvalStatus==='Sales Approved' || q.approvalStatus==='Founder Approved';
   const history = versionHistoryFor(q);
   const linkedProject = q.projectCode ? DB.find('projects', q.projectCode) : null;
 
@@ -1658,7 +1697,7 @@ function openQuotationDetailModal(id){
         <div class="flex-row" style="gap:8px;flex-wrap:wrap">${statusBadge(displayStatus)}${q.approvalStatus?statusBadge(q.approvalStatus):''}</div>
         <div class="flex-row" style="flex-wrap:wrap;gap:8px" id="qdActions"></div>
       </div>
-      ${q.reasons && q.reasons.length ? authorityBannerHtml({ requiresFounderReview: q.approvalStatus==='Founder Review Required', reasons:q.reasons, priceIsTBC:q.priceIsTBC, finalPrice:q.year1Total }) : ''}
+      ${pricingNotesHtml({ reasons:q.reasons, priceIsTBC:q.priceIsTBC, finalPrice:q.year1Total })}
 
       <div class="two-col" style="margin-top:14px">
         <div>
@@ -1723,25 +1762,16 @@ function openQuotationDetailModal(id){
     btns.push(`<button class="btn btn-outline btn-sm" id="qaPreview">Preview</button>`);
     btns.push(`<button class="btn btn-outline btn-sm" id="qaPdf">Download PDF</button>`);
 
+    // Root-cause fix (BizWeb CRM -- Replace Founder Review with
+    // Configurable Package Add-On Pricing, 2026-10-02 approval): the
+    // entire Submit for Approval / Awaiting Approval / Approve workflow
+    // is removed. Draft always offers Mark as Sent directly, for every
+    // role -- markAsSent() itself still blocks (with a clear message)
+    // while any item is unpriced (req #7), so nothing can ship with a
+    // silent $0 in place of a real amount.
     if(q.status==='Draft'){
       btns.push(`<button class="btn btn-ghost btn-sm" id="qaEdit">Edit</button>`);
-      if(withinAuthority){
-        // Root-cause fix (Year 1 Total audit): approval authority
-        // (withinAuthority) and price resolution (priceIsTBC) are two
-        // separate gates. A TBC quotation must never reach "Mark as
-        // Sent" with no fixed price -- it still needs the one real
-        // price-entry mechanism the app has (openFounderReviewModal),
-        // just reached directly instead of via a pointless Awaiting
-        // Approval parking stop.
-        if(q.priceIsTBC) btns.push(`<button class="btn btn-primary btn-sm" id="qaApprove">Confirm Final Price</button>`);
-        else btns.push(`<button class="btn btn-primary btn-sm" id="qaSend">Mark as Sent</button>`);
-      } else {
-        btns.push(`<button class="btn btn-primary btn-sm" id="qaSubmit">Submit for Approval</button>`);
-      }
-    }
-    if(q.status==='Awaiting Approval' && isFounder()){
-      btns.push(`<button class="btn btn-primary btn-sm" id="qaApprove">Approve</button>`);
-      btns.push(`<button class="btn btn-danger btn-sm" id="qaReject">Reject</button>`);
+      btns.push(`<button class="btn btn-primary btn-sm" id="qaSend">Mark as Sent</button>`);
     }
     if(q.status==='Approved'){
       btns.push(`<button class="btn btn-primary btn-sm" id="qaSend">Mark as Sent</button>`);
@@ -1767,16 +1797,10 @@ function openQuotationDetailModal(id){
     // saves (saveQuotationFromState only ever runs on an explicit Save
     // click, never as a side effect of opening/closing this form).
     if(editBtn) editBtn.onclick = ()=>{ QC_STATE = loadStateFromQuotation(q); QC_STATE.projectCode = q.projectCode; QC_TAB='edit'; qcArmDirtyTracking(); renderCreateQuotationModal(); };
-    const submitBtn = overlay.querySelector('#qaSubmit');
-    if(submitBtn) submitBtn.onclick = ()=> submitForApproval(q.id);
     const sendBtn = overlay.querySelector('#qaSend');
     if(sendBtn) sendBtn.onclick = ()=> markAsSent(q.id);
-    const approveBtn = overlay.querySelector('#qaApprove');
-    if(approveBtn) approveBtn.onclick = ()=> openFounderReviewModal(q.id, 'approve');
-    const rejectBtn = overlay.querySelector('#qaReject');
-    if(rejectBtn) rejectBtn.onclick = ()=> openFounderReviewModal(q.id, 'reject');
     const reject2Btn = overlay.querySelector('#qaReject2');
-    if(reject2Btn) reject2Btn.onclick = ()=> openFounderReviewModal(q.id, 'reject');
+    if(reject2Btn) reject2Btn.onclick = ()=> openRejectQuotationModal(q.id);
     const acceptBtn = overlay.querySelector('#qaAccept');
     if(acceptBtn) acceptBtn.onclick = ()=> markAsAccepted(q.id);
     const convertBtn = overlay.querySelector('#qaConvert');
@@ -1784,22 +1808,11 @@ function openQuotationDetailModal(id){
   }});
 }
 
-function submitForApproval(id){
-  const q = DB.find('quotations', id);
-  q.status = 'Awaiting Approval';
-  DB.upsert('quotations', q);
-  logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
-    type:'Quotation Submitted for Approval', description:`${CURRENT_USER.name} submitted quotation ${q.quoteNumber} for Founder approval.`,
-    fromValue:'Draft', toValue:'Awaiting Approval' });
-  toast('Submitted for Founder approval.', 'success');
-  openQuotationDetailModal(id);
-  if(currentRoute()==='quotations'){ renderQuotSummaryCards(); renderQuotTable(); }
-}
-
 function markAsSent(id){
   const q = DB.find('quotations', id);
   if(q.priceIsTBC){
-    toast('This quotation still has no fixed Year 1 Total — use "Confirm Final Price" before marking it as sent.', 'error');
+    const unresolved = (q.items||[]).filter(it=> it.included!==false && (it.price===null||it.price===undefined)).map(it=>it.name);
+    toast(`Enter a price for: ${unresolved.join(', ')} — before marking this quotation as sent.`, 'error');
     return;
   }
   q.status = 'Sent';
@@ -1812,19 +1825,19 @@ function markAsSent(id){
   if(currentRoute()==='quotations'){ renderQuotSummaryCards(); renderQuotTable(); }
 }
 
-function openFounderReviewModal(id, mode){
+// Client-facing rejection only (Sent -> Rejected, the client declined) --
+// this is NOT the old Founder-approval reject, which no longer exists.
+function openRejectQuotationModal(id){
   const q = DB.find('quotations', id);
-  const titles = { approve:'Approve Quotation', reject:'Reject Quotation' };
   const html = `
-    <div class="modal-head"><h3>${titles[mode]}</h3><button class="modal-close" id="frClose">&times;</button></div>
+    <div class="modal-head"><h3>Mark as Rejected</h3><button class="modal-close" id="frClose">&times;</button></div>
     <div class="modal-body">
       <p class="text-muted" style="margin-top:0;font-size:13px">${q.quoteNumber} — ${escapeHtml(q.businessName||q.clientName)}</p>
-      ${mode==='approve' ? `<div class="form-field" style="margin-bottom:12px"><label>Edit Year 1 Total (optional)</label><input type="number" id="fr_price" value="${q.priceIsTBC?'':q.year1Total}" placeholder="Leave blank to approve as quoted"></div>` : ''}
-      <div class="form-field"><label class="required">Review Note</label><textarea id="fr_comment" placeholder='e.g. "Price approved at $899." or "Rejected — scope needs revision."'></textarea></div>
+      <div class="form-field"><label class="required">Reason</label><textarea id="fr_comment" placeholder='e.g. "Client declined — budget." or "Client chose another vendor."'></textarea></div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-secondary" id="frCancel">Cancel</button>
-      <button class="btn ${mode==='reject'?'btn-danger':'btn-primary'}" id="frSave">${mode==='approve'?'Approve':'Reject'}</button>
+      <button class="btn btn-danger" id="frSave">Reject</button>
     </div>
   `;
   openModal(html, { onMount:(overlay)=>{
@@ -1832,50 +1845,13 @@ function openFounderReviewModal(id, mode){
     overlay.querySelector('#frCancel').onclick = closeModal;
     overlay.querySelector('#frSave').onclick = ()=>{
       const comment = overlay.querySelector('#fr_comment').value.trim();
-      if(!comment){ toast('A review note is required.', 'error'); return; }
-      const priceInput = overlay.querySelector('#fr_price');
-      // Snapshot BEFORE mutating q.status below -- this modal is now reached
-      // from two different prior states (Awaiting Approval via the normal
-      // submit flow, or Draft directly via a Founder's own "Confirm Final
-      // Price"), so the activity log's fromValue must reflect whichever one
-      // actually happened, not be hardcoded to the old single path.
+      if(!comment){ toast('A reason is required.', 'error'); return; }
       const previousStatus = q.status;
-      if(mode==='approve'){
-        if(priceInput && priceInput.value){
-          q.year1Total = Number(priceInput.value);
-          q.priceIsTBC = false;
-          // Recalculate — the stored payment schedule was built at save
-          // time off whatever year1Total existed then (0, for a TBC
-          // quote); re-derive it from the SAME stage percentages against
-          // the newly-confirmed total so deposit/remaining balance are
-          // correct immediately, not stale.
-          q.paymentSchedule = computePaymentSchedule(
-            q.year1Total,
-            q.paymentPreset,
-            (q.paymentSchedule||[]).map(st=>({ label:st.label, pct:st.pct }))
-          );
-        } else if(q.priceIsTBC){
-          // Root-cause fix: a TBC quotation has no fixed price to
-          // "approve as quoted" -- a real number is required before it
-          // can ever be marked Approved/Sent.
-          toast('This quotation has no fixed price yet. Enter the final Year 1 Total to approve it.', 'error');
-          return;
-        }
-        q.approvalStatus = 'Founder Approved';
-        q.status = 'Approved';
-        q.approvedBy = CURRENT_USER.name;
-        DB.upsert('quotations', q);
-        logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
-          type:'Quotation Approved', description:`${CURRENT_USER.name} approved quotation ${q.quoteNumber} at ${moneyPrecise(q.year1Total)}.`,
-          fromValue: previousStatus, toValue:'Approved', remark: comment });
-      } else {
-        q.approvalStatus = 'Founder Rejected';
-        q.status = 'Rejected';
-        DB.upsert('quotations', q);
-        logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
-          type:'Quotation Rejected', description:`${CURRENT_USER.name} rejected quotation ${q.quoteNumber}.`,
-          fromValue: previousStatus, toValue:'Rejected', remark: comment });
-      }
+      q.status = 'Rejected';
+      DB.upsert('quotations', q);
+      logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
+        type:'Quotation Rejected', description:`${CURRENT_USER.name} marked quotation ${q.quoteNumber} as Rejected.`,
+        fromValue: previousStatus, toValue:'Rejected', remark: comment });
       closeModal();
       toast('Saved.', 'success');
       openQuotationDetailModal(id);
