@@ -149,47 +149,79 @@ function generateReceiptForPayment(paymentId, onDone){
       : `${CURRENT_USER.name} generated receipt ${rec.receiptNumber} for payment ${payment.paymentNumber||payment.id} (${moneyPrecise(payment.amount)}).` });
 
   toast(isReissue ? 'Receipt reissued.' : 'Receipt generated.', 'success');
+  if(payment.invoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(payment.invoiceId);
   if(onDone) onDone(rec);
   refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
   openReceiptPreview(rec.id, false);
 }
 
 /* ---------------------------------------------------------------------- */
-/* Cancel Receipt — Founder/Admin only. Never touches the underlying       */
-/* payment — cancelling a receipt is purely a document-lifecycle action.   */
-/* Re-issuing after a real payment-amount correction is a controlled       */
-/* workflow: cancel the old receipt, then Generate Receipt again.          */
+/* Void Receipt — Founder/Admin only (canCancelReceipt()). A void requires  */
+/* a reason (enforced here too, not just in the modal, so no call site can  */
+/* skip it), and ALSO voids the underlying payment — this is the one lever  */
+/* that correctly removes a voided receipt's money from EVERY active        */
+/* financial total at once (spec: "Voided receipts must not count toward    */
+/* any active financial total" — Invoice Received/Status/Balance, Project   */
+/* Received Amount, Project Financial Summary, Dashboard Collected Revenue, */
+/* and Sales Performance's Collected/commission-basis column ALL already    */
+/* key off payment.voided — see totalPaidForProject()/paymentsForProject()  */
+/* in js/data.js and js/dashboard.js's Collected Revenue). Neither the       */
+/* receipt nor the payment is ever hard-deleted — both stay in their tables  */
+/* permanently, visible in Receipts history / Activity Log / receipt detail,*/
+/* with who voided it and when recorded on the receipt itself.              */
+/* A genuine correction after a void is a NEW payment + NEW receipt (the     */
+/* voided payment can no longer receive a fresh receipt — see the voided    */
+/* check at the top of generateReceiptForPayment() above) — never a reissue  */
+/* of the same payment, since that payment's money is now void.             */
 /* ---------------------------------------------------------------------- */
 function cancelReceipt(receiptId, reason){
   const rec = DB.find('receipts', receiptId);
   if(!rec) return null;
+  reason = (reason||'').trim();
+  if(!reason){ toast('A void reason is required.', 'error'); return null; }
   rec.status = 'Cancelled';
   rec.cancelledBy = CURRENT_USER.name;
   rec.cancelledAt = new Date().toISOString();
-  rec.cancelReason = reason || '';
+  rec.cancelReason = reason;
   DB.upsert('receipts', rec);
+  // Void the underlying payment too (spec: exclude from every active total,
+  // not just this invoice) — same voidedBy/reason, via the exact same
+  // voidPaymentEntry() every other "void a payment" path in the app uses
+  // (js/data.js), so Dashboard/Projects/Payments/Sales Performance all see
+  // it the instant this receipt is voided, with no separate total to drift.
+  const linkedPayment = rec.paymentId ? DB.find('payments', rec.paymentId) : null;
+  if(linkedPayment && !linkedPayment.voided && typeof voidPaymentEntry==='function'){
+    voidPaymentEntry(linkedPayment.id, { voidedBy: CURRENT_USER.name, reason: `Receipt ${rec.receiptNumber} voided: ${reason}` });
+  }
+  // Voiding a receipt must immediately recompute its invoice's Total Paid /
+  // Balance / Status (spec: "Voided receipts must ... update invoice
+  // balance/status again") — invoicePaymentsFor() excludes this payment the
+  // moment its only active receipt is gone (and now also because the
+  // payment itself is voided), so this recalculation is what actually moves
+  // the invoice back to e.g. Partially Paid.
+  if(linkedPayment && linkedPayment.invoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(linkedPayment.invoiceId);
   // Logged here (not by the caller) so every path to cancellation — the modal
   // below, or any future direct call — is captured exactly once, matching
   // generateReceiptForPayment's self-contained logging.
   logActivity({ userName: CURRENT_USER.name, refType:'project', refId: rec.projectCode||rec.id, refLabel: rec.receiptNumber,
-    type:'Receipt Cancelled', description:`${CURRENT_USER.name} cancelled receipt ${rec.receiptNumber}. Reason: ${rec.cancelReason||'—'}` });
+    type:'Receipt Voided', description:`${CURRENT_USER.name} voided receipt ${rec.receiptNumber}. Reason: ${rec.cancelReason||'—'}` });
   return rec;
 }
 
 function openCancelReceiptModal(id, onDone){
   const rec = DB.find('receipts', id);
   if(!rec) return;
-  if(!canCancelReceipt()){ toast('Only Founder/Admin can cancel a receipt.', 'error'); return; }
+  if(!canCancelReceipt()){ toast('Only Founder/Admin can void a receipt.', 'error'); return; }
   const html = `
-    <div class="modal-head"><h3>Cancel Receipt</h3><button class="modal-close" id="rcxClose">&times;</button></div>
+    <div class="modal-head"><h3>Void Receipt</h3><button class="modal-close" id="rcxClose">&times;</button></div>
     <div class="modal-body">
-      <p style="margin-top:0">Cancel receipt <b>${escapeHtml(rec.receiptNumber)}</b>?</p>
-      <p class="text-muted" style="font-size:12.5px">This does not affect the underlying payment record — the payment stays in the ledger untouched. If the payment amount needs correcting, cancel this receipt and generate a new one afterward (never edit an issued receipt's amount in place).</p>
+      <p style="margin-top:0">Void receipt <b>${escapeHtml(rec.receiptNumber)}</b>?</p>
+      <p class="text-muted" style="font-size:12.5px">This also voids the underlying payment — both stay permanently visible in Receipts history and the Activity Log (never hard-deleted), but neither counts toward the invoice or project's received total, Dashboard Collected Revenue, or Sales Performance anymore, and the invoice's balance/status updates immediately. If the payment amount needs correcting, void this receipt and record a brand-new payment afterward (never edit an issued receipt's amount in place).</p>
       <div class="form-field"><label class="required">Reason</label><textarea id="rcx_reason" placeholder="e.g. Issued in error, amount needs correcting…"></textarea></div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-secondary" id="rcxCancel">Back</button>
-      <button class="btn btn-danger" id="rcxConfirm">Cancel Receipt</button>
+      <button class="btn btn-danger" id="rcxConfirm">Void Receipt</button>
     </div>
   `;
   openModal(html, { onMount:(overlay)=>{
@@ -199,7 +231,7 @@ function openCancelReceiptModal(id, onDone){
       const reason = overlay.querySelector('#rcx_reason').value.trim();
       if(!reason){ toast('Please provide a reason.', 'error'); return; }
       cancelReceipt(rec.id, reason);
-      toast('Receipt cancelled.', 'success');
+      toast('Receipt voided.', 'success');
       closeModal();
       if(onDone) onDone();
       refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
@@ -247,6 +279,9 @@ function renderReceiptsPage(){
   const el = document.getElementById('pageContent');
   const projects = DB.all('projects');
   el.innerHTML = `
+    <div class="flex-row" style="justify-content:flex-end;margin-bottom:14px">
+      <button class="btn btn-primary btn-sm" id="rcpRecordBtn">+ Record Receipt</button>
+    </div>
     <div class="filters-bar" style="margin-bottom:16px">
       <select id="rcpFltDate" class="sel">
         <option value="all" ${RCP_FILTER_STATE.date==='all'?'selected':''}>All Time</option>
@@ -260,11 +295,11 @@ function renderReceiptsPage(){
       </select>
       <select id="rcpFltType" class="sel">
         <option value="">All Payment Types</option>
-        ${PAYMENT_TYPES.map(t=>`<option value="${t}" ${RCP_FILTER_STATE.paymentType===t?'selected':''}>${t}</option>`).join('')}
+        ${PAYMENT_TYPES_ALL.map(t=>`<option value="${t}" ${RCP_FILTER_STATE.paymentType===t?'selected':''}>${t}</option>`).join('')}
       </select>
       <select id="rcpFltMethod" class="sel">
         <option value="">All Payment Methods</option>
-        ${PAYMENT_METHODS.map(m=>`<option value="${m}" ${RCP_FILTER_STATE.paymentMethod===m?'selected':''}>${m}</option>`).join('')}
+        ${PAYMENT_METHODS_ALL.map(m=>`<option value="${m}" ${RCP_FILTER_STATE.paymentMethod===m?'selected':''}>${m}</option>`).join('')}
       </select>
       <div class="search-box">
         ${icon('search')}
@@ -273,6 +308,7 @@ function renderReceiptsPage(){
     </div>
     <div id="rcpTableWrap"></div>
   `;
+  document.getElementById('rcpRecordBtn').onclick = ()=> openRecordReceiptModal(()=> renderRcpTable());
   document.getElementById('rcpFltDate').onchange = (e)=>{ RCP_FILTER_STATE.date=e.target.value; renderRcpTable(); };
   document.getElementById('rcpFltProject').onchange = (e)=>{ RCP_FILTER_STATE.project=e.target.value; renderRcpTable(); };
   document.getElementById('rcpFltType').onchange = (e)=>{ RCP_FILTER_STATE.paymentType=e.target.value; renderRcpTable(); };
@@ -319,6 +355,20 @@ function renderRcpTable(){
   const wrap = document.getElementById('rcpTableWrap');
   if(!wrap) return;
   const rows = filteredReceipts();
+  // True empty state (spec: "Empty state") — ZERO receipts exist at all,
+  // regardless of filters. A filtered-to-empty result (receipts DO exist,
+  // just none match the current filters) keeps the old, filter-specific
+  // copy below instead.
+  const noReceiptsAtAll = DB.all('receipts').length === 0;
+  const emptyRowHtml = noReceiptsAtAll
+    ? `<tr><td colspan="11"><div class="empty-row" style="text-align:center;padding:28px 12px">
+         <p style="margin:0 0 14px">No receipts recorded yet.<br>Record payment from an invoice or create a project receipt.</p>
+         <div class="flex-row" style="justify-content:center;gap:8px">
+           <button class="btn btn-primary btn-sm" id="rcpEmptyRecord">Record Receipt</button>
+           <button class="btn btn-secondary btn-sm" id="rcpEmptyViewInvoices">View Invoices</button>
+         </div>
+       </div></td></tr>`
+    : `<tr><td colspan="11"><div class="empty-row">No receipts match the current filters.</div></td></tr>`;
   wrap.innerHTML = `
     <div class="panel">
       <div class="panel-head"><h3>Receipts</h3><span class="text-muted" style="font-size:12px">${rows.length} receipt${rows.length===1?'':'s'}</span></div>
@@ -348,11 +398,11 @@ function renderRcpTable(){
                   <td>
                     <div class="flex-row" style="gap:2px;flex-wrap:wrap">
                       <button class="btn btn-ghost btn-sm" data-view="${r.id}">View</button>
-                      <button class="btn btn-ghost btn-sm" data-pdf="${r.id}">PDF</button>
-                      ${r.status==='Issued' && canCancelReceipt() ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" data-cancel="${r.id}">Cancel</button>` : ''}
+                      <button class="btn btn-ghost btn-sm" data-pdf="${r.id}">Print / Download Receipt</button>
+                      ${r.status==='Issued' && canCancelReceipt() ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" data-cancel="${r.id}">Void</button>` : ''}
                     </div>
                   </td>
-                </tr>`).join('') : `<tr><td colspan="11"><div class="empty-row">No receipts match the current filters.</div></td></tr>`}
+                </tr>`).join('') : emptyRowHtml}
             </tbody>
           </table>
         </div>
@@ -362,6 +412,10 @@ function renderRcpTable(){
   wrap.querySelectorAll('[data-view]').forEach(x=> x.onclick = ()=> openReceiptPreview(x.dataset.view, false));
   wrap.querySelectorAll('[data-pdf]').forEach(x=> x.onclick = ()=> openReceiptPreview(x.dataset.pdf, true));
   wrap.querySelectorAll('[data-cancel]').forEach(x=> x.onclick = ()=> openCancelReceiptModal(x.dataset.cancel, ()=> renderRcpTable()));
+  const emptyRecordBtn = wrap.querySelector('#rcpEmptyRecord');
+  if(emptyRecordBtn) emptyRecordBtn.onclick = ()=> openRecordReceiptModal(()=> renderRcpTable());
+  const emptyViewInvoicesBtn = wrap.querySelector('#rcpEmptyViewInvoices');
+  if(emptyViewInvoicesBtn) emptyViewInvoicesBtn.onclick = ()=>{ window.location.hash = '#invoices'; };
 }
 
 /* ---------------------------------------------------------------------- */
@@ -524,5 +578,98 @@ function openReceiptPreview(id, autoPrint=false){
       if(pc) pc.textContent = `${pageCount} page${pageCount===1?'':'s'}`;
       if(autoPrint) printQuoteDocFromContainer(body);
     });
+  }});
+}
+
+/* ---------------------------------------------------------------------- */
+/* "+ Record Receipt" — Receipts page entry point (spec: "Receipt creation */
+/* from Receipts page"). A thin selection wizard only: it never records a   */
+/* payment or generates a receipt itself — once the project (and, for Mode  */
+/* 1, the invoice) are chosen, it hands off to openRecordPaymentModal()      */
+/* (js/payments.js) with { autoReceipt:true }, the exact same combined      */
+/* "Record Payment & Generate Receipt" action already used from an          */
+/* Invoice's own Record Payment button — so the actual form/validation/     */
+/* overpayment-guard/receipt-generation logic is never duplicated here.     */
+/* ---------------------------------------------------------------------- */
+function openRecordReceiptModal(onDone){
+  let mode = 'invoice'; // 'invoice' | 'none'
+  let selectedProject = '';
+  let selectedInvoice = '';
+  let showAllInvoices = false;
+
+  const render = (overlay)=>{
+    const projects = DB.all('projects');
+    const outstanding = selectedProject ? outstandingInvoicesForProject(selectedProject) : [];
+    const allForProject = selectedProject ? DB.all('invoices').filter(i=> i.projectCode===selectedProject && i.status!=='Cancelled') : [];
+    const invoiceChoices = showAllInvoices ? allForProject : outstanding;
+
+    overlay.querySelector('.modal-body').innerHTML = `
+      <div class="flex-row" style="gap:8px;margin-bottom:16px">
+        <button class="btn ${mode==='invoice'?'btn-primary':'btn-secondary'} btn-sm" id="rrModeInvoice" style="flex:1">1. Against an Invoice — Recommended</button>
+        <button class="btn ${mode==='none'?'btn-primary':'btn-secondary'} btn-sm" id="rrModeNone" style="flex:1">2. Project Payment without Invoice</button>
+      </div>
+      <div class="form-field"><label class="required">Project</label>
+        <select id="rr_project">
+          <option value="">— Select Project —</option>
+          ${projects.map(p=>`<option value="${p.id}" ${selectedProject===p.id?'selected':''}>${p.id} — ${escapeHtml(p.businessName)}</option>`).join('')}
+        </select>
+      </div>
+      ${mode==='invoice' ? `
+        ${selectedProject ? (invoiceChoices.length ? `
+          <div class="form-field"><label class="required">Invoice</label>
+            <select id="rr_invoice">
+              <option value="">— Select Invoice —</option>
+              ${invoiceChoices.map(i=>`<option value="${i.id}" ${selectedInvoice===i.id?'selected':''}>${escapeHtml(i.invoiceNumber)} — Balance ${moneyPrecise(invoiceTotals(i).balance)}</option>`).join('')}
+            </select>
+          </div>
+          <label class="text-muted" style="font-size:12px;display:flex;align-items:center;gap:6px;margin:-6px 0 14px">
+            <input type="checkbox" id="rr_showAll" ${showAllInvoices?'checked':''}> Show all invoices (including fully paid)
+          </label>
+        ` : `<p class="text-muted" style="font-size:12.5px">This project has no outstanding invoices.${!outstanding.length && allForProject.length ? ' <span id="rr_showAllLink" class="cell-link">Show all invoices</span> to pick one anyway.' : ''}</p>`) : `<p class="text-muted" style="font-size:12.5px">Select a project to see its invoices.</p>`}
+      ` : `
+        <p class="text-muted" style="font-size:12px;background:rgba(217,138,18,.1);border:1px solid #d98a12;border-radius:var(--radius-sm);padding:8px 10px;margin:0 0 4px">This receipt will not be linked to an invoice. Use this only when payment was received without an invoice.</p>
+      `}
+    `;
+    overlay.querySelector('#rrModeInvoice').onclick = ()=>{ mode='invoice'; render(overlay); };
+    overlay.querySelector('#rrModeNone').onclick = ()=>{ mode='none'; selectedInvoice=''; render(overlay); };
+    overlay.querySelector('#rr_project').onchange = (e)=>{ selectedProject=e.target.value; selectedInvoice=''; showAllInvoices=false; render(overlay); };
+    const invoiceSel = overlay.querySelector('#rr_invoice');
+    if(invoiceSel) invoiceSel.onchange = (e)=>{ selectedInvoice=e.target.value; };
+    const showAllCb = overlay.querySelector('#rr_showAll');
+    if(showAllCb) showAllCb.onchange = (e)=>{ showAllInvoices=e.target.checked; render(overlay); };
+    const showAllLink = overlay.querySelector('#rr_showAllLink');
+    if(showAllLink) showAllLink.onclick = ()=>{ showAllInvoices=true; render(overlay); };
+
+    const continueBtn = overlay.querySelector('#rrContinue');
+    continueBtn.disabled = !selectedProject || (mode==='invoice' && !selectedInvoice);
+  };
+
+  const html = `
+    <div class="modal-head"><h3>Record Receipt</h3><button class="modal-close" id="rrClose">&times;</button></div>
+    <div class="modal-body"></div>
+    <div class="modal-foot">
+      <button class="btn btn-secondary" id="rrCancel">Cancel</button>
+      <button class="btn btn-primary" id="rrContinue">Continue</button>
+    </div>
+  `;
+  openModal(html, { onMount:(overlay)=>{
+    overlay.querySelector('#rrClose').onclick = closeModal;
+    overlay.querySelector('#rrCancel').onclick = closeModal;
+    render(overlay);
+    // Re-wire Continue's own handler every render() call re-renders the modal
+    // body but the modal-foot buttons are static, so this single listener
+    // (reading the closure's current mode/selectedProject/selectedInvoice at
+    // click time) stays correct across every re-render above.
+    overlay.querySelector('#rrContinue').onclick = ()=>{
+      if(!selectedProject) return;
+      if(mode==='invoice' && !selectedInvoice) return;
+      closeModal();
+      openRecordPaymentModal(
+        selectedProject,
+        onDone,
+        mode==='invoice' ? selectedInvoice : null,
+        { autoReceipt:true, forceNoInvoice: mode==='none' }
+      );
+    };
   }});
 }
