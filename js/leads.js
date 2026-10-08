@@ -312,16 +312,41 @@ function wireKpiHelpTooltips(container){
   }
 }
 
+// Root cause of "search doesn't filter the table": l.clientName.toLowerCase()
+// (and l.phone.includes(q)) ran directly on possibly-null fields — 12 of 55
+// real leads have a null client_name, 40 of 55 have a null phone (verified
+// against Supabase). The moment a search character was typed, Array.filter's
+// callback threw a TypeError on the first null-field lead it reached, which
+// aborts the WHOLE filter() call (no partial results) — so filteredLeads()
+// threw, renderLeadsTable() never reached its wrap.innerHTML reassignment,
+// and the previously-rendered FULL table stayed on screen untouched. Typing
+// looked like "search does nothing" because the page literally never
+// re-rendered; it wasn't a binding/debounce/stale-value problem.
+// Fixed by building one null-safe haystack per lead covering every field
+// the spec requires search to match (Lead ID, Client Name, Business Name,
+// Project Code, Interested Service, Industry, Sales Person, Status), plus
+// each field's human-readable label (pipelineStageLabel/serviceDisplayName/
+// industryLabel) so a search also matches the label shown on screen, not
+// only the raw stored value. Phone stays included too (it was already
+// searchable before this fix) so nothing already relied upon regresses.
+function leadSearchHaystack(l){
+  return [
+    l.id, l.clientName, l.businessName, l.phone, l.projectCode,
+    l.interestedService, serviceDisplayName(l.interestedService),
+    l.industry, industryLabel(l.industry),
+    l.assignedSales,
+    l.status, pipelineStageLabel(l.status),
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
 function filteredLeads(){
   const f = LEADS_FILTER_STATE;
   return DB.all('leads').filter(l=>{
     if(f.archiveView==='active' && l.archived) return false;
     if(f.archiveView==='archived' && !l.archived) return false;
     // f.archiveView==='all' → no filtering by archive state
-    if(f.search){
-      const q = f.search.toLowerCase();
-      if(!(l.clientName.toLowerCase().includes(q) || l.businessName.toLowerCase().includes(q) || l.phone.includes(q) || l.id.toLowerCase().includes(q))) return false;
-    }
+    const q = (f.search||'').trim().toLowerCase();
+    if(q && !leadSearchHaystack(l).includes(q)) return false;
     if(f.status && l.status!==f.status) return false;
     if(f.sales && l.assignedSales!==f.sales) return false;
     if(f.industry && l.industry!==f.industry) return false;
