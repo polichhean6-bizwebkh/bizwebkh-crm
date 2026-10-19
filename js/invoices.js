@@ -151,6 +151,133 @@ function projectPreviouslyPaid(projectCode, excludeInvoiceId){
     .filter(p=> !excludeInvoiceId || p.invoiceId !== excludeInvoiceId)
     .reduce((s,p)=> s + (Number(p.amount)||0), 0);
 }
+/* ---------------------------------------------------------------------- */
+/* Per-item payment percentage (Invoice Payment % feature).                 */
+/* Each item may carry { fullAmount, payPct } alongside the existing        */
+/* `amount` (= the amount due on THIS invoice = fullAmount x payPct/100).   */
+/* These ride inside the existing `items` jsonb column — no schema change.  */
+/* Items without them (historical invoices) are treated as 100% of their   */
+/* own amount, purely in memory, until someone actually re-saves them.      */
+/* ---------------------------------------------------------------------- */
+const IC_EPS = 0.005;
+function icRound2(n){ return Math.round((Number(n)||0)*100)/100; }
+function icClampPct(v){ let n = Number(v); if(!isFinite(n)) n = 0; return Math.min(100, Math.max(0, n)); }
+function icItemHasPct(it){ return !!it && it.payPct!=null && it.fullAmount!=null; }
+function icItemDue(it){ return icRound2((Number(it.qty)||1) * (Number(it.amount)||0)); }
+function icRecomputeItem(it){
+  it.payPct = icClampPct(it.payPct);
+  it.fullAmount = Math.max(0, Number(it.fullAmount)||0);
+  it.amount = icRound2(it.fullAmount * it.payPct / 100);
+  return it;
+}
+function icNormalizeItem(it){
+  if(!it) return it;
+  if(it.fullAmount==null || it.payPct==null){ it.fullAmount = Number(it.amount)||0; it.payPct = 100; }
+  else { it.payPct = icClampPct(it.payPct); it.fullAmount = Math.max(0, Number(it.fullAmount)||0); }
+  return it;
+}
+function icInvoiceUsesPct(inv){ return (inv.items||[]).some(icItemHasPct); }
+
+// Total Project Value — the project's own confirmed value first; if that is
+// missing/zero, the Accepted quotation's Year 1 Total; otherwise "missing"
+// (the UI warns instead of assuming an amount).
+function icProjectValueInfo(projectCode){
+  const proj = projectCode ? DB.find('projects', projectCode) : null;
+  const pv = proj ? (Number(proj.confirmedValue)||0) : 0;
+  if(pv > 0) return { proj, value: icRound2(pv), source: 'project', missing: false };
+  const q = projectQuotationFor(projectCode);
+  const qv = q && q.status==='Accepted' ? (Number(q.year1Total)||0) : 0;
+  if(qv > 0) return { proj, value: icRound2(qv), source: 'quotation', missing: false };
+  return { proj, value: 0, source: null, missing: true };
+}
+// Money already COMMITTED against the project by everything other than the
+// invoice being edited: live (non-Draft, non-Cancelled) invoices' totals plus
+// any real payment that is NOT attached to one of those live invoices
+// (project-level payments, or payments on a Draft/Cancelled invoice). Used
+// to stop duplicate billing / over-invoicing.
+function icOtherCommitted(projectCode, excludeInvoiceId){
+  if(!projectCode) return 0;
+  const liveOthers = DB.all('invoices').filter(i=> i.projectCode===projectCode && i.id!==excludeInvoiceId && i.status!=='Draft' && i.status!=='Cancelled');
+  const liveIds = new Set(liveOthers.map(i=>i.id));
+  const invTotal = liveOthers.reduce((sum,i)=> sum + invoiceTotals(i).total, 0);
+  const loosePaid = paymentsForProject(projectCode)
+    .filter(p=> p.invoiceId!==excludeInvoiceId && !liveIds.has(p.invoiceId))
+    .reduce((sum,p)=> sum + (Number(p.amount)||0), 0);
+  return icRound2(invTotal + loosePaid);
+}
+function icFmtPct(p){ return String(Number((Number(p)||0).toFixed(2))); }
+// "30% Deposit + Full Payment (Microsoft 365…, Additional email…)" — the
+// human-readable Current Payment Stage line shown in the editor + on the PDF.
+function icStageDescription(inv){
+  const items = (inv.items||[]).filter(icItemHasPct).filter(it=> icItemDue(it) > 0.004);
+  if(!items.length) return '';
+  const word = { Deposit:'Deposit', Progress:'Progress Payment', Final:'Final Payment' }[inv.invoiceType] || 'Payment';
+  const partial = {}; const full = [];
+  items.forEach(it=>{
+    const p = icClampPct(it.payPct);
+    if(p >= 100) full.push(it.description||'Item');
+    else (partial[p] = partial[p] || []).push(it.description||'Item');
+  });
+  const keys = Object.keys(partial).map(Number).sort((a,b)=>b-a);
+  const multi = keys.length + (full.length?1:0) > 1;
+  const parts = keys.map(p=> `${icFmtPct(p)}% ${word}` + (multi ? ` (${partial[p].join(', ')})` : ''));
+  if(full.length){
+    const lbl = inv.invoiceType==='Final' ? 'Final Payment' : 'Full Payment';
+    parts.push(lbl + (multi ? ` (${full.join(', ')})` : ''));
+  }
+  return parts.join(' + ');
+}
+function icSelectedItems(s){ const ex = s._applyExclude||[]; return (s.items||[]).filter(it=> !ex.includes(it.id)); }
+function icSetRowSelected(s, id, on){
+  s._applyExclude = (s._applyExclude||[]).filter(x=>x!==id);
+  if(!on) s._applyExclude.push(id);
+}
+// Applies one percentage to every ticked item (the header "Payment Percentage"
+// control). Out-of-range input is clamped to 0–100 and the user is told.
+function icApplyPctToSelected(s, raw){
+  let n = Number(raw);
+  if(raw==='' || raw==null || !isFinite(n)) return false;
+  if(n < 0 || n > 100){ toast('Payment percentage must be between 0 and 100.', 'error'); n = icClampPct(n); }
+  const sel = icSelectedItems(s);
+  if(!sel.length){ toast('Tick at least one item to apply the percentage to.', 'error'); return false; }
+  sel.forEach(it=>{ it.payPct = n; icRecomputeItem(it); });
+  return true;
+}
+// Re-builds the rows from the project's quotation scope (each item at the
+// selected stage's % — or 100% for Custom) so each service can then be given
+// its own percentage.
+function icItemizeFromScope(s){
+  const base = invoiceItemsFromProjectScope(s.projectCode);
+  if(!base.length){ toast('No quotation items found for this project.', 'error'); return false; }
+  const stage = s.invoiceType!=='Custom' ? invoiceStageOption(s.projectCode, s.invoiceType) : null;
+  const pct = stage && stage.pct!=null ? icClampPct(stage.pct) : 100;
+  s.items = base.map(it=>{ it.payPct = pct; return icRecomputeItem(it); });
+  s._applyExclude = []; s.discountAmount = 0;
+  return true;
+}
+function icWarnings(s, bd){
+  const w = [];
+  if(s.projectCode && bd.valueInfo.missing){
+    w.push({ level:'amber', text:'No approved project value was found for this project (no confirmed value, no accepted quotation). The full project value, remaining balance and over-invoicing checks cannot be calculated — please confirm the project value first.' });
+  }
+  if(bd.valueInfo.value > 0){
+    if(bd.otherCommitted >= bd.projectTotal - IC_EPS && bd.currentAmount > IC_EPS){
+      w.push({ level:'red', text:'This project is already fully invoiced/paid — there is no remaining balance left to invoice.' });
+    } else if(bd.overBy > IC_EPS){
+      w.push({ level:'red', text:`Over-invoicing: this invoice would bill ${moneyPrecise(bd.overBy)} more than the project's remaining unbilled value (Project ${moneyPrecise(bd.projectTotal)}, already invoiced/paid ${moneyPrecise(bd.otherCommitted)}). Reduce the amount or % before saving.` });
+    }
+  }
+  if(s.projectCode && s.invoiceType!=='Custom' && s.paymentStageIndex!=null){
+    const dup = DB.all('invoices').find(i=> i.projectCode===s.projectCode && i.id!==s.editingId && i.paymentStageIndex===s.paymentStageIndex && i.status!=='Cancelled' && i.status!=='Draft');
+    if(dup) w.push({ level:'amber', text:`Possible duplicate billing: ${dup.invoiceNumber} (${dup.status}) was already issued for this payment stage.` });
+  }
+  return w;
+}
+function icWarningsHtml(list){
+  if(!list.length) return '';
+  return list.map(x=>`<div style="margin-top:8px;padding:8px 10px;border-radius:var(--radius-sm);background:var(--${x.level}-soft);color:${x.level==='red'?'var(--red)':'#8a5a08'};font-size:11.5px">${escapeHtml(x.text)}</div>`).join('');
+}
+
 // For the live Create/Edit form — s.items/discountAmount may still be
 // unsaved edits, so "Current Invoice Amount" is computed from THOSE, exactly
 // like the existing subtotal/discount math already did, not re-derived from
@@ -158,14 +285,18 @@ function projectPreviouslyPaid(projectCode, excludeInvoiceId){
 function icComputeBreakdown(s){
   const proj = s.projectCode ? DB.find('projects', s.projectCode) : null;
   const { schedule } = projectPaymentScheduleFor(s.projectCode);
-  const projectTotal = proj ? (Number(proj.confirmedValue)||0) : 0;
+  const valueInfo = icProjectValueInfo(s.projectCode);
+  const projectTotal = valueInfo.value;
   const previouslyPaid = projectPreviouslyPaid(s.projectCode, s.editingId);
   const subtotal = (s.items||[]).reduce((sum,it)=> sum + (Number(it.qty)||1)*(Number(it.amount)||0), 0);
   const currentAmount = Math.max(0, Math.round((subtotal - (Number(s.discountAmount)||0))*100)/100);
   const thisInvoicePaidActual = s.editingId ? invoiceTotals({ id:s.editingId, items:s.items, discountAmount:s.discountAmount }).totalPaid : 0;
   const projectedTotalPaidAfter = Math.round((previouslyPaid + currentAmount)*100)/100;
   const remainingAfter = Math.max(0, Math.round((projectTotal - projectedTotalPaidAfter)*100)/100);
-  return { proj, schedule, projectTotal, previouslyPaid, currentAmount, thisInvoicePaidActual, projectedTotalPaidAfter, remainingAfter };
+  const otherCommitted = icOtherCommitted(s.projectCode, s.editingId);
+  const overBy = projectTotal > 0 ? Math.max(0, icRound2(otherCommitted + currentAmount - projectTotal)) : 0;
+  const outstandingBefore = Math.max(0, icRound2(projectTotal - previouslyPaid));
+  return { proj, schedule, valueInfo, projectTotal, previouslyPaid, currentAmount, thisInvoicePaidActual, projectedTotalPaidAfter, remainingAfter, otherCommitted, overBy, outstandingBefore };
 }
 // For a SAVED invoice (detail/preview/PDF/print) — every figure here is real
 // (actual linked payments), never a projection.
@@ -208,8 +339,16 @@ function canDeleteInvoice(){ return isFounder(); }
 /* ---------------------------------------------------------------------- */
 function invoicePaymentsFor(invoiceId){
   return DB.all('payments')
-    .filter(p=> p.invoiceId===invoiceId && !p.voided)
+    .filter(p=> p.invoiceId===invoiceId && !p.voided
+      && (typeof activeReceiptForPayment!=='function' || activeReceiptForPayment(p.id)))
     .sort((a,b)=> new Date(a.date||a.createdAt) - new Date(b.date||b.createdAt));
+}
+// Outstanding (balance > 0, live) invoices for a project — used by the
+// Receipts page's "+ Record Receipt" → Against an Invoice mode (spec:
+// "show outstanding invoices only by default").
+function outstandingInvoicesForProject(projectCode){
+  if(!projectCode) return [];
+  return DB.all('invoices').filter(i=> i.projectCode===projectCode && i.status!=='Draft' && i.status!=='Cancelled' && invoiceTotals(i).balance > 0.004);
 }
 function invoiceTotals(inv){
   const subtotal = (inv.items||[]).reduce((s,it)=> s + (Number(it.qty)||1) * (Number(it.amount)||0), 0);
@@ -359,7 +498,7 @@ function renderInvTable(){
                     <div class="flex-row" style="gap:2px;flex-wrap:wrap">
                       <button class="btn btn-ghost btn-sm" data-open="${inv.id}">View</button>
                       <button class="btn btn-ghost btn-sm" data-pdf="${inv.id}">PDF</button>
-                      ${totals.balance>0.004 && inv.status!=='Draft' && inv.status!=='Cancelled' ? `<button class="btn btn-ghost btn-sm" data-pay="${inv.id}">Record Payment</button>` : ''}
+                      ${totals.balance>0.004 && inv.status!=='Draft' && inv.status!=='Cancelled' ? `<button class="btn btn-ghost btn-sm" data-pay="${inv.id}">Record Payment &amp; Generate Receipt</button>` : ''}
                       <button class="btn btn-ghost btn-sm" data-dup="${inv.id}">Duplicate</button>
                     </div>
                   </td>
@@ -377,7 +516,7 @@ function renderInvTable(){
   wrap.querySelectorAll('[data-pay]').forEach(x=>{
     x.onclick = ()=>{
       const inv = DB.find('invoices', x.dataset.pay);
-      if(inv && inv.projectCode) openRecordPaymentModal(inv.projectCode, ()=> renderInvTable(), inv.id);
+      if(inv && inv.projectCode) openRecordPaymentModal(inv.projectCode, ()=> renderInvTable(), inv.id, { autoReceipt:true });
     };
   });
   wrap.querySelectorAll('[data-dup]').forEach(x=> x.onclick = ()=> duplicateInvoice(x.dataset.dup));
@@ -442,7 +581,57 @@ function invoiceItemsFromProjectScope(projectCode){
   if(!q || !Array.isArray(q.items) || !q.items.length) return [];
   return q.items.filter(it=> it.included!==false).map(it=>({
     id: fnId(), description: it.name, period: '', qty: 1, amount: Number(it.price)||0,
+    fullAmount: Number(it.price)||0, payPct: 100,
   }));
+}
+
+/* ---------------------------------------------------------------------- */
+/* Unsaved-changes protection for Create/Edit Invoice — same pattern as     */
+/* Create/Edit Quotation (setModalCloseGuard/openChildModal in app.js).     */
+/* View-only state (tab, zoom, which rows are ticked, "touched" flags) is   */
+/* excluded from the snapshot so it can never mark the form dirty.          */
+/* ---------------------------------------------------------------------- */
+let IC_DIRTY_BASELINE = null;
+let IC_BASELINE_FOR = null;
+function icSnapshot(state){
+  const copy = {};
+  Object.keys(state||{}).filter(k=> k[0]!=='_').forEach(k=> copy[k] = state[k]);
+  return qcStableStringify(copy);
+}
+function icIsDirty(){ return IC_DIRTY_BASELINE!==null && IC_STATE && icSnapshot(IC_STATE)!==IC_DIRTY_BASELINE; }
+function icEndDirtyTracking(){ IC_DIRTY_BASELINE = null; IC_BASELINE_FOR = null; icSetBeforeUnloadGuard(false); }
+function icBeforeUnloadHandler(e){ e.preventDefault(); e.returnValue = ''; return ''; }
+function icSetBeforeUnloadGuard(on){
+  window.removeEventListener('beforeunload', icBeforeUnloadHandler);
+  if(on) window.addEventListener('beforeunload', icBeforeUnloadHandler);
+}
+function invoiceModalCloseGuard(){
+  if(!icIsDirty()){ icEndDirtyTracking(); return true; }
+  openInvoiceUnsavedChangesDialog();
+  return false;
+}
+function openInvoiceUnsavedChangesDialog(){
+  const s = IC_STATE;
+  const keepsStatus = !!(s && s.editingId && s.status!=='Draft');
+  const html = `
+    <div class="modal-head"><h3>Unsaved invoice changes</h3></div>
+    <div class="modal-body">
+      <p>You have unsaved changes. ${keepsStatus ? 'Save them to this invoice before closing?' : 'Would you like to save this invoice as a draft before closing?'}</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-secondary" id="iucContinue">Continue Editing</button>
+      <button class="btn btn-danger" id="iucDiscard">Discard Changes</button>
+      <button class="btn btn-primary" id="iucSave">${keepsStatus ? 'Save Changes' : 'Save as Draft'}</button>
+    </div>
+  `;
+  openChildModal(html, { onMount:(overlay)=>{
+    overlay.querySelector('#iucContinue').onclick = ()=> closeChildModal();
+    overlay.querySelector('#iucDiscard').onclick = ()=>{ closeChildModal(); icEndDirtyTracking(); IC_STATE = null; closeModal(); };
+    overlay.querySelector('#iucSave').onclick = ()=>{
+      closeChildModal();
+      saveInvoiceFromState(keepsStatus ? (INVOICE_CREATE_STATUSES.includes(s.status) ? s.status : null) : 'Draft');
+    };
+  }});
 }
 
 function openCreateInvoiceModal(prefill={}){
@@ -494,7 +683,7 @@ function loadInvoiceStateFrom(inv, { asDuplicate=false } = {}){
     currency: inv.currency || 'USD',
     invoiceType: inv.invoiceType || 'Custom',
     paymentStageIndex: asDuplicate ? null : (inv.paymentStageIndex!=null ? inv.paymentStageIndex : null),
-    items: (inv.items||[]).map(it=>({ ...it, id: asDuplicate ? fnId() : (it.id||fnId()) })),
+    items: (inv.items||[]).map(it=> icNormalizeItem({ ...it, id: asDuplicate ? fnId() : (it.id||fnId()) })),
     discountAmount: Number(inv.discountAmount)||0,
     summary: inv.summary || '',
     notes: inv.notes || '',
@@ -555,7 +744,10 @@ function icApplyInvoiceType(typeKey){
     const opt = invoiceStageOption(s.projectCode, typeKey);
     if(opt && opt.index!=null){
       s.paymentStageIndex = opt.index;
-      s.items = [{ id: fnId(), description: `${opt.label}${s.businessName?' — '+s.businessName:''}`, period:'', qty:1, amount: opt.amount }];
+      const pTot = icProjectValueInfo(s.projectCode).value;
+      s.items = [{ id: fnId(), description: `${opt.label}${s.businessName?' — '+s.businessName:''}`, period:'', qty:1, amount: opt.amount,
+        fullAmount: pTot>0 ? pTot : (Number(opt.amount)||0), payPct: pTot>0 && opt.pct!=null ? icClampPct(opt.pct) : 100 }];
+      s._applyExclude = [];
       s.discountAmount = 0;
     }
   }
@@ -599,20 +791,24 @@ function icInvoiceNumberPreview(s){
   return generateInvoiceNumber(s.projectCode || null, s.businessName || s.clientName, s.invoiceDate);
 }
 
-function invoiceItemsEditorHtml(items, currency){
+function invoiceItemsEditorHtml(items, currency, st){
   if(!items.length) return `<div class="empty-row">No line items yet — click "+ Add Row" below.</div>`;
+  const ex = (st && st._applyExclude) || [];
   return `
     <div class="table-wrap scroll-x">
       <table class="data-table qc-mini-table">
-        <thead><tr><th>No.</th><th>Description</th><th>Timeline / Period</th><th>Qty</th><th>Amount</th><th></th></tr></thead>
+        <thead><tr><th title="Tick = the Payment Percentage above applies to this row">%&#10003;</th><th>No.</th><th>Description</th><th>Timeline / Period</th><th>Qty</th><th>Full Value</th><th>Pay %</th><th>Due Now</th><th></th></tr></thead>
         <tbody>
           ${items.map((it,i)=>`
             <tr data-item="${it.id}">
+              <td><input type="checkbox" data-icsel="${it.id}" ${ex.includes(it.id)?'':'checked'} title="Apply the Payment Percentage above to this row"></td>
               <td>${i+1}</td>
               <td><input data-f="description" data-id="${it.id}" value="${escapeHtml(it.description||'')}" placeholder="Item description"></td>
               <td><input data-f="period" data-id="${it.id}" value="${escapeHtml(it.period||'')}" placeholder="e.g. One-time / Monthly"></td>
-              <td><input type="number" min="0" step="1" data-f="qty" data-id="${it.id}" value="${it.qty!=null?it.qty:1}" style="width:64px"></td>
-              <td><input type="number" min="0" step="0.01" data-f="amount" data-id="${it.id}" value="${it.amount!=null?it.amount:0}" style="width:100px"></td>
+              <td><input type="number" min="0" step="1" data-f="qty" data-id="${it.id}" value="${it.qty!=null?it.qty:1}" style="width:56px"></td>
+              <td><input type="number" min="0" step="0.01" data-f="fullAmount" data-id="${it.id}" value="${it.fullAmount!=null?it.fullAmount:(it.amount!=null?it.amount:0)}" style="width:92px"></td>
+              <td><input type="number" min="0" max="100" step="0.01" data-f="payPct" data-id="${it.id}" value="${it.payPct!=null?it.payPct:100}" style="width:68px"> <span class="cell-link" data-icfull="${it.id}" title="Set this row to 100% (pay in full)" style="font-size:11px">100%</span></td>
+              <td data-due="${it.id}"><b>${moneyPrecise(icItemDue(it))}</b></td>
               <td>
                 <div class="flex-row" style="gap:2px">
                   <span class="icon-btn" data-move-up="${it.id}" title="Move up" style="cursor:pointer">&uarr;</span>
@@ -628,12 +824,24 @@ function invoiceItemsEditorHtml(items, currency){
 }
 
 function wireInvoiceItemsEditor(overlay, s){
+  overlay.querySelectorAll('[data-icsel]').forEach(cb=> cb.onchange = ()=>{ icSetRowSelected(s, cb.dataset.icsel, cb.checked); renderCreateInvoiceModal(); });
+  overlay.querySelectorAll('[data-icfull]').forEach(x=> x.onclick = ()=>{
+    const it = s.items.find(i=>i.id===x.dataset.icfull);
+    if(it){ it.payPct = 100; icRecomputeItem(it); renderCreateInvoiceModal(); }
+  });
   overlay.querySelectorAll('[data-f]').forEach(inp=>{
     inp.onchange = ()=>{
       const it = s.items.find(x=>x.id===inp.dataset.id);
       if(!it) return;
       const f = inp.dataset.f;
-      it[f] = (f==='qty'||f==='amount') ? Number(inp.value)||0 : inp.value;
+      if(f==='qty') it.qty = Number(inp.value)||0;
+      else if(f==='fullAmount'){ it.fullAmount = Math.max(0, Number(inp.value)||0); icRecomputeItem(it); }
+      else if(f==='payPct'){
+        const raw = Number(inp.value);
+        if(inp.value==='' || !isFinite(raw) || raw<0 || raw>100) toast('Payment percentage must be between 0 and 100.', 'error');
+        it.payPct = icClampPct(raw); icRecomputeItem(it);
+      }
+      else it[f] = inp.value;
       renderCreateInvoiceModal();
     };
   });
@@ -680,6 +888,10 @@ function renderCreateInvoiceModal(){
   const prevScrollTop = prevOverlay ? (prevOverlay.querySelector('.qc-edit-col')||{}).scrollTop : null;
 
   const s = IC_STATE;
+  // A NEW editing session (different IC_STATE object) is normalised and its
+  // dirty-baseline captured BEFORE the first render, so merely opening the
+  // editor is never itself "unsaved changes".
+  if(IC_BASELINE_FOR !== s){ s.items = (s.items||[]).map(icNormalizeItem); IC_BASELINE_FOR = s; IC_DIRTY_BASELINE = icSnapshot(s); }
   const projects = icAssignableProjects();
   const breakdown = icComputeBreakdown(s);
   const stageOpts = s.projectCode ? invoiceStageOptionsFor(s.projectCode) : [{ key:'Custom', index:null, label:'Custom Invoice', pct:null, amount:null }];
@@ -711,7 +923,7 @@ function renderCreateInvoiceModal(){
             <div class="form-field"><label class="required">Client Name</label><input id="ic_client" value="${escapeHtml(s.clientName)}"></div>
             <div class="form-field"><label>Business Name</label><input id="ic_business" value="${escapeHtml(s.businessName)}"></div>
             <div class="form-field full"><label>Website Link</label><input id="ic_website" value="${escapeHtml(s.websiteLink)}" placeholder="https://…"></div>
-            <div class="form-field"><label>Project Value</label><input value="${breakdown.proj?moneyPrecise(breakdown.projectTotal):'—'}" disabled></div>
+            <div class="form-field"><label>Total Project Value${breakdown.valueInfo.source==='quotation'?' <span class="text-muted" style="font-weight:400">(from accepted quotation)</span>':''}</label><input value="${!breakdown.proj?'—':(breakdown.valueInfo.missing?'Not available':moneyPrecise(breakdown.projectTotal))}" disabled></div>
             <div class="form-field"><label>Project Status</label>
               <select id="ic_pstatus">${PROJECT_STAGES.map(st=>`<option ${s.projectStatus===st?'selected':''}>${st}</option>`).join('')}</select>
             </div>
@@ -730,6 +942,18 @@ function renderCreateInvoiceModal(){
                 ${stageOpts.map(o=>`<option value="${o.key}" ${s.invoiceType===o.key?'selected':''}>${escapeHtml(INVOICE_TYPE_LABELS[o.key]||o.label)}${o.amount!=null?` — ${moneyPrecise(o.amount)}`:''}</option>`).join('')}
               </select>
             </div>
+            ${(()=>{
+              const sel = icSelectedItems(s);
+              const pcts = sel.map(it=> icRound2(it.payPct));
+              const uniform = pcts.length && pcts.every(p=>p===pcts[0]);
+              const pctVal = uniform ? pcts[0] : '';
+              return `<div class="form-field full"><label>Payment Percentage (%) <span class="text-muted" style="font-weight:400">— applies to the items ticked in section C</span></label>
+              <div class="flex-row" style="gap:6px;align-items:center;flex-wrap:wrap">
+                <input type="number" id="ic_pct" min="0" max="100" step="0.01" value="${pctVal}" placeholder="${pcts.length?'Mixed':'—'}" style="width:110px" ${sel.length?'':'disabled'}>
+                ${[30,50,70,100].map(p=>`<button type="button" class="btn btn-sm ${uniform&&pctVal===p?'btn-primary':'btn-secondary'}" data-icpct="${p}">${p}%</button>`).join('')}
+              </div>
+              <p class="text-muted" style="font-size:11px;margin:4px 0 0">Untick items that must be paid in full (or set their own % in the table), then pick a percentage. Amount due = Full Value × %.</p></div>`;
+            })()}
             <div class="form-field"><label>Invoice No. <span class="field-auto-badge">Auto</span></label>
               <input id="ic_invnum" value="${escapeHtml(icInvoiceNumberPreview(s))}" ${(!isFounder() || (s.editingId && !INVOICE_CREATE_STATUSES.includes(s.status)))?'readonly class="field-locked"':''}>
             </div>
@@ -749,21 +973,26 @@ function renderCreateInvoiceModal(){
           <div class="divider"></div>
           <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Payment Summary</div>
           <div class="form-grid">
-            <div class="form-field"><label>Project Total</label><input value="${moneyPrecise(breakdown.projectTotal)}" disabled></div>
-            <div class="form-field"><label>Previously Paid on Project</label><input value="${moneyPrecise(breakdown.previouslyPaid)}" disabled></div>
-            <div class="form-field"><label>Current Invoice Amount</label><input value="${moneyPrecise(breakdown.currentAmount)}" disabled></div>
-            <div class="form-field"><label>Total Paid After This Payment <span class="text-muted" style="font-weight:400">(projected)</span></label><input value="${moneyPrecise(breakdown.projectedTotalPaidAfter)}" disabled></div>
-            <div class="form-field"><label>Remaining Balance</label><input value="${moneyPrecise(breakdown.remainingAfter)}" disabled></div>
+            <div class="form-field"><label>Total Confirmed Project Value</label><input id="ic_sum_total" value="${breakdown.valueInfo.missing?'Not available':moneyPrecise(breakdown.projectTotal)}" disabled></div>
+            <div class="form-field"><label>Previously Paid <span class="text-muted" style="font-weight:400">(collected)</span></label><input id="ic_sum_prev" value="${moneyPrecise(breakdown.previouslyPaid)}" disabled></div>
+            <div class="form-field"><label>Current Invoice Amount / Due Now <span class="text-muted" style="font-weight:400">(projected)</span></label><input id="ic_sum_due" value="${moneyPrecise(breakdown.currentAmount)}" disabled></div>
+            <div class="form-field"><label>Remaining Balance After This Payment <span class="text-muted" style="font-weight:400">(projected)</span></label><input id="ic_sum_after" value="${breakdown.valueInfo.missing?'—':moneyPrecise(breakdown.remainingAfter)}" disabled></div>
+            <div class="form-field"><label>Total Outstanding Project Balance <span class="text-muted" style="font-weight:400">(collected basis)</span></label><input id="ic_sum_out" value="${breakdown.valueInfo.missing?'—':moneyPrecise(breakdown.outstandingBefore)}" disabled></div>
           </div>
-          <p class="text-muted" style="font-size:11px;margin:6px 0 0">"Total Paid After This Payment" is a projection — it assumes this invoice gets paid in full. Only real recorded/linked payments ever count as actually paid.</p>
+          <p class="text-muted" style="font-size:11px;margin:6px 0 0"><b>Collected</b> = payments actually recorded. <b>Projected</b> = assumes this invoice is paid in full — an issued-but-unpaid invoice is never counted as paid.</p>
+          ${icStageDescription(icStateToPreviewInvoice(s)) ? `<p style="font-size:12px;margin:6px 0 0"><b>Current Payment Stage:</b> <span id="ic_sum_stage">${escapeHtml(icStageDescription(icStateToPreviewInvoice(s)))}</span></p>` : ''}
+          ${icWarningsHtml(icWarnings(s, breakdown))}
           ${icStageAmountWarningHtml(icStageAmountWarning(s, breakdown))}
 
           <div class="divider"></div>
           <div class="flex-row" style="justify-content:space-between;margin-bottom:8px">
             <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:0">C. Invoice Items</div>
-            <span class="cell-link" style="font-size:12px" id="ic_addRow">+ Add Row</span>
+            <span style="display:flex;gap:14px">
+              ${s.projectCode && invoiceItemsFromProjectScope(s.projectCode).length ? `<span class="cell-link" style="font-size:12px" id="ic_itemize" title="Replaces the rows with the project's quotation items so each service can have its own %">Itemize by service</span>` : ''}
+              <span class="cell-link" style="font-size:12px" id="ic_addRow">+ Add Row</span>
+            </span>
           </div>
-          <div id="ic_itemsWrap">${invoiceItemsEditorHtml(s.items, s.currency)}</div>
+          <div id="ic_itemsWrap">${invoiceItemsEditorHtml(s.items, s.currency, s)}</div>
           <div class="form-field" style="margin-top:10px;max-width:220px"><label>Discount / Promotion ($)</label><input type="number" min="0" step="0.01" id="ic_discount" value="${s.discountAmount||0}"></div>
 
           <div class="divider"></div>
@@ -797,10 +1026,13 @@ function renderCreateInvoiceModal(){
   `;
 
   openModal(html, { xl:true, onMount:(overlay)=>{
+    // Re-registered on every remount (openModal() clears the guard each time).
+    setModalCloseGuard(invoiceModalCloseGuard);
+    icSetBeforeUnloadGuard(icIsDirty());
     const editCol = overlay.querySelector('.qc-edit-col');
     if(editCol && prevScrollTop!=null) editCol.scrollTop = prevScrollTop;
-    overlay.querySelector('#icClose').onclick = closeModal;
-    overlay.querySelector('#icCancel').onclick = closeModal;
+    overlay.querySelector('#icClose').onclick = requestCloseModal;
+    overlay.querySelector('#icCancel').onclick = requestCloseModal;
     overlay.querySelectorAll('[data-ictab]').forEach(t=> t.onclick = ()=>{ IC_TAB = t.dataset.ictab; renderCreateInvoiceModal(); });
     overlay.querySelectorAll('[data-iczoom]').forEach(b=> b.onclick = ()=>{
       const z = b.dataset.iczoom;
@@ -832,7 +1064,12 @@ function renderCreateInvoiceModal(){
     overlay.querySelector('#ic_discount').onchange = (e)=>{ s.discountAmount = Number(e.target.value)||0; renderCreateInvoiceModal(); };
     overlay.querySelector('#ic_summary').onchange = (e)=>{ s.summary = e.target.value; s._summaryTouched = true; refreshIcPreview(overlay); };
     overlay.querySelector('#ic_notes').onchange = (e)=>{ s.notes = e.target.value; s._notesTouched = true; refreshIcPreview(overlay); };
-    overlay.querySelector('#ic_addRow').onclick = ()=>{ s.items.push({ id:fnId(), description:'', period:'', qty:1, amount:0 }); renderCreateInvoiceModal(); };
+    overlay.querySelector('#ic_addRow').onclick = ()=>{ s.items.push({ id:fnId(), description:'', period:'', qty:1, amount:0, fullAmount:0, payPct:100 }); renderCreateInvoiceModal(); };
+    const itemizeBtn = overlay.querySelector('#ic_itemize');
+    if(itemizeBtn) itemizeBtn.onclick = ()=>{ if(icItemizeFromScope(s)) renderCreateInvoiceModal(); };
+    const pctInput = overlay.querySelector('#ic_pct');
+    if(pctInput) pctInput.onchange = (e)=>{ if(icApplyPctToSelected(s, e.target.value)) renderCreateInvoiceModal(); else renderCreateInvoiceModal(); };
+    overlay.querySelectorAll('[data-icpct]').forEach(b=> b.onclick = ()=>{ icApplyPctToSelected(s, b.dataset.icpct); renderCreateInvoiceModal(); });
     wireInvoiceItemsEditor(overlay, s);
 
     overlay.querySelector('#icSaveDraft').onclick = ()=> saveInvoiceFromState('Draft');
@@ -896,6 +1133,16 @@ function saveInvoiceFromState(forceStatus){
   let existing = s.editingId ? DB.find('invoices', s.editingId) : null;
   if(existing && !canEditInvoice(existing)){ toast('You do not have permission to edit this invoice.', 'error'); return; }
 
+  // Over-invoicing / duplicate-billing guard: block when this invoice would
+  // push total billed past the project value. An already-saved invoice is
+  // only blocked if this edit INCREASES it (never traps a historical record).
+  const guardBd = icComputeBreakdown(s);
+  const prevTotal = existing ? invoiceTotals(existing).total : 0;
+  if(guardBd.valueInfo.value > 0 && guardBd.overBy > IC_EPS && (!existing || guardBd.currentAmount > prevTotal + IC_EPS)){
+    toast(`Cannot save: this invoice exceeds the project's remaining billable value by ${moneyPrecise(guardBd.overBy)}.`, 'error');
+    return;
+  }
+
   const invoiceNumber = s.invoiceNumber || existing?.invoiceNumber || generateInvoiceNumber(s.projectCode, s.businessName||s.clientName, s.invoiceDate);
   const status = forceStatus || s.status || 'Draft';
   const record = {
@@ -918,6 +1165,7 @@ function saveInvoiceFromState(forceStatus){
     description: `${CURRENT_USER.name} ${existing?'updated':'created'} invoice ${invoiceNumber} (${record.status}).` });
 
   toast(existing ? 'Invoice updated.' : 'Invoice created.', 'success');
+  icEndDirtyTracking();
   closeModal();
   refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
   openInvoiceDetailModal(record.id);
@@ -981,7 +1229,7 @@ function openInvoiceDetailModal(id){
     btns.push(`<button class="btn btn-outline btn-sm" id="iaPdf">Download PDF</button>`);
     btns.push(`<button class="btn btn-ghost btn-sm" id="iaDup">Duplicate</button>`);
     if(canEditInvoice(inv)) btns.push(`<button class="btn btn-ghost btn-sm" id="iaEdit">Edit</button>`);
-    if(totals.balance>0.004 && inv.status!=='Draft' && inv.status!=='Cancelled') btns.push(`<button class="btn btn-primary btn-sm" id="iaPay">Record Payment</button>`);
+    if(totals.balance>0.004 && inv.status!=='Draft' && inv.status!=='Cancelled') btns.push(`<button class="btn btn-primary btn-sm" id="iaPay">Record Payment &amp; Generate Receipt</button>`);
     // Only offered when the SAME project has payments not yet linked to any
     // invoice (invoiceId===null) — Founder/Admin only, reuses the exact same
     // relinkPaymentInvoice() core the Payment History / Edit Payment control
@@ -1004,7 +1252,7 @@ function openInvoiceDetailModal(id){
     const editBtn = overlay.querySelector('#iaEdit');
     if(editBtn) editBtn.onclick = ()=>{ IC_STATE = loadInvoiceStateFrom(inv); renderCreateInvoiceModal(); };
     const payBtn = overlay.querySelector('#iaPay');
-    if(payBtn) payBtn.onclick = ()=>{ if(inv.projectCode) openRecordPaymentModal(inv.projectCode, ()=> openInvoiceDetailModal(inv.id), inv.id); };
+    if(payBtn) payBtn.onclick = ()=>{ if(inv.projectCode) openRecordPaymentModal(inv.projectCode, ()=> openInvoiceDetailModal(inv.id), inv.id, { autoReceipt:true }); };
     const cancelBtn = overlay.querySelector('#iaCancel');
     if(cancelBtn) cancelBtn.onclick = ()=> openCancelInvoiceModal(inv.id);
     const delBtn = overlay.querySelector('#iaDelete');
@@ -1119,7 +1367,7 @@ function linkedInvoicesHtml(projectId){
                 <button class="btn btn-ghost btn-sm" data-view-invoice="${inv.id}">View</button>
                 <button class="btn btn-ghost btn-sm" data-pdf-invoice="${inv.id}">PDF</button>
                 ${canEditInvoice(inv) ? `<button class="btn btn-ghost btn-sm" data-edit-invoice="${inv.id}">Edit</button>` : ''}
-                ${t.balance>0.004 && inv.status!=='Draft' && inv.status!=='Cancelled' ? `<button class="btn btn-ghost btn-sm" data-pay-invoice="${inv.id}">Record Payment</button>` : ''}
+                ${t.balance>0.004 && inv.status!=='Draft' && inv.status!=='Cancelled' ? `<button class="btn btn-ghost btn-sm" data-pay-invoice="${inv.id}">Record Payment &amp; Generate Receipt</button>` : ''}
               </div></td>
             </tr>`;
           }).join('')}
@@ -1137,7 +1385,7 @@ function wireLinkedInvoices(container){
   });
   container.querySelectorAll('[data-pay-invoice]').forEach(el=> el.onclick = ()=>{
     const inv = DB.find('invoices', el.dataset.payInvoice);
-    if(inv && inv.projectCode) openRecordPaymentModal(inv.projectCode, ()=>{ if(typeof openProjectDetailModal==='function') openProjectDetailModal(inv.projectCode); }, inv.id);
+    if(inv && inv.projectCode) openRecordPaymentModal(inv.projectCode, ()=>{ if(typeof openProjectDetailModal==='function') openProjectDetailModal(inv.projectCode); }, inv.id, { autoReceipt:true });
   });
   const newBtn = container.querySelector('[data-new-invoice]');
   if(newBtn) newBtn.onclick = ()=> openCreateInvoiceModal({ projectCode: newBtn.dataset.newInvoice });
@@ -1269,6 +1517,32 @@ function invoicePaymentScheduleBlockHtml(inv){
   </table>`;
 }
 
+// Project-level payment summary for the printed/preview invoice — Full
+// Confirmed Value, Current Payment Stage, Current Invoice Amount, Previously
+// Paid and Remaining Future Balance, ALL shown separately (the invoice
+// amount never replaces the full project value). Uses the same
+// invoicePaymentBreakdown() numbers as everything else; used identically by
+// the live preview pane and Print/PDF.
+function invoiceProjectSummaryHtml(inv){
+  const bd = invoicePaymentBreakdown(inv);
+  const t = bd.totals;
+  const info = icProjectValueInfo(inv.projectCode);
+  const projectTotal = info.value > 0 ? info.value : 0;
+  if(projectTotal <= 0) return '';
+  const remainingFuture = Math.max(0, icRound2(projectTotal - bd.previouslyPaid - t.total));
+  const stage = icStageDescription(inv);
+  return `<h4 class="quote-doc-h">Project Payment Summary</h4><table class="quote-doc-table qc-mini-table" style="max-width:460px" id="invProjectSummary">
+    <tbody>
+      <tr><td>Full Confirmed Project Value</td><td style="text-align:right">${moneyPrecise(projectTotal)}</td></tr>
+      ${stage ? `<tr><td>Current Payment Stage</td><td style="text-align:right">${escapeHtml(stage)}</td></tr>` : ''}
+      <tr><td>Previously Paid</td><td style="text-align:right">${moneyPrecise(bd.previouslyPaid)}</td></tr>
+      <tr><td><b>Current Invoice Amount</b></td><td style="text-align:right"><b>${moneyPrecise(t.total)}</b></td></tr>
+      ${t.totalPaid>0.004 ? `<tr><td>Balance Due Now</td><td style="text-align:right">${moneyPrecise(t.balance)}</td></tr>` : ''}
+      <tr><td><b>Remaining Future Project Balance</b></td><td style="text-align:right"><b>${moneyPrecise(remainingFuture)}</b></td></tr>
+    </tbody>
+  </table>`;
+}
+
 function buildInvoiceSections(inv){
   const bank = bankDetails();
   const proj = inv.projectCode ? DB.find('projects', inv.projectCode) : null;
@@ -1280,21 +1554,35 @@ function buildInvoiceSections(inv){
   sections.push({ id:'summary', kind:'block',
     html:`<h4 class="quote-doc-h">Invoice Summary</h4><p style="font-size:12.5px;margin:0;white-space:pre-wrap">${escapeHtml(inv.summary||'—')}</p>` });
 
-  const typeFraming = invoiceTypeFramingHtml(inv);
+  const pctMode = icInvoiceUsesPct(inv);
+  // Invoices carrying per-item % data use the unified Project Payment Summary
+  // below; older invoices keep their original stage-framing table unchanged.
+  const typeFraming = pctMode ? '' : invoiceTypeFramingHtml(inv);
   if(typeFraming){
     sections.push({ id:'stageframing', kind:'block',
       html:`<h4 class="quote-doc-h">${escapeHtml(invoiceDocTitle(inv, totals))}</h4>${typeFraming}` });
   }
+  if(pctMode){
+    const ps = invoiceProjectSummaryHtml(inv);
+    if(ps) sections.push({ id:'projectsummary', kind:'block', html: ps });
+  }
   const scheduleBlock = invoicePaymentScheduleBlockHtml(inv);
   if(scheduleBlock) sections.push({ id:'schedule', kind:'block', html: scheduleBlock });
 
+  // Extra "Project Value / Pay %" columns only appear when at least one row is
+  // NOT billed at its full value — fully-billed invoices look exactly as before.
+  const showPct = (inv.items||[]).some(it=> icItemHasPct(it) && (Math.abs(icRound2(it.fullAmount) - icRound2(it.amount)) > 0.004 || icClampPct(it.payPct) < 100));
   sections.push({ id:'items', kind:'group',
     headingHtml:`<h4 class="quote-doc-h">Items</h4>`,
     contHeadingHtml:`<h4 class="quote-doc-h">Items (continued)</h4>`,
-    wrapOpenHtml:`<table class="quote-doc-table"><thead><tr><th>No.</th><th>Description</th><th>Timeline / Period</th><th>Qty</th><th>Amount</th></tr></thead><tbody>`,
+    wrapOpenHtml: showPct
+      ? `<table class="quote-doc-table"><thead><tr><th>No.</th><th>Description</th><th>Timeline / Period</th><th>Qty</th><th>Full Value</th><th>Pay %</th><th>Amount Due</th></tr></thead><tbody>`
+      : `<table class="quote-doc-table"><thead><tr><th>No.</th><th>Description</th><th>Timeline / Period</th><th>Qty</th><th>Amount</th></tr></thead><tbody>`,
     wrapCloseHtml:`</tbody></table>`,
-    items: (inv.items||[]).length ? (inv.items||[]).map((it,i)=>({ html:`<tr><td>${i+1}</td><td>${escapeHtml(it.description||'')}</td><td>${escapeHtml(it.period||'—')}</td><td>${it.qty!=null?it.qty:1}</td><td>${moneyPrecise(it.amount)}</td></tr>` }))
-      : [{ html:`<tr><td colspan="5" style="text-align:center;color:var(--muted)">No line items.</td></tr>` }],
+    items: (inv.items||[]).length ? (inv.items||[]).map((it,i)=>({ html: showPct
+        ? `<tr><td>${i+1}</td><td>${escapeHtml(it.description||'')}</td><td>${escapeHtml(it.period||'—')}</td><td>${it.qty!=null?it.qty:1}</td><td>${moneyPrecise(icItemHasPct(it)?it.fullAmount:it.amount)}</td><td>${icItemHasPct(it)?icFmtPct(it.payPct)+'%':'100%'}</td><td>${moneyPrecise(it.amount)}</td></tr>`
+        : `<tr><td>${i+1}</td><td>${escapeHtml(it.description||'')}</td><td>${escapeHtml(it.period||'—')}</td><td>${it.qty!=null?it.qty:1}</td><td>${moneyPrecise(it.amount)}</td></tr>` }))
+      : [{ html:`<tr><td colspan="${showPct?7:5}" style="text-align:center;color:var(--muted)">No line items.</td></tr>` }],
   });
 
   sections.push({ id:'notes', kind:'block',
