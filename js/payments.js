@@ -37,7 +37,7 @@ const INVOICE_TYPE_TO_PAYMENT_TYPE = { Deposit:'Deposit', Progress:'Partial Paym
 /* points to). Both the old and new invoice's status are recalculated via  */
 /* recalcInvoiceStatus() exactly as an amount edit already does.           */
 /* ---------------------------------------------------------------------- */
-function relinkPaymentInvoice(paymentId, newInvoiceId, userName){
+async function relinkPaymentInvoice(paymentId, newInvoiceId, userName){
   const payment = DB.find('payments', paymentId);
   if(!payment) return { ok:false, error:'Payment not found.' };
   newInvoiceId = newInvoiceId || null;
@@ -52,10 +52,11 @@ function relinkPaymentInvoice(paymentId, newInvoiceId, userName){
   if(newInvoiceId === oldInvoiceId) return { ok:true, unchanged:true };
 
   payment.invoiceId = newInvoiceId;
-  DB.upsert('payments', payment);
+  const savedLink = await DB.update('payments', payment);
+  if(!savedLink.ok) return { ok:false, error: savedLink.userMessage };
 
-  if(oldInvoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(oldInvoiceId);
-  if(newInvoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(newInvoiceId);
+  if(oldInvoiceId && typeof recalcInvoiceStatus==='function') await recalcInvoiceStatus(oldInvoiceId);
+  if(newInvoiceId && typeof recalcInvoiceStatus==='function') await recalcInvoiceStatus(newInvoiceId);
 
   const oldInv = oldInvoiceId ? DB.find('invoices', oldInvoiceId) : null;
   const newInv = newInvoiceId ? DB.find('invoices', newInvoiceId) : null;
@@ -111,9 +112,9 @@ function openLinkPaymentInvoiceModal(paymentId, onDone){
   openModal(html, { onMount:(overlay)=>{
     overlay.querySelector('#lpiClose').onclick = closeModal;
     overlay.querySelector('#lpiCancel').onclick = closeModal;
-    overlay.querySelector('#lpiSave').onclick = ()=>{
+    overlay.querySelector('#lpiSave').onclick = function(){ return runSave(this, async ()=>{
       const newInvoiceId = overlay.querySelector('#lpi_invoice').value || null;
-      const result = relinkPaymentInvoice(payment.id, newInvoiceId, CURRENT_USER.name);
+      const result = await relinkPaymentInvoice(payment.id, newInvoiceId, CURRENT_USER.name);
       if(!result.ok){ toast(result.error, 'error'); return; }
       toast(result.unchanged ? 'No change to the invoice link.' : 'Invoice link updated.', 'success');
       closeModal();
@@ -124,7 +125,7 @@ function openLinkPaymentInvoiceModal(paymentId, onDone){
       // whichever page is currently behind this modal, from the
       // already-updated cache, no network call.
       refreshAfterLeadOrProjectChange();
-    };
+    }); };
   }});
 }
 
@@ -161,15 +162,15 @@ function openLinkExistingPaymentModal(invoiceId, onDone){
     overlay.querySelector('#lepClose').onclick = closeModal;
     overlay.querySelector('#lepCancel').onclick = closeModal;
     const saveBtn = overlay.querySelector('#lepSave');
-    if(saveBtn) saveBtn.onclick = ()=>{
+    if(saveBtn) saveBtn.onclick = function(){ return runSave(this, async ()=>{
       const paymentId = overlay.querySelector('#lep_payment').value;
-      const result = relinkPaymentInvoice(paymentId, inv.id, CURRENT_USER.name);
+      const result = await relinkPaymentInvoice(paymentId, inv.id, CURRENT_USER.name);
       if(!result.ok){ toast(result.error, 'error'); return; }
       toast('Payment linked to this invoice.', 'success');
       closeModal();
       if(onDone) onDone();
       refreshAfterLeadOrProjectChange(); // data-freshness fix — see openLinkPaymentInvoiceModal above
-    };
+    }); };
   }});
 }
 
@@ -345,13 +346,33 @@ function renderFinancialTables(){
 // View's own Record Payment button) passes nothing here and the dropdown
 // simply defaults to "— No Invoice —", so an unlinked payment is recorded
 // exactly as before this module existed.
-function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
+// `presetInvoiceId` (optional, spec: Invoices module §8) preselects the
+// Invoice dropdown below — used when "Record Payment" is launched FROM an
+// invoice (list row / detail view). Every pre-existing call site (Project
+// View's own Record Payment button) passes nothing here and the dropdown
+// simply defaults to "— No Invoice —", so an unlinked payment is recorded
+// exactly as before this module existed.
+//
+// `opts.autoReceipt` (spec: "Invoice -> Payment -> Receipt Workflow" primary
+// workflow) — when true, saving this modal both records the payment AND
+// generates its receipt in the same action ("Record Payment & Generate
+// Receipt"), instead of leaving receipt generation as a separate follow-up
+// click in the confirmation modal. Every call site that omits it keeps the
+// original two-step behavior (Save Payment, then optionally Generate
+// Receipt from the confirmation modal) byte-identical to before.
+// `opts.forceNoInvoice` — used by the Receipts page's "+ Record Receipt" →
+// "Project Payment without Invoice" mode: hides the Invoice dropdown
+// entirely (this payment can never be linked to one) and shows the exact
+// warning copy the spec requires.
+function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null, opts={}){
   const proj = DB.find('projects', projectId);
   if(!proj) return;
+  const autoReceipt = !!opts.autoReceipt;
+  const forceNoInvoice = !!opts.forceNoInvoice;
   const summary = paymentSummaryFor(projectId);
   const hasDeposit = paymentsForProject(projectId).some(p=>p.type==='Deposit');
   const suggestedNumber = nextPaymentNumberLabel(projectId);
-  const eligibleInvoices = (typeof DB!=='undefined' ? DB.all('invoices') : [])
+  const eligibleInvoices = forceNoInvoice ? [] : (typeof DB!=='undefined' ? DB.all('invoices') : [])
     .filter(i=> i.projectCode===projectId && i.status!=='Cancelled');
 
   // Invoice Type / Payment Type consistency (soft guidance only, spec §4) —
@@ -359,30 +380,48 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
   // Invoice Type. Custom invoices suggest nothing (user picks freely). The
   // dropdown stays fully editable either way, and picking something else
   // never blocks Save — only shows a small inline warning near the field.
-  const presetInvoice = presetInvoiceId ? DB.find('invoices', presetInvoiceId) : null;
+  const presetInvoice = (!forceNoInvoice && presetInvoiceId) ? DB.find('invoices', presetInvoiceId) : null;
   const suggestedPaymentType = presetInvoice ? (INVOICE_TYPE_TO_PAYMENT_TYPE[presetInvoice.invoiceType] || null) : null;
+  // Invoice Amount / Amount Already Received / Outstanding Balance auto-fill
+  // (spec: Primary workflow "Auto-fill ... Invoice Amount, Amount Already
+  // Received, Outstanding Balance") — read live from invoiceTotals(), the
+  // ONE place those figures are computed (js/invoices.js), never
+  // duplicated/recomputed here.
+  const presetInvoiceTotals = presetInvoice ? invoiceTotals(presetInvoice) : null;
 
   const html = `
-    <div class="modal-head"><h3>Record Payment</h3><button class="modal-close" id="rpClose">&times;</button></div>
+    <div class="modal-head"><h3>${autoReceipt ? 'Record Payment &amp; Generate Receipt' : 'Record Payment'}</h3><button class="modal-close" id="rpClose">&times;</button></div>
     <div class="modal-body">
       <p class="text-muted" style="margin-top:0;font-size:13px">${proj.id} — ${escapeHtml(proj.businessName)} · Project Value ${moneyPrecise(summary.confirmedValue)} · Remaining: <b>${moneyPrecise(summary.remaining)}</b></p>
+      ${presetInvoice ? `
+      <div class="pd-keyinfo" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+        <div>
+          ${infoRow('Invoice', escapeHtml(presetInvoice.invoiceNumber))}
+          ${infoRow('Invoice Amount', moneyPrecise(presetInvoiceTotals.total))}
+        </div>
+        <div>
+          ${infoRow('Amount Already Received', moneyPrecise(presetInvoiceTotals.totalPaid))}
+          ${infoRow('Outstanding Balance', moneyPrecise(presetInvoiceTotals.balance))}
+        </div>
+      </div>` : ''}
+      ${forceNoInvoice ? `<p class="text-muted" style="font-size:12px;background:rgba(217,138,18,.1);border:1px solid #d98a12;border-radius:var(--radius-sm);padding:8px 10px;margin:0 0 14px">This receipt will not be linked to an invoice. Use this only when payment was received without an invoice.</p>` : ''}
       <div class="form-grid">
         <div class="form-field"><label class="required">Payment Number</label><input id="rp_number" value="${suggestedNumber}"></div>
         <div class="form-field"><label class="required">Payment Type</label>
           <select id="rp_type">
             ${!hasDeposit ? `<option value="Deposit" ${suggestedPaymentType==='Deposit'?'selected':''}>Deposit</option>` : ''}
-            <option value="Partial Payment" ${suggestedPaymentType==='Partial Payment'?'selected':''}>Partial Payment</option>
-            <option value="Full Payment">Full Payment</option>
+            <option value="Milestone" ${suggestedPaymentType==='Milestone'?'selected':''}>Milestone</option>
             <option value="Final Payment" ${suggestedPaymentType==='Final Payment'?'selected':''}>Final Payment</option>
             <option value="Renewal">Renewal</option>
+            <option value="Add-on">Add-on</option>
             <option value="Other">Other</option>
           </select>
           <p class="text-muted" id="rp_typeWarning" style="display:none;color:var(--amber);font-size:11px;margin:4px 0 0">This payment type differs from the invoice stage.</p>
         </div>
-        <div class="form-field"><label class="required">Amount ($)</label><input type="number" id="rp_amount" value="${!hasDeposit ? Math.round(summary.confirmedValue*proj.depositPct) / 100 : summary.remaining}" min="0.01" step="0.01"></div>
+        <div class="form-field"><label class="required">Amount ($)</label><input type="number" id="rp_amount" value="${presetInvoice ? presetInvoiceTotals.balance : (!hasDeposit ? Math.round(summary.confirmedValue*proj.depositPct) / 100 : summary.remaining)}" min="0.01" step="0.01"></div>
         <div class="form-field"><label class="required">Payment Date</label><input type="date" id="rp_date" value="${new Date().toISOString().slice(0,10)}"></div>
         <div class="form-field"><label class="required">Payment Method</label><select id="rp_method">${PAYMENT_METHODS.map(m=>`<option>${m}</option>`).join('')}</select></div>
-        <div class="form-field"><label>Reference</label><input id="rp_ref" placeholder="e.g. bank txn ref, receipt #…"></div>
+        <div class="form-field"><label>Transaction / Reference No.</label><input id="rp_ref" placeholder="e.g. bank txn ref, receipt #…"></div>
         ${eligibleInvoices.length ? `<div class="form-field"><label>Invoice</label>
           <select id="rp_invoice">
             <option value="">— No Invoice —</option>
@@ -394,7 +433,7 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
     </div>
     <div class="modal-foot">
       <button class="btn btn-secondary" id="rpCancel">Cancel</button>
-      <button class="btn btn-primary" id="rpSave">Save Payment</button>
+      <button class="btn btn-primary" id="rpSave">${autoReceipt ? 'Record Payment &amp; Generate Receipt' : 'Save Payment'}</button>
     </div>
   `;
   openModal(html, { onMount:(overlay)=>{
@@ -430,7 +469,7 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
       refreshTypeWarning();
     };
 
-    overlay.querySelector('#rpSave').onclick = ()=>{
+    overlay.querySelector('#rpSave').onclick = function(){ return runSave(this, async ()=>{
       const paymentNumber = overlay.querySelector('#rp_number').value.trim() || suggestedNumber;
       const type = overlay.querySelector('#rp_type').value;
       const amount = Number(overlay.querySelector('#rp_amount').value)||0;
@@ -439,31 +478,69 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
       const reference = overlay.querySelector('#rp_ref').value.trim();
       const notes = overlay.querySelector('#rp_notes').value.trim();
       const invoiceSel = overlay.querySelector('#rp_invoice');
-      const invoiceId = invoiceSel ? (invoiceSel.value || null) : null;
+      const invoiceId = forceNoInvoice ? null : (invoiceSel ? (invoiceSel.value || null) : null);
       if(amount<=0 || !date){ toast('Please enter a valid amount and date.', 'error'); return; }
 
-      // Never let Total Paid silently exceed Project Value — warn and
-      // require explicit confirmation rather than blocking outright, in
-      // case the overage is genuinely intentional (e.g. a renewal payment
-      // recorded against the same project).
-      const currentSummary = paymentSummaryFor(projectId);
-      if(amount > currentSummary.remaining + 0.004){
-        const proceed = confirm(
-          `This payment is greater than the remaining project balance.\n\n` +
-          `Remaining Balance: ${moneyPrecise(currentSummary.remaining)}\n` +
-          `Amount Entered: ${moneyPrecise(amount)}\n\n` +
-          `Record this payment anyway?`
-        );
-        if(!proceed) return;
+      if(invoiceId){
+        // Invoice-linked overpayment guard (spec: "Prevent total valid
+        // receipts against an invoice from exceeding its balance unless
+        // Founder/Admin explicitly confirms an overpayment workflow.") —
+        // unlike the project-level check below, a non-Founder/Admin user is
+        // blocked outright here; only Founder/Admin ever sees the override
+        // confirm().
+        const linkedInv = DB.find('invoices', invoiceId);
+        const linkedTotals = linkedInv ? invoiceTotals(linkedInv) : null;
+        if(linkedTotals && amount > linkedTotals.balance + 0.004){
+          if(!isFounder()){
+            toast(`This would exceed the invoice balance (${moneyPrecise(linkedTotals.balance)}). Only Founder/Admin can confirm an overpayment.`, 'error');
+            return;
+          }
+          const proceed = confirm(
+            `This payment is greater than the invoice's outstanding balance.\n\n` +
+            `Invoice Balance: ${moneyPrecise(linkedTotals.balance)}\n` +
+            `Amount Entered: ${moneyPrecise(amount)}\n\n` +
+            `Record this as an overpayment anyway?`
+          );
+          if(!proceed) return;
+        }
+      } else {
+        // Never let Total Paid silently exceed Project Value — warn and
+        // require explicit confirmation rather than blocking outright, in
+        // case the overage is genuinely intentional (e.g. a renewal payment
+        // recorded against the same project). Unchanged, project-level-only
+        // behavior — preserved exactly as it worked before the Invoices/
+        // Receipts overpayment guard above was added.
+        const currentSummary = paymentSummaryFor(projectId);
+        if(amount > currentSummary.remaining + 0.004){
+          const proceed = confirm(
+            `This payment is greater than the remaining project balance.\n\n` +
+            `Remaining Balance: ${moneyPrecise(currentSummary.remaining)}\n` +
+            `Amount Entered: ${moneyPrecise(amount)}\n\n` +
+            `Record this payment anyway?`
+          );
+          if(!proceed) return;
+        }
       }
 
-      const savedPayment = recordPaymentEntry({ projectId, paymentNumber, amount, date, method, type, reference, note: notes, userName: CURRENT_USER.name, invoiceId });
+      const recorded = await recordPaymentEntry({ projectId, paymentNumber, amount, date, method, type, reference, note: notes, userName: CURRENT_USER.name, invoiceId });
+      if(!recorded.ok){ saveFailed(recorded); return; }      // nothing was recorded: the form stays open with everything the user typed
+      const savedPayment = recorded.record;
+
+      // Combined "Record Payment & Generate Receipt" (spec: Primary
+      // workflow) — generate the receipt in the SAME action, silently (no
+      // extra click/modal), before recalculating the invoice's status so
+      // the brand-new receipt is already counted (invoicePaymentsFor() only
+      // counts payments with an active/Issued receipt — see js/invoices.js).
+      if(autoReceipt && typeof generateReceiptForPayment==='function'){
+        await generateReceiptForPayment(savedPayment.id, ()=>{});
+      }
       // Recompute the linked invoice's Total Paid/Balance/Status (spec §8) —
       // this is a real reference to the SAME payment row just recorded
       // above, never a duplicate. Unlinked payments (invoiceId===null,
       // every payment recorded before this module existed included) never
-      // touch this at all.
-      if(invoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(invoiceId);
+      // touch this at all. Placed AFTER the receipt is generated above so
+      // the recalculation already sees it.
+      if(invoiceId && typeof recalcInvoiceStatus==='function') await recalcInvoiceStatus(invoiceId);
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: proj.id, refLabel:`${proj.id} — ${proj.businessName}`,
         type: type==='Deposit' ? 'Deposit Recorded' : 'Payment Recorded',
         description:`${CURRENT_USER.name} recorded payment: ${moneyPrecise(amount)} (${type}, ${paymentNumber}) for project ${proj.id}`,
@@ -496,21 +573,10 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null){
         // underneath never disturbs it.
         refreshAfterLeadOrProjectChange();
       }});
-    };
+    }); };
   }});
 }
 
-/* ---------------------------------------------------------------------- */
-/* Payment Recorded confirmation — CRM-styled modal replacing the old      */
-/* native alert()/confirm() pair. Shows the payment summary (same values   */
-/* already computed above — nothing recalculated here) and, only when the  */
-/* exact same eligibility check the old confirm() used is met, offers the  */
-/* follow-on project-stage change as in-app buttons instead of a native    */
-/* confirm() dialog. The stage-change action itself still calls the exact  */
-/* same applyProjectStageChange() used by every other stage-change entry   */
-/* point in the app — only what triggers it (a button, not confirm())      */
-/* changed.                                                                 */
-/* ---------------------------------------------------------------------- */
 // `paymentId` (optional, spec: Receipts module) — the just-saved payment's
 // own id, used only to offer a "Generate Receipt" action below. Every
 // pre-existing call site that doesn't pass it (none currently) would simply

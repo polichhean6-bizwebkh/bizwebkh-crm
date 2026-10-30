@@ -1,69 +1,84 @@
 /* ==========================================================================
-   BizWeb KH CRM — auth.js
-   Supabase Auth wrapper.
+   BizWeb KH CRM — auth.js  (Neon Auth)
+   Neon Auth wrapper. Same public surface as the Supabase build:
+   Auth.login/Auth.logout/Auth.currentUser/Auth.requireAuth/
+   Auth.redirectIfLoggedIn/Auth.restoreSession — so every other module (which reads
+   CURRENT_USER.name / .role / .color / .initials synchronously) keeps working untouched.
 
-   Public surface: Auth.login/Auth.logout/Auth.currentUser/Auth.requireAuth/
-   Auth.redirectIfLoggedIn/Auth.restoreSession — unchanged shape from the
-   old localStorage-only build so every other module (which reads
-   CURRENT_USER.name / .role / .color / .initials synchronously) keeps
-   working untouched.
+   Session shape: { id, email, name, role, color, initials } — `role` is the canonical
+   snake_case value (founder_admin | sales | sales_rep | partner_operations | finance).
+   Use ROLE_LABELS below for display text — never show `role` raw in the UI.
 
-   Session shape: { id, email, name, role, color, initials } — `role` is
-   the canonical snake_case value from the `profiles.role` enum
-   (founder_admin | sales | sales_rep | partner_operations | finance). Use
-   ROLE_LABELS below for display text — never show `role` raw in the UI.
-
-   IMPORTANT: Auth.currentUser() is still SYNCHRONOUS (it just reads an
-   in-memory + localStorage-cached session object) so app.js's top-level
-   `const CURRENT_USER = Auth.requireAuth();` keeps working without being
-   rewritten. What makes this safe is Auth.restoreSession() — an async
-   function that dashboard/index.html's bootstrap script awaits (together
-   with DB.init()) BEFORE app.js is ever loaded, so the in-memory session
-   cache is already populated by the time any synchronous Auth.currentUser()
-   call happens.
+   What changed from the Supabase build:
+     * sign-in / session / refresh / sign-out go through the pinned Neon Auth SDK (js/neon-client.js)
+     * the profile is read with GET /api/me (role + status) instead of a table read
+     * an invited user's first successful sign-in activates the account (POST /api/me/activate);
+       a deactivated user is refused exactly as before
+     * the "last login" stamp is POST /api/me/touch-login
+   Auth.currentUser() is still SYNCHRONOUS: dashboard/index.html awaits Auth.restoreSession()
+   and DB.init() BEFORE app.js is loaded, then calls Auth.completeSession() to add the display
+   fields (name/colour/initials) from the loaded staff list.
    ========================================================================== */
 
 const Auth = {
   _session: null,
+  // Why restoreSession() returned null: { state: 'auth_required'|'not_authorized'|'backend_unavailable', reason, requestId }
+  lastStatus: null,
 
   async login(email, password){
-    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
-    if(error || !data.session) return null;
-
-    const { data: profile, error: profileErr } = await supabaseClient
-      .from('profiles').select('*').eq('id', data.user.id).single();
-    if(profileErr || !profile) return null;
-
-    // Deactivated staff must never reach a live session, even though their
-    // password still works — a Founder/Admin "Deactivate" action revokes
-    // access, not the credential itself (see js/app.js Users & Roles).
-    if(profile.status && profile.status !== 'active'){
-      try{ await supabaseClient.auth.signOut(); }catch(e){ console.error('Supabase signOut failed', e); }
-      Auth._session = null;
-      Auth._loginBlockedReason = profile.status === 'invited'
-        ? 'Your invitation hasn\'t been activated yet. Please use the link in your invitation email to set a password.'
-        : 'This account has been deactivated. Please contact your Founder/Admin.';
+    Auth._loginBlockedReason = null;
+    let data, error;
+    try{ ({ data, error } = await BZ.authClient.signInWithPassword({ email, password })); }
+    catch(e){ Auth._loginBlockedReason = 'Cannot reach the sign-in service. Check your internet connection and try again.'; return null; }
+    if(error || !data || !data.session){
+      if(error && (error.status === 0 || /fetch|network/i.test(String(error.message||'')))) Auth._loginBlockedReason = 'Cannot reach the sign-in service. Check your internet connection and try again.';
+      else if(error && error.status === 429) Auth._loginBlockedReason = 'Too many sign-in attempts. Please wait a minute and try again.';
+      else if(error && (error.code === 'BANNED_USER' || /banned|suspended/i.test(String(error.message||'')))) Auth._loginBlockedReason = 'This account has been suspended. Please contact your Founder/Admin.';
       return null;
     }
 
-    const session = {
-      id: data.user.id, email: data.user.email,
-      name: profile.name, role: profile.role,
-      color: profile.color || '#1d7bff', initials: profile.initials || initialsOfName(profile.name),
-    };
+    let me = await BZ.api('GET', '/api/me');
+    if(me.status === 0 || me.status >= 500){
+      Auth._loginBlockedReason = 'Signed in, but the CRM server is not answering. Please try again in a moment.';
+      try{ await BZ.authClient.signOut(); }catch(e){}
+      return null;
+    }
+    if(me.status !== 200 || !me.body){
+      // no CRM profile, or the account is refused
+      Auth._loginBlockedReason = me.status === 403 ? 'This account has no access to the CRM. Please contact your Founder/Admin.' : null;
+      try{ await BZ.authClient.signOut(); }catch(e){ console.error('signOut failed', e); }
+      Auth._session = null;
+      return null;
+    }
+
+    // Deactivated staff must never reach a live session, even though their password still works.
+    if(me.body.status === 'inactive'){
+      try{ await BZ.authClient.signOut(); }catch(e){ console.error('signOut failed', e); }
+      Auth._session = null;
+      Auth._loginBlockedReason = 'This account has been deactivated. Please contact your Founder/Admin.';
+      return null;
+    }
+    // An invited user who now has a working password (set through the emailed link) becomes Active on first sign-in.
+    if(me.body.status === 'invited'){
+      const act = await BZ.api('POST', '/api/me/activate');
+      if(act.status !== 200){
+        try{ await BZ.authClient.signOut(); }catch(e){}
+        Auth._session = null;
+        Auth._loginBlockedReason = 'Your invitation could not be activated. Please use the link in your invitation email to set a password, or contact your Founder/Admin.';
+        return null;
+      }
+      me = await BZ.api('GET', '/api/me');
+    }
+
+    const session = { id: me.body.id, email: data.user && data.user.email || email, name: '', role: me.body.role, color: '#1d7bff', initials: '' };
     sessionSet(session);
-    // Best-effort — never block login on this. Records last_login_at via a
-    // SECURITY DEFINER RPC (a plain UPDATE from the client would otherwise
-    // be blocked/awkward under the profiles RLS policy set).
-    try{ await supabaseClient.rpc('fn_touch_last_login'); }
-    catch(e){ console.error('fn_touch_last_login failed', e); }
+    // Best-effort — never block login on this.
+    try{ await BZ.api('POST', '/api/me/touch-login'); }catch(e){ console.error('touch-login failed', e); }
     return session;
   },
 
-  // Last blocked-login reason (set by login() when it rejects an invited/
-  // inactive account) — login/index.html reads this once, right after a
-  // failed login() call, to show a clearer message than the generic
-  // "invalid email or password" one.
+  // Last blocked-login reason (set by login() when it rejects an invited/inactive/unreachable case) —
+  // login/index.html reads this once, right after a failed login() call.
   _loginBlockedReason: null,
   consumeLoginBlockedReason(){
     const r = Auth._loginBlockedReason;
@@ -72,16 +87,13 @@ const Auth = {
   },
 
   async logout(){
-    try{ await supabaseClient.auth.signOut(); }
-    catch(e){ console.error('Supabase signOut failed', e); }
+    try{ await BZ.authClient.signOut(); }
+    catch(e){ console.error('Neon Auth signOut failed', e); }
     Auth._session = null;
-    localStorage.removeItem(BZ_SESSION_KEY);
+    try{ localStorage.removeItem(BZ_SESSION_KEY); }catch(e){}
   },
 
-  // Synchronous — reads the in-memory cache populated by login() or
-  // restoreSession(). Falls back to the localStorage mirror (sessionSet())
-  // only as a same-tab convenience; the source of truth is always the live
-  // Supabase session, re-checked by restoreSession() on every page load.
+  // Synchronous — reads the in-memory cache populated by login() or restoreSession().
   currentUser(){
     if(Auth._session) return Auth._session;
     try{
@@ -102,36 +114,48 @@ const Auth = {
     if(u){ window.location.href = getDashboardPath(); }
   },
 
-  // Called once by dashboard/index.html's bootstrap script, BEFORE app.js
-  // (or any other feature module) is loaded. Confirms there's a live
-  // Supabase session, fetches the matching profile, and populates the
-  // in-memory session cache used by the synchronous currentUser() above.
-  // Returns the session object, or null if there is no live session (the
-  // caller is responsible for redirecting to the login page in that case).
+  // Called once by dashboard/index.html's bootstrap script, BEFORE DB.init(). Confirms there is a live Neon Auth
+  // session and that the CRM accepts it (GET /api/me). Returns the minimal session, or null with Auth.lastStatus saying why.
+  // A failure is NEVER silent: backend problems are reported as 'backend_unavailable', not as "signed out".
   async restoreSession(){
-    const { data, error } = await supabaseClient.auth.getSession();
-    if(error || !data.session){ Auth._session = null; return null; }
+    Auth.lastStatus = null;
+    let token = null;
+    try{ token = await BZ.getToken(); }catch(e){ token = null; }
+    if(!token){ Auth._session = null; try{ localStorage.removeItem(BZ_SESSION_KEY); }catch(e){} Auth.lastStatus = { state: 'auth_required', reason: 'no session' }; return null; }
 
-    const { data: profile, error: profileErr } = await supabaseClient
-      .from('profiles').select('*').eq('id', data.session.user.id).single();
-    if(profileErr || !profile){ Auth._session = null; return null; }
-
-    // A user deactivated mid-session must be kicked out on their very next
-    // page load/refresh, not just blocked from a fresh sign-in.
-    if(profile.status && profile.status !== 'active'){
-      try{ await supabaseClient.auth.signOut(); }catch(e){ console.error('Supabase signOut failed', e); }
+    const me = await BZ.api('GET', '/api/me');
+    if(me.status === 0 || me.status >= 500){ Auth._session = null; Auth.lastStatus = { state: 'backend_unavailable', reason: me.body && me.body.error || ('http ' + me.status), requestId: me.requestId }; return null; }
+    if(me.status === 401){ Auth._session = null; try{ localStorage.removeItem(BZ_SESSION_KEY); }catch(e){} Auth.lastStatus = { state: 'auth_required', reason: me.body && me.body.error }; return null; }
+    if(me.status !== 200 || !me.body || !me.body.id){
       Auth._session = null;
-      localStorage.removeItem(BZ_SESSION_KEY);
+      try{ await BZ.authClient.signOut(); }catch(e){}
+      try{ localStorage.removeItem(BZ_SESSION_KEY); }catch(e){}
+      Auth.lastStatus = { state: 'not_authorized', reason: me.body && me.body.error || ('http ' + me.status), requestId: me.requestId };
       return null;
     }
-
-    const session = {
-      id: data.session.user.id, email: data.session.user.email,
-      name: profile.name, role: profile.role,
-      color: profile.color || '#1d7bff', initials: profile.initials || initialsOfName(profile.name),
-    };
+    // A user deactivated mid-session must be kicked out on their very next page load.
+    if(me.body.status !== 'active'){
+      Auth._session = null;
+      try{ await BZ.authClient.signOut(); }catch(e){}
+      try{ localStorage.removeItem(BZ_SESSION_KEY); }catch(e){}
+      Auth.lastStatus = { state: 'not_authorized', reason: me.body.status === 'invited' ? 'not_activated' : 'inactive' };
+      return null;
+    }
+    let email = '';
+    try{ const g = await BZ.authClient.getSession(); email = (g && g.data && g.data.session && g.data.session.user && g.data.session.user.email) || ''; }catch(e){}
+    const session = { id: me.body.id, email, name: '', role: me.body.role, color: '#1d7bff', initials: '' };
     sessionSet(session);
     return session;
+  },
+
+  // Called by the bootstrap AFTER DB.init(): adds the display fields from the staff list that came with the bootstrap response.
+  completeSession(){
+    const s = Auth._session; if(!s) return null;
+    const u = (typeof DB !== 'undefined' ? DB.all('users') : []).find(x=>x.id === s.id);
+    if(!u) return null;     // the server guarantees the caller's own profile is present; if not, the caller treats this as a failed bootstrap
+    s.name = u.name; s.role = u.role; s.color = u.color || '#1d7bff'; s.initials = u.initials || initialsOfName(u.name);
+    sessionSet(s);
+    return s;
   }
 };
 

@@ -80,18 +80,18 @@ function openSetFollowupModal(leadId, onDone){
     overlay.querySelector('#sfCancel').onclick = closeModal;
     wireFollowupPresetChips(overlay, 'sf');
 
-    function commit(newDate){
+    async function commit(newDate){
       const oldDate = lead.nextFollowup;
       const now = new Date().toISOString();
       lead.nextFollowup = newDate || null;
       lead.followUpCreatedBy = lead.followUpCreatedBy || (newDate ? CURRENT_USER.name : lead.followUpCreatedBy);
       lead.followUpUpdatedAt = now;
       lead.updatedAt = now;
-      DB.upsert('leads', lead);
+      { const saved = await DB.update('leads', lead); if(!saved.ok){ saveFailed(saved); return false; } }
 
       if(!newDate){
         const reason = null;
-        DB.upsert('leadActivities', { leadId: lead.id, activityType:'follow_up_cancelled',
+        await recordLeadActivity({ leadId: lead.id, activityType:'follow_up_cancelled',
           note: reason, followUpDate: null, completedAt: null, createdBy: CURRENT_USER.name, createdAt: now });
         logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
           type:'Follow-up Cancelled', description:`${CURRENT_USER.name} removed the follow-up${oldDate?` (was ${fmtDate(oldDate)})`:''} for ${lead.clientName}.`,
@@ -99,14 +99,14 @@ function openSetFollowupModal(leadId, onDone){
         toast('Follow-up removed.', 'success');
       } else if(isReschedule){
         const reason = overlay.querySelector('#sf_reason')?.value.trim();
-        DB.upsert('leadActivities', { leadId: lead.id, activityType:'follow_up_rescheduled',
+        await recordLeadActivity({ leadId: lead.id, activityType:'follow_up_rescheduled',
           note: reason || null, followUpDate: newDate, completedAt: null, createdBy: CURRENT_USER.name, createdAt: now });
         logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
           type:'Follow-up Rescheduled', description:`${CURRENT_USER.name} rescheduled follow-up: ${oldDate?fmtDate(oldDate):'—'} → ${fmtDate(newDate)}`,
           fromValue: oldDate, toValue: newDate, remark: reason || null });
         toast('Follow-up rescheduled.', 'success');
       } else {
-        DB.upsert('leadActivities', { leadId: lead.id, activityType:'follow_up_scheduled',
+        await recordLeadActivity({ leadId: lead.id, activityType:'follow_up_scheduled',
           note: null, followUpDate: newDate, completedAt: null, createdBy: CURRENT_USER.name, createdAt: now });
         logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
           type:'Follow-up Scheduled', description:`${CURRENT_USER.name} scheduled a follow-up for ${fmtDate(newDate)}.`,
@@ -118,14 +118,14 @@ function openSetFollowupModal(leadId, onDone){
       if(currentRoute()==='dashboard') router();
     }
 
-    overlay.querySelector('#sfSave').onclick = ()=>{
+    overlay.querySelector('#sfSave').onclick = function(){ return runSave(this, async ()=>{
       const dateInput = overlay.querySelector('#sf_date');
       const newDate = dateInput.value;
       if(!newDate){ toast('Please choose a date, or use "No Follow-up".', 'error'); return; }
       if(isPastLocalDate(newDate)){ dateInput.style.borderColor='var(--red)'; toast('Follow-up date cannot be in the past.', 'error'); return; }
-      commit(newDate);
-    };
-    overlay.querySelector('#sfNoFollowup').onclick = ()=> commit(null);
+      await commit(newDate);
+    }); };
+    overlay.querySelector('#sfNoFollowup').onclick = function(){ return runSave(this, ()=> commit(null)); };
   }});
 }
 
@@ -158,15 +158,15 @@ function openCompleteFollowupModal(leadId, onDone){
   openModal(html, { onMount:(overlay)=>{
     overlay.querySelector('#cfClose').onclick = closeModal;
     overlay.querySelector('#cfCancel').onclick = closeModal;
-    overlay.querySelector('#cfSave').onclick = ()=>{
+    overlay.querySelector('#cfSave').onclick = function(){ return runSave(this, async ()=>{
       const note = overlay.querySelector('#cfNote').value.trim();
       const today = new Date().toISOString().slice(0,10);
       const now = new Date().toISOString();
       lead.lastContact = today;
       lead.updatedAt = now;
-      DB.upsert('leads', lead);
+      { const saved = await DB.update('leads', lead); if(!saved.ok){ saveFailed(saved); return false; } }
 
-      DB.upsert('leadActivities', { leadId, activityType:'follow_up_completed',
+      await recordLeadActivity({ leadId, activityType:'follow_up_completed',
         note: note || null, followUpDate: null, completedAt: now, createdBy: CURRENT_USER.name, createdAt: now });
 
       logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
@@ -182,7 +182,7 @@ function openCompleteFollowupModal(leadId, onDone){
       // Spec §6: always ASK whether to schedule the next follow-up — never
       // silently set or silently skip one — and never touch the sales stage.
       setTimeout(()=> openScheduleNextFollowupModal(leadId, onDone), 150);
-    };
+    }); };
   }});
 }
 
@@ -204,14 +204,14 @@ function openScheduleNextFollowupModal(leadId, onDone){
     overlay.querySelector('#snClose').onclick = closeModal;
     wireFollowupPresetChips(overlay, 'sn');
 
-    function commit(newDate){
+    async function commit(newDate){
       const now = new Date().toISOString();
       lead.nextFollowup = newDate || null;
       if(newDate) lead.followUpCreatedBy = CURRENT_USER.name;
       lead.followUpUpdatedAt = now;
       lead.updatedAt = now;
-      DB.upsert('leads', lead);
-      DB.upsert('leadActivities', { leadId: lead.id, activityType: newDate ? 'follow_up_scheduled' : 'follow_up_cancelled',
+      { const saved = await DB.update('leads', lead); if(!saved.ok){ saveFailed(saved); return false; } }
+      await recordLeadActivity({ leadId: lead.id, activityType: newDate ? 'follow_up_scheduled' : 'follow_up_cancelled',
         note: null, followUpDate: newDate || null, completedAt: null, createdBy: CURRENT_USER.name, createdAt: now });
       logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
         type: newDate ? 'Follow-up Scheduled' : 'Follow-up Cancelled',
@@ -223,14 +223,14 @@ function openScheduleNextFollowupModal(leadId, onDone){
       if(currentRoute()==='dashboard') router();
     }
 
-    overlay.querySelector('#snSave').onclick = ()=>{
+    overlay.querySelector('#snSave').onclick = function(){ return runSave(this, async ()=>{
       const dateInput = overlay.querySelector('#sn_date');
       const newDate = dateInput.value;
       if(!newDate){ toast('Please choose a date, or use "No Further Follow-up".', 'error'); return; }
       if(isPastLocalDate(newDate)){ dateInput.style.borderColor='var(--red)'; toast('Follow-up date cannot be in the past.', 'error'); return; }
-      commit(newDate);
-    };
-    overlay.querySelector('#snNone').onclick = ()=> commit(null);
+      await commit(newDate);
+    }); };
+    overlay.querySelector('#snNone').onclick = function(){ return runSave(this, ()=> commit(null)); };
   }});
 }
 
@@ -255,20 +255,20 @@ function openFollowupNoteModal(leadId, onDone){
   openModal(html, { onMount:(overlay)=>{
     overlay.querySelector('#fnClose').onclick = closeModal;
     overlay.querySelector('#fnCancel').onclick = closeModal;
-    overlay.querySelector('#fnSave').onclick = ()=>{
+    overlay.querySelector('#fnSave').onclick = function(){ return runSave(this, async ()=>{
       const note = overlay.querySelector('#fnNote').value.trim();
       if(!note){ toast('Please write a note.', 'error'); return; }
       const now = new Date().toISOString();
-      DB.upsert('leadActivities', { leadId, activityType:'note_added', note,
-        followUpDate: null, completedAt: null, createdBy: CURRENT_USER.name, createdAt: now });
       lead.lastContact = new Date().toISOString().slice(0,10);
-      DB.upsert('leads', lead);
+      { const saved = await DB.update('leads', lead); if(!saved.ok){ saveFailed(saved); return false; } }
+      await recordLeadActivity({ leadId, activityType:'note_added', note,
+        followUpDate: null, completedAt: null, createdBy: CURRENT_USER.name, createdAt: now });
       logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
         type:'Follow-up Added', description:`${CURRENT_USER.name} added follow-up note: "${note}"` });
       toast('Follow-up note saved.', 'success');
       closeModal();
       if(onDone) onDone();
-    };
+    }); };
   }});
 }
 
@@ -366,13 +366,13 @@ function renderFollowupsPage(){
   el2.querySelectorAll('[data-note]').forEach(x=> x.onclick = ()=> openFollowupNoteModal(x.dataset.note, renderFollowupsPage));
   el2.querySelectorAll('[data-resched]').forEach(x=> x.onclick = ()=> openRescheduleModal(x.dataset.resched, renderFollowupsPage));
   el2.querySelectorAll('[data-complete]').forEach(x=> x.onclick = ()=> openCompleteFollowupModal(x.dataset.complete, renderFollowupsPage));
-  el2.querySelectorAll('[data-call]').forEach(x=> x.onclick = ()=>{
+  el2.querySelectorAll('[data-call]').forEach(x=> x.onclick = function(){ return runSave(this, async ()=>{
     const lead = DB.find('leads', x.dataset.call);
+    lead.lastContact = new Date().toISOString().slice(0,10);
+    { const saved = await DB.update('leads', lead); if(!saved.ok){ saveFailed(saved); return false; } }
     logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
       type:'Note Added', description:`${CURRENT_USER.name} contacted ${lead.clientName} by phone.` });
-    lead.lastContact = new Date().toISOString().slice(0,10);
-    DB.upsert('leads', lead);
     toast(`Marked call with ${lead.clientName}.`, 'success');
     renderFollowupsPage();
-  });
+  }); });
 }

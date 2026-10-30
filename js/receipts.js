@@ -99,7 +99,7 @@ function receiptPaymentAndSummary(receipt){
 /* Generate Receipt — the ONE place a receipt is ever created. Always      */
 /* from an existing recorded payment; never an independent money record.   */
 /* ---------------------------------------------------------------------- */
-function generateReceiptForPayment(paymentId, onDone){
+async function generateReceiptForPayment(paymentId, onDone){
   const payment = DB.find('payments', paymentId);
   if(!payment){ toast('Payment not found.', 'error'); return; }
   if(payment.voided){ toast('This payment has been voided — a receipt cannot be generated for it.', 'error'); return; }
@@ -126,8 +126,8 @@ function generateReceiptForPayment(paymentId, onDone){
 
   const proj = payment.projectId ? DB.find('projects', payment.projectId) : null;
   const rec = {
-    id: 'RC' + Date.now() + Math.floor(Math.random()*10000),
-    receiptNumber: generateReceiptNumber(payment.projectId, payment.date),
+    id: null,                 // the receipt id and number (RCT-{project}-{nnn}) are assigned by the server when the receipt is saved
+    receiptNumber: null,
     paymentId: payment.id,
     projectCode: payment.projectId,
     invoiceId: payment.invoiceId || null,
@@ -140,7 +140,8 @@ function generateReceiptForPayment(paymentId, onDone){
     cancelledBy: null, cancelledAt: null, cancelReason: null,
     reissueOfReceiptId: mostRecentCancelled ? mostRecentCancelled.id : null,
   };
-  DB.upsert('receipts', rec);
+  const created = await DB.create('receipts', rec);
+  if(!created.ok){ saveFailed(created); return { ok:false }; }
   logActivity({ userName: CURRENT_USER.name, refType:'project', refId: payment.projectId||rec.id,
     refLabel: `${payment.projectId||''} — ${rec.businessName||rec.clientName}`.trim(),
     type: isReissue ? 'Receipt Reissued' : 'Receipt Generated',
@@ -149,10 +150,11 @@ function generateReceiptForPayment(paymentId, onDone){
       : `${CURRENT_USER.name} generated receipt ${rec.receiptNumber} for payment ${payment.paymentNumber||payment.id} (${moneyPrecise(payment.amount)}).` });
 
   toast(isReissue ? 'Receipt reissued.' : 'Receipt generated.', 'success');
-  if(payment.invoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(payment.invoiceId);
+  if(payment.invoiceId && typeof recalcInvoiceStatus==='function') await recalcInvoiceStatus(payment.invoiceId);
   if(onDone) onDone(rec);
   refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
   openReceiptPreview(rec.id, false);
+  return { ok:true, record:rec };
 }
 
 /* ---------------------------------------------------------------------- */
@@ -174,32 +176,27 @@ function generateReceiptForPayment(paymentId, onDone){
 /* check at the top of generateReceiptForPayment() above) — never a reissue  */
 /* of the same payment, since that payment's money is now void.             */
 /* ---------------------------------------------------------------------- */
-function cancelReceipt(receiptId, reason){
+async function cancelReceipt(receiptId, reason){
   const rec = DB.find('receipts', receiptId);
   if(!rec) return null;
   reason = (reason||'').trim();
   if(!reason){ toast('A void reason is required.', 'error'); return null; }
-  rec.status = 'Cancelled';
-  rec.cancelledBy = CURRENT_USER.name;
-  rec.cancelledAt = new Date().toISOString();
-  rec.cancelReason = reason;
-  DB.upsert('receipts', rec);
+  const linkedPayment = rec.paymentId ? DB.find('payments', rec.paymentId) : null;
+  // One server transaction: the receipt is cancelled and (unless it was already void) its payment is voided with it. who/when come from the signed-in user.
+  const done = await DB.cancelReceipt(receiptId, reason, !!(linkedPayment && !linkedPayment.voided));
+  if(!done.ok){ saveFailed(done); return null; }
   // Void the underlying payment too (spec: exclude from every active total,
   // not just this invoice) — same voidedBy/reason, via the exact same
   // voidPaymentEntry() every other "void a payment" path in the app uses
   // (js/data.js), so Dashboard/Projects/Payments/Sales Performance all see
   // it the instant this receipt is voided, with no separate total to drift.
-  const linkedPayment = rec.paymentId ? DB.find('payments', rec.paymentId) : null;
-  if(linkedPayment && !linkedPayment.voided && typeof voidPaymentEntry==='function'){
-    voidPaymentEntry(linkedPayment.id, { voidedBy: CURRENT_USER.name, reason: `Receipt ${rec.receiptNumber} voided: ${reason}` });
-  }
   // Voiding a receipt must immediately recompute its invoice's Total Paid /
   // Balance / Status (spec: "Voided receipts must ... update invoice
   // balance/status again") — invoicePaymentsFor() excludes this payment the
   // moment its only active receipt is gone (and now also because the
   // payment itself is voided), so this recalculation is what actually moves
   // the invoice back to e.g. Partially Paid.
-  if(linkedPayment && linkedPayment.invoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(linkedPayment.invoiceId);
+  if(linkedPayment && linkedPayment.invoiceId && typeof recalcInvoiceStatus==='function') await recalcInvoiceStatus(linkedPayment.invoiceId);
   // Logged here (not by the caller) so every path to cancellation — the modal
   // below, or any future direct call — is captured exactly once, matching
   // generateReceiptForPayment's self-contained logging.
@@ -227,15 +224,16 @@ function openCancelReceiptModal(id, onDone){
   openModal(html, { onMount:(overlay)=>{
     overlay.querySelector('#rcxClose').onclick = closeModal;
     overlay.querySelector('#rcxCancel').onclick = closeModal;
-    overlay.querySelector('#rcxConfirm').onclick = ()=>{
+    overlay.querySelector('#rcxConfirm').onclick = function(){ return runSave(this, async ()=>{
       const reason = overlay.querySelector('#rcx_reason').value.trim();
       if(!reason){ toast('Please provide a reason.', 'error'); return; }
-      cancelReceipt(rec.id, reason);
+      const done = await cancelReceipt(rec.id, reason);
+      if(!done) return;      // failure already shown; the modal stays open
       toast('Receipt voided.', 'success');
       closeModal();
       if(onDone) onDone();
       refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
-    };
+    }); };
   }});
 }
 
@@ -260,7 +258,7 @@ function receiptNumberCellHtml(paymentId){
 function wireReceiptActionButtons(container, onDone){
   if(!container) return;
   container.querySelectorAll('[data-generate-receipt]').forEach(btn=>{
-    btn.onclick = ()=> generateReceiptForPayment(btn.dataset.generateReceipt, onDone);
+    btn.onclick = function(){ return runSave(this, ()=> generateReceiptForPayment(btn.dataset.generateReceipt, onDone)); };
   });
   container.querySelectorAll('[data-view-receipt]').forEach(btn=>{
     btn.onclick = ()=>{

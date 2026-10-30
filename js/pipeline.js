@@ -694,7 +694,7 @@ function openAddToPipelineModal(opts={}){
     // interaction at all.
     if(!selectedLead) renderResults();
 
-    confirmBtn.onclick = ()=>{
+    confirmBtn.onclick = function(){ return runSave(this, async ()=>{
       if(!selectedLead){ toast('Please select a lead.', 'error'); return; }
       // Defense in depth against a race — the lead may have been advanced
       // by someone else between opening this modal and clicking Confirm.
@@ -716,13 +716,14 @@ function openAddToPipelineModal(opts={}){
         return;
       }
       codeInput.style.borderColor='';
-      advanceLeadToPipeline(fresh, normalized);
+      const adv = await advanceLeadToPipeline(fresh, normalized);
+      if(!adv || !adv.ok) return;       // failure already shown; the modal stays open with the typed code
       toast(`${fresh.id} added to Pipeline as ${normalized}.`, 'success');
       closeModal();
       if(currentRoute()==='pipeline') renderPipelinePage();
       if(currentRoute()==='leads') renderLeadsTable();
       if(onDone) onDone();
-    };
+    }); };
   }});
 }
 

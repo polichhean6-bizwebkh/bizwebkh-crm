@@ -271,10 +271,10 @@ function openQuotationUnsavedChangesDialog(){
     // error"), and on success ends the dirty session + closes the parent
     // modal itself (see the two lines added there). We only close the
     // warning dialog first so it doesn't linger through either outcome.
-    overlay.querySelector('#qucSave').onclick = ()=>{
+    overlay.querySelector('#qucSave').onclick = function(){ return runSave(this, async ()=>{
       closeChildModal();
-      saveQuotationFromState(QC_STATE);
-    };
+      await saveQuotationFromState(QC_STATE);
+    }); };
   }});
 }
 
@@ -766,8 +766,9 @@ function selectPackageOnQC(projectType){
 }
 
 function qcQuoteNumberPreview(){
-  const code = QC_STATE.projectCode || QC_STATE.leadId || 'DIRECT';
-  return generateQuoteNumber(code, QC_STATE.quotationDate);
+  // The quotation number (BW-Q-{code}-{date}[-R#]) is allocated by the server when the quotation is saved; the browser never guesses it.
+  const editing = QC_STATE && QC_STATE.editingId ? DB.find('quotations', QC_STATE.editingId) : null;
+  return editing && editing.quoteNumber ? editing.quoteNumber : 'Number assigned when saved';
 }
 
 function renderCreateQuotationModal(){
@@ -1081,7 +1082,7 @@ function renderCreateQuotationModal(){
     overlay.querySelector('#cq_paymentPreset').onchange = e=>{ s.paymentPreset = e.target.value; renderCreateQuotationModal(); };
     overlay.querySelector('#cq_clientNote').oninput = e=>{ s.clientNote = e.target.value; refreshQcPreview(overlay); };
 
-    overlay.querySelector('#cqSave').onclick = ()=> saveQuotationFromState(s);
+    overlay.querySelector('#cqSave').onclick = function(){ return runSave(this, ()=> saveQuotationFromState(s)); };
   }});
 }
 
@@ -1438,7 +1439,7 @@ function annualCostBreakdownHtml(s, svc, totals){
   `;
 }
 
-function saveQuotationFromState(s){
+async function saveQuotationFromState(s){
   // Business Name is OPTIONAL (spec §1) — Client Name alone is enough to
   // create and save a quotation. Business Name still saves/prints if the
   // client has one; when blank, quoteInfoRows() below simply omits that row
@@ -1501,7 +1502,6 @@ function saveQuotationFromState(s){
   const schedule = preservePriorResolution
     ? (existingForTbcCheck.paymentSchedule && existingForTbcCheck.paymentSchedule.length ? existingForTbcCheck.paymentSchedule : computePaymentSchedule(year1Total, s.paymentPreset, s.customStages))
     : computePaymentSchedule(evalRes.priceIsTBC?0:year1Total, s.paymentPreset, s.customStages);
-  const code = s.projectCode || s.leadId || ('DIRECT'+Date.now().toString().slice(-4));
   // Legacy-mirror maintenance object — kept in sync with annualCost so every
   // existing consumer (buildQuoteSections' Year 2/3 math for records not
   // using the new model, maintenanceWordingNotes(), etc.) keeps working
@@ -1527,16 +1527,16 @@ function saveQuotationFromState(s){
     // and marks the old one Superseded (spec §22): every version is kept,
     // nothing is silently overwritten.
     isNewRevision = true;
-    id = 'QT' + Math.random().toString(36).slice(2,9).toUpperCase();
+    id = null;                                   // the server assigns the id and the new revision's quotation number
     rootQuotationId = existing.rootQuotationId || existing.id;
     version = (existing.version||1) + 1;
     previousVersionId = existing.id;
-    quoteNumber = generateQuoteNumber(code, s.quotationDate);
+    quoteNumber = null;
     createdAt = new Date().toISOString(); createdBy = CURRENT_USER.name;
   } else {
-    id = 'QT' + Math.random().toString(36).slice(2,9).toUpperCase();
-    rootQuotationId = id; version = 1; previousVersionId = null;
-    quoteNumber = generateQuoteNumber(code, s.quotationDate);
+    id = null;                                   // the server assigns the id and the quotation number
+    rootQuotationId = null; version = 1; previousVersionId = null;
+    quoteNumber = null;
     createdAt = new Date().toISOString(); createdBy = CURRENT_USER.name;
   }
 
@@ -1593,11 +1593,14 @@ function saveQuotationFromState(s){
     createdAt,
   };
 
-  DB.upsert('quotations', quotation);
+  // Draft edited in place -> PATCH of what changed; anything else is a NEW row (POST) so no earlier version is ever overwritten.
+  const savedQ = (existing && existing.status==='Draft') ? await DB.update('quotations', quotation) : await DB.create('quotations', quotation);
+  if(!savedQ.ok){ saveFailed(savedQ); return false; }       // the editor stays open with everything typed (the unsaved-changes guard is untouched)
 
   if(isNewRevision){
     existing.status = 'Superseded';
-    DB.upsert('quotations', existing);
+    const sup = await DB.update('quotations', existing);
+    if(!sup.ok) { try{ toast('The new revision was saved, but the previous version could not be marked Superseded: ' + sup.userMessage + ' Please mark it manually.', 'error'); }catch(e){} }
     logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId: quotation.id, refLabel:`${quotation.quoteNumber} — ${quotation.businessName||quotation.clientName}`,
       type:'Quotation Superseded', description:`${CURRENT_USER.name} created revision v${version} of ${existing.quoteNumber} — the previous version is now Superseded.`,
       fromValue: existing.quoteNumber, toValue: quotation.quoteNumber });
@@ -1620,6 +1623,7 @@ function saveQuotationFromState(s){
   closeModal();
   if(currentRoute()==='quotations'){ renderQuotSummaryCards(); renderQuotTable(); }
   openQuotationDetailModal(quotation.id);
+  return true;
 }
 
 function loadStateFromQuotation(q, { asDuplicate=false } = {}){
@@ -1798,17 +1802,17 @@ function openQuotationDetailModal(id){
     // click, never as a side effect of opening/closing this form).
     if(editBtn) editBtn.onclick = ()=>{ QC_STATE = loadStateFromQuotation(q); QC_STATE.projectCode = q.projectCode; QC_TAB='edit'; qcArmDirtyTracking(); renderCreateQuotationModal(); };
     const sendBtn = overlay.querySelector('#qaSend');
-    if(sendBtn) sendBtn.onclick = ()=> markAsSent(q.id);
+    if(sendBtn) sendBtn.onclick = function(){ return runSave(this, ()=> markAsSent(q.id)); };
     const reject2Btn = overlay.querySelector('#qaReject2');
     if(reject2Btn) reject2Btn.onclick = ()=> openRejectQuotationModal(q.id);
     const acceptBtn = overlay.querySelector('#qaAccept');
-    if(acceptBtn) acceptBtn.onclick = ()=> markAsAccepted(q.id);
+    if(acceptBtn) acceptBtn.onclick = function(){ return runSave(this, ()=> markAsAccepted(q.id)); };
     const convertBtn = overlay.querySelector('#qaConvert');
-    if(convertBtn) convertBtn.onclick = ()=> convertQuotationToProject(q.id);
+    if(convertBtn) convertBtn.onclick = function(){ return runSave(this, ()=> convertQuotationToProject(q.id)); };
   }});
 }
 
-function markAsSent(id){
+async function markAsSent(id){
   const q = DB.find('quotations', id);
   if(q.priceIsTBC){
     const unresolved = (q.items||[]).filter(it=> it.included!==false && (it.price===null||it.price===undefined)).map(it=>it.name);
@@ -1816,7 +1820,8 @@ function markAsSent(id){
     return;
   }
   q.status = 'Sent';
-  DB.upsert('quotations', q);
+  const savedSent = await DB.update('quotations', q);
+  if(!savedSent.ok){ saveFailed(savedSent); return; }
   logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
     type:'Quotation Sent', description:`${CURRENT_USER.name} sent quotation ${q.quoteNumber} / Year 1 Total: ${q.priceIsTBC?'TBC':moneyPrecise(q.year1Total)}`,
     toValue:'Sent' });
@@ -1843,12 +1848,13 @@ function openRejectQuotationModal(id){
   openModal(html, { onMount:(overlay)=>{
     overlay.querySelector('#frClose').onclick = closeModal;
     overlay.querySelector('#frCancel').onclick = closeModal;
-    overlay.querySelector('#frSave').onclick = ()=>{
+    overlay.querySelector('#frSave').onclick = function(){ return runSave(this, async ()=>{
       const comment = overlay.querySelector('#fr_comment').value.trim();
       if(!comment){ toast('A reason is required.', 'error'); return; }
       const previousStatus = q.status;
       q.status = 'Rejected';
-      DB.upsert('quotations', q);
+      const savedRej = await DB.update('quotations', q);
+      if(!savedRej.ok){ saveFailed(savedRej); return; }
       logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
         type:'Quotation Rejected', description:`${CURRENT_USER.name} marked quotation ${q.quoteNumber} as Rejected.`,
         fromValue: previousStatus, toValue:'Rejected', remark: comment });
@@ -1856,7 +1862,7 @@ function openRejectQuotationModal(id){
       toast('Saved.', 'success');
       openQuotationDetailModal(id);
       if(currentRoute()==='quotations'){ renderQuotSummaryCards(); renderQuotTable(); }
-    };
+    }); };
   }});
 }
 
@@ -1864,10 +1870,11 @@ function openRejectQuotationModal(id){
 /* Accepted -> Convert to Project                                         */
 /* ---------------------------------------------------------------------- */
 
-function markAsAccepted(id){
+async function markAsAccepted(id){
   const q = DB.find('quotations', id);
   q.status = 'Accepted';
-  DB.upsert('quotations', q);
+  const savedAcc = await DB.update('quotations', q);
+  if(!savedAcc.ok){ saveFailed(savedAcc); return; }
   logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
     type:'Quotation Accepted', description:`${CURRENT_USER.name} marked quotation ${q.quoteNumber} as Accepted. Value: ${moneyPrecise(q.year1Total)}.`,
     toValue:'Accepted' });
@@ -1877,8 +1884,9 @@ function markAsAccepted(id){
     const prevStatus = lead.status;
     lead.status = 'Confirmed';
     lead.updatedAt = new Date().toISOString();
-    DB.upsert('leads', lead);
-    logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
+    const savedLead = await DB.update('leads', lead);
+    if(!savedLead.ok){ try{ toast('The quotation was accepted, but the lead could not be set to Confirmed: ' + savedLead.userMessage, 'error'); }catch(e){} }
+    else logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
       type:'Status Changed', description:`${CURRENT_USER.name} changed status: ${prevStatus} → Confirmed`,
       fromValue: prevStatus, toValue:'Confirmed', remark:`Quotation ${q.quoteNumber} accepted.` });
   }
@@ -1887,7 +1895,7 @@ function markAsAccepted(id){
   if(currentRoute()==='quotations'){ renderQuotSummaryCards(); renderQuotTable(); }
 }
 
-function convertQuotationToProject(id){
+async function convertQuotationToProject(id){
   const q = DB.find('quotations', id);
   const lead = q.leadId ? DB.find('leads', q.leadId) : null;
   const linkedExisting = q.projectCode ? DB.find('projects', q.projectCode) : (lead && lead.projectCode ? DB.find('projects', lead.projectCode) : null);
@@ -1913,9 +1921,11 @@ function convertQuotationToProject(id){
     linkedExisting.confirmedValue = q.year1Total || linkedExisting.confirmedValue || 0;
     linkedExisting.quotationRef = q.quoteNumber;
     linkedExisting.functions = Object.values(groups);
-    DB.upsert('projects', linkedExisting);
+    const savedProj = await DB.update('projects', linkedExisting);
+    if(!savedProj.ok){ saveFailed(savedProj); return; }
     q.projectCode = linkedExisting.id;
-    DB.upsert('quotations', q);
+    const savedQ2 = await DB.update('quotations', q);
+    if(!savedQ2.ok){ saveFailed(savedQ2); return; }
     logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
       type:'Quotation Converted to Project', description:`${CURRENT_USER.name} linked quotation ${q.quoteNumber} to existing project ${linkedExisting.id}.`, toValue: linkedExisting.id });
     toast(`Linked to existing project ${linkedExisting.id}.`, 'success');
@@ -1924,20 +1934,22 @@ function convertQuotationToProject(id){
   }
 
   const code = (lead && lead.projectCode) ? lead.projectCode : (q.projectCode || suggestNextProjectCode());
-  const proj = createProjectRecord({
+  const made = await createProjectRecord({
     code, lead, confirmedValue: q.year1Total || 0, depositPct:50,
     overrides: {
       clientName: q.clientName, businessName: q.businessName, phone: q.phone,
       industry: q.industry, projectType: q.packageKey, assignedSales: q.assignedSales,
       notes: `Created from quotation ${q.quoteNumber}.`,
+      functions: Object.values(groups),
     }
   });
-  proj.functions = Object.values(groups);
+  if(!made.ok){ saveFailed(made); return; }
+  const proj = made.record;
   proj.quotationRef = q.quoteNumber;
-  DB.upsert('projects', proj);
 
   q.projectCode = proj.id;
-  DB.upsert('quotations', q);
+  const savedQ3 = await DB.update('quotations', q);
+  if(!savedQ3.ok){ try{ toast('The project was created, but the quotation could not be linked to it: ' + savedQ3.userMessage, 'error'); }catch(e){} }
 
   logActivity({ userName: CURRENT_USER.name, refType:'quotation', refId:q.id, refLabel:`${q.quoteNumber} — ${q.businessName||q.clientName}`,
     type:'Quotation Converted to Project', description:`${CURRENT_USER.name} converted quotation ${q.quoteNumber} to project ${proj.id}. Confirmed Value: ${moneyPrecise(proj.confirmedValue)}.`,
@@ -2413,7 +2425,10 @@ function packQuoteSections(measured, opts){
     // would fit cleanly on a fresh page, start one rather than splitting it
     // unnecessarily (keeps short/typical quotations reading as clean,
     // unsplit sections — splitting is reserved for genuinely long content).
-    if(curItems.length>0 && atomicHeight <= contBudget){
+    // `splitFill` (opt-in, used by Invoices) skips this rule so a long table starts
+    // filling the CURRENT page and splits cleanly between rows instead of leaving a
+    // big empty area and jumping whole to the next page.
+    if(curItems.length>0 && atomicHeight <= contBudget && !sec.splitFill){
       startPage();
       place(sec.headingHtml + sec.wrapOpenHtml + sec.items.map(i=>i.html).join('') + sec.wrapCloseHtml, atomicHeight);
       continue;

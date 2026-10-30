@@ -522,7 +522,7 @@ function openLeadFormModal(leadId){
   openModal(html, { large:true, onMount:(overlay)=>{
     overlay.querySelector('#lfClose').onclick = closeModal;
     overlay.querySelector('#lfCancel').onclick = closeModal;
-    overlay.querySelector('#lfSave').onclick = ()=>{
+    overlay.querySelector('#lfSave').onclick = function(){ return runSave(this, async ()=>{
       const val = id => overlay.querySelector(id).value.trim();
       const clientName = val('#lf_clientName'), businessName = val('#lf_businessName'), phone = val('#lf_phone');
       if(!clientName || !businessName || !phone){ toast('Please fill in Client Name, Business Name and Phone.', 'error'); return; }
@@ -553,10 +553,11 @@ function openLeadFormModal(leadId){
         // Sales user can never reassign a lead away from themselves, even
         // via a tampered DOM value (spec §2/§11).
         const newSales = canChooseAssignedSales(CURRENT_USER.role) ? val('#lf_sales') : lead.assignedSales;
+        let pendingReassignLog = null;      // written only AFTER the server confirmed the save
         if(newSales !== lead.assignedSales){
-          logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
+          pendingReassignLog = { userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
             type:'Assigned Sales Changed', description:`${CURRENT_USER.name} reassigned lead: ${lead.assignedSales} → ${newSales}`,
-            fromValue: lead.assignedSales, toValue: newSales });
+            fromValue: lead.assignedSales, toValue: newSales };
           lead.assignedSales = newSales;
         }
         const newFollowup = val('#lf_followup') || null;
@@ -570,14 +571,16 @@ function openLeadFormModal(leadId){
         lead.nextFollowup = newFollowup;
         lead.notes = val('#lf_notes');
         lead.updatedAt = now;
-        DB.upsert('leads', lead);
+        const saved = await DB.update('leads', lead);
+        if(!saved.ok){ saveFailed(saved); return; }       // modal stays open with the typed values; the lead is rolled back
+        if(pendingReassignLog) logActivity(pendingReassignLog);
         logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
           type:'Lead Edited', description:`${CURRENT_USER.name} edited lead ${lead.id} details.` });
         toast('Lead updated.', 'success');
       } else {
-        const id = DB.nextId('L','leads');
         const newLead = {
-          id, clientName, businessName, phone,
+          id: null,                 // the lead number (L###) is assigned by the server when the lead is saved
+          clientName, businessName, phone,
           telegram: val('#lf_telegram'), facebook: val('#lf_facebook'),
           industry: val('#lf_industry'), interestedService: val('#lf_service'),
           estimatedValue: Number(val('#lf_value'))||0, leadSource: val('#lf_source'),
@@ -594,16 +597,18 @@ function openLeadFormModal(leadId){
           followUpUpdatedAt: val('#lf_followup') ? now : null,
           createdAt: now, updatedAt: now
         };
-        DB.upsert('leads', newLead);
+        const created = await DB.create('leads', newLead);
+        if(!created.ok){ saveFailed(created); return; }
+        const id = newLead.id;    // assigned by the server
         logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: id, refLabel:`${clientName} — ${businessName}`,
           type:'Lead Created', description:`${CURRENT_USER.name} created lead ${id} (${businessName}) from ${newLead.leadSource}.`,
           toValue: pipelineStageLabel(newLead.status) });
-        toast('Lead created.', 'success');
+        toast(`Lead ${id} created.`, 'success');
       }
       closeModal();
       if(currentRoute()==='leads') renderLeadsTable();
       if(currentRoute()==='dashboard') router();
-    };
+    }); };
   }});
 }
 
@@ -840,7 +845,7 @@ function applyLeadStatusChange(lead, newStatus){
     refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
     fromStatus: lead.status, toStatus: newStatus, currentFollowup: lead.nextFollowup,
     currentProjectCode: lead.projectCode,
-    onConfirm: ({ remark, lostReason, nextFollowup, projectCode })=>{
+    onConfirm: async ({ remark, lostReason, nextFollowup, projectCode })=>{
       const prevStatus = lead.status;
       lead.status = newStatus;
       lead.updatedAt = new Date().toISOString();
@@ -885,7 +890,8 @@ function applyLeadStatusChange(lead, newStatus){
         if(lead.quotationStatus==='Not Sent'){ lead.quotationStatus='Sent'; lead.quotationAmount = lead.estimatedValue; lead.quotationRef = `Q-${lead.id}.pdf`; }
         if(!lead.demoLink){ lead.demoLink = `https://demo.bizwebkh.com/${slug(lead.businessName)}`; }
       }
-      DB.upsert('leads', lead);
+      const saved = await DB.update('leads', lead);
+      if(!saved.ok){ saveFailed(saved); return { ok:false }; }
       if(projectCode){
         logActivity({
           userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
@@ -905,6 +911,7 @@ function applyLeadStatusChange(lead, newStatus){
       if(currentRoute()==='dashboard') router();
       if(document.getElementById('activeModalOverlay')===null){} // no-op, modal already closed
       // if a lead-detail modal happens to still be relevant elsewhere, caller re-renders it
+      return { ok:true };
     }
   });
 }
@@ -918,13 +925,14 @@ function applyLeadStatusChange(lead, newStatus){
 /* side effects exactly, so a lead ends up identical whether it arrived    */
 /* via drag-and-drop/Change Status or via Add to Pipeline.                 */
 /* ---------------------------------------------------------------------- */
-function advanceLeadToPipeline(lead, projectCode){
+async function advanceLeadToPipeline(lead, projectCode){
   const prevStatus = lead.status;
   lead.status = QUOTE_AND_DEMO_SENT_STATUS;
   lead.projectCode = projectCode;
   if(lead.quotationStatus==='Not Sent'){ lead.quotationStatus='Sent'; lead.quotationAmount = lead.estimatedValue; lead.quotationRef = `Q-${lead.id}.pdf`; }
   if(!lead.demoLink){ lead.demoLink = `https://demo.bizwebkh.com/${slug(lead.businessName)}`; }
-  DB.upsert('leads', lead);
+  const saved = await DB.update('leads', lead);
+  if(!saved.ok){ saveFailed(saved); return { ok:false }; }
   // ONE combined Activity Log entry (spec §16: do not create duplicate
   // activity entries) covering both the status change and the Project
   // Code assignment together.
@@ -934,6 +942,7 @@ function advanceLeadToPipeline(lead, projectCode){
     description:`${CURRENT_USER.name} added ${lead.id} — ${lead.businessName} to Pipeline: ${pipelineStageLabel(prevStatus)} → ${pipelineStageLabel(QUOTE_AND_DEMO_SENT_STATUS)}. Project Code: ${projectCode}.`,
     fromValue: pipelineStageLabel(prevStatus), toValue: pipelineStageLabel(QUOTE_AND_DEMO_SENT_STATUS)
   });
+  return { ok:true };
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1026,7 +1035,7 @@ function openEditProjectCodeModal(lead, onDone){
       codeInput.dispatchEvent(new Event('input', { bubbles:true }));
       codeInput.focus();
     };
-    overlay.querySelector('#epcSave').onclick = ()=>{
+    overlay.querySelector('#epcSave').onclick = function(){ return runSave(this, async ()=>{
       const codeInput = overlay.querySelector('#epcCode');
       const normalized = normalizeProjectCode(codeInput.value);
       const oldCode = lead.projectCode || null;
@@ -1056,7 +1065,8 @@ function openEditProjectCodeModal(lead, onDone){
       if(newCode === oldCode){ closeModal(); if(onDone) onDone(); return; }
 
       lead.projectCode = newCode;
-      DB.upsert('leads', lead);
+      const saved = await DB.update('leads', lead);
+      if(!saved.ok){ saveFailed(saved); return; }      // the modal stays open with the typed code; the lead is rolled back
 
       // Exactly one Activity Log entry per save — "Assigned" the first time
       // a code is set from blank, "Changed" for any actual old -> new edit
@@ -1073,7 +1083,7 @@ function openEditProjectCodeModal(lead, onDone){
       toast('Project Code updated.', 'success');
       closeModal();
       if(onDone) onDone();
-    };
+    }); };
   }});
 }
 
@@ -1107,16 +1117,17 @@ function openArchiveLeadModal(lead, onDone){
   openModal(html, { onMount:(overlay)=>{
     overlay.querySelector('#arClose').onclick = closeModal;
     overlay.querySelector('#arCancel').onclick = closeModal;
-    overlay.querySelector('#arConfirm').onclick = ()=>{
+    overlay.querySelector('#arConfirm').onclick = function(){ return runSave(this, async ()=>{
       const reason = overlay.querySelector('#ar_reason').value.trim();
       const prevStage = lead.status;
-      closeModal();
       lead.archived = true;
       lead.archivedAt = new Date().toISOString();
       lead.archivedBy = CURRENT_USER.name;
       lead.archiveReason = reason || null;
       lead.updatedAt = lead.archivedAt;
-      DB.upsert('leads', lead);
+      const saved = await DB.update('leads', lead);
+      if(!saved.ok){ saveFailed(saved); return; }
+      closeModal();
       logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
         type:'Lead Archived',
         description:`${CURRENT_USER.name} archived opportunity ${lead.id}${lead.projectCode?` (Project Code: ${lead.projectCode})`:''} — Previous Stage: ${prevStage}.${reason ? ' Reason: '+reason+'.' : ''}`,
@@ -1125,7 +1136,7 @@ function openArchiveLeadModal(lead, onDone){
       if(currentRoute()==='leads') renderLeadsTable();
       if(currentRoute()==='pipeline') renderPipelinePage();
       if(onDone) onDone();
-    };
+    }); };
   }});
 }
 
@@ -1135,14 +1146,15 @@ function openArchiveLeadModal(lead, onDone){
 // was (spec §8 — "do not change the lead's historical business status
 // unnecessarily"). See restoreLeadToPipeline() below for the Pipeline
 // Archive view's stage-fallback variant.
-function restoreLead(lead, onDone){
+async function restoreLead(lead, onDone){
   if(!isFounder()){ toast('Only Founder/Admin can restore an opportunity.', 'error'); return; }
   lead.archived = false;
   lead.archivedAt = null;
   lead.archivedBy = null;
   lead.archiveReason = null;
   lead.updatedAt = new Date().toISOString();
-  DB.upsert('leads', lead);
+  const saved = await DB.update('leads', lead);
+  if(!saved.ok){ saveFailed(saved); return; }
   logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
     type:'Lead Restored',
     description:`${CURRENT_USER.name} restored opportunity ${lead.id}${lead.projectCode?` (Project Code: ${lead.projectCode})`:''} — Restored Stage: ${pipelineStageLabel(lead.status)}.` });
@@ -1162,7 +1174,7 @@ function restoreLead(lead, onDone){
 /* rather than reviving a column that no longer exists. Never creates a   */
 /* duplicate card — it's the exact same lead record, just un-archived.    */
 /* ---------------------------------------------------------------------- */
-function restoreLeadToPipeline(lead, onDone){
+async function restoreLeadToPipeline(lead, onDone){
   if(!isFounder()){ toast('Only Founder/Admin can restore an opportunity.', 'error'); return; }
   const fresh = DB.find('leads', lead.id) || lead;
   const prevStage = fresh.status;
@@ -1173,7 +1185,8 @@ function restoreLeadToPipeline(lead, onDone){
   fresh.archivedBy = null;
   fresh.archiveReason = null;
   fresh.updatedAt = new Date().toISOString();
-  DB.upsert('leads', fresh);
+  const saved = await DB.update('leads', fresh);
+  if(!saved.ok){ saveFailed(saved); return; }
   logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: fresh.id, refLabel:`${fresh.clientName} — ${fresh.businessName}`,
     type:'Lead Restored',
     description:`${CURRENT_USER.name} restored opportunity ${fresh.id}${fresh.projectCode?` (Project Code: ${fresh.projectCode})`:''} to Pipeline — Restored Stage: ${pipelineStageLabel(fresh.status)}.${validStage?'':` (${pipelineStageLabel(prevStage)} no longer exists on the board, fell back to ${pipelineStageLabel(QUOTE_AND_DEMO_SENT_STATUS)})`}` });
@@ -1235,20 +1248,21 @@ function openDeleteLeadModal(lead){
   openModal(html, { onMount:(overlay)=>{
     overlay.querySelector('#dlClose').onclick = closeModal;
     overlay.querySelector('#dlCancel').onclick = closeModal;
-    overlay.querySelector('#dlConfirm').onclick = ()=>{
-      closeModal();
+    overlay.querySelector('#dlConfirm').onclick = function(){ return runSave(this, async ()=>{
       const label = `${lead.clientName} — ${lead.businessName}`;
       const leadId = lead.id;
       // The lead's persistent follow-up history (lead_activities) is cleaned
-      // up automatically server-side via its `lead_id` ON DELETE CASCADE FK
-      // — no separate client-side cleanup step needed.
+      // up automatically server-side via its `lead_id` ON DELETE CASCADE FK.
+      const removed = await DB.remove('leads', leadId);
+      if(!removed.ok){ saveFailed(removed); return; }
+      closeModal();
+      DB._cache.leadActivities = DB._cache.leadActivities.filter(a=>a.leadId !== leadId);    // mirror the server-side cascade
       logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: leadId, refLabel: label,
         type:'Lead Deleted', description:`${CURRENT_USER.name} permanently deleted lead ${leadId} (${label}).` });
-      DB.remove('leads', leadId);
       toast('Lead deleted.', 'success');
       if(currentRoute()==='leads') renderLeadsTable();
       if(currentRoute()==='pipeline') renderPipelinePage();
       if(currentRoute()==='dashboard') router();
-    };
+    }); };
   }});
 }

@@ -1,6 +1,126 @@
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BizWeb KH CRM - Scheduled maintenance</title>
-<style>:root{--bg:#f5f7fb;--fg:#12203a;--mut:#5b6b86;--card:#fff;--bd:#dbe3f0;--ac:#1f6bff}@media(prefers-color-scheme:dark){:root{--bg:#0e1524;--fg:#e8eefc;--mut:#9fb0cf;--card:#16213a;--bd:#25324f;--ac:#6ea0ff}}
-body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:16px}
-.c{max-width:460px;background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:28px}h1{margin:0 0 8px;font-size:20px}p{margin:0 0 10px;color:var(--mut)}b{color:var(--fg)}</style></head>
-<body><div class="c"><h1>Scheduled maintenance</h1><p>The BizWeb KH CRM is being upgraded and is <b>temporarily read-only / unavailable</b>.</p><p>Please do <b>not</b> enter or edit data until you are told the CRM is back. Anything entered now may be lost.</p><p>We will notify the team as soon as it is ready.</p></div></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Applies the saved theme (see js/theme.js) SYNCHRONOUSLY, before the
+     stylesheet finishes loading or anything paints. This has to be an
+     inline script here rather than waiting for theme.js (an external
+     <script src>) to run, or a dark-mode user would see a flash of the
+     light theme on every load. Mirrors the pattern already used in
+     login/index.html for the same reason. Kept intentionally tiny and
+     duplicated (not shared via a fetched file) — theme.js remains the
+     single source of truth for every OTHER theme concern (the toggle
+     button, persisting a change, the icon shown). -->
+<script>
+  (function(){
+    try{
+      if(localStorage.getItem('crm-theme')==='dark') document.documentElement.setAttribute('data-theme','dark');
+    }catch(e){}
+  })();
+</script>
+<!-- GitHub Pages serves this document itself with Cache-Control: max-age=600,
+     so a plain (non-hard) browser refresh within 10 minutes of the last
+     fetch can reuse an old cached copy of THIS HTML file without even
+     asking the server — which would keep loading old, unversioned script
+     tags regardless of the ?v= cache-busting below. These hints ask the
+     browser to always revalidate the shell itself; the ?v= query strings
+     on the assets below then guarantee a genuinely new file once it does. -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>BizWeb KH — Internal CRM</title>
+<link rel="icon" href="../assets/img/favicon.png">
+<!-- Khmer script support for the bilingual Quotation document (preview +
+     print/PDF) — Quotations MVP, spec §32 (Khmer AND English font support). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Khmer:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="../css/styles.css?v=2026102901">
+
+</head>
+<body>
+
+<div id="app"><div class="empty-state">Loading…</div></div>
+
+<!-- Cache-busting (spec: "Cache / Versioning"): every local JS/CSS asset is
+     loaded with a ?v= query string tied to ASSET_VERSION below, so a
+     production deploy is guaranteed to load fresh files on the very next
+     page load instead of a browser's cached copy of the old script — this
+     is what let a shipped fix (e.g. Edit Payment) stay invisible to an
+     already-open browser tab / warm disk cache. Bump ASSET_VERSION (and the
+     matching ?v= on the 3 static <script> tags just below, and on the CSS
+     <link> above) on every future deploy that changes JS/CSS. This never
+     changes any file path, only adds a query string, so it cannot break
+     bookmarks, relative links, or the custom domain. -->
+<!-- Neon build. Scripts are loaded with ?v= = ASSET_VERSION below; bump it with every change to JS/CSS. -->
+<script src="../js/vendor/neon-auth.bundle.js?v=0.5.0-beta"></script>
+<script src="../js/neon-config.js?v=2026102601"></script>
+<script src="../js/neon-client.js?v=2026102601"></script>
+<script src="../js/data.js?v=2026102601"></script>
+<script src="../js/auth.js?v=2026102601"></script>
+<script>
+  const ASSET_VERSION = '2026102601';
+
+  // Explicit start-up states. Anything other than "ready" shows a useful message and NEVER an apparently empty CRM.
+  function showStartupProblem(kind, detail, requestId){
+    const msgs = {
+      backend_unavailable: ['The CRM server is not answering', 'We could not reach the server. Your data is safe; nothing was changed. Check your internet connection and try again.'],
+      bootstrap_failed:    ['The CRM could not load its data', 'The server answered, but the data was incomplete, so the CRM was not opened to protect your records. Please try again; if it keeps happening, contact support.'],
+      not_authorized:      ['You do not have access to the CRM', detail === 'inactive' ? 'This account has been deactivated. Please contact your Founder/Admin.' : detail === 'not_activated' ? 'This account has not been activated yet. Please use the link in your invitation email.' : 'This account has no access to the CRM. Please contact your Founder/Admin.'],
+    };
+    const m = msgs[kind] || msgs.bootstrap_failed;
+    const ref = requestId ? ' <span style="opacity:.7">(ref ' + String(requestId).slice(0,8) + ')</span>' : '';
+    document.getElementById('app').innerHTML =
+      '<div class="empty-state" style="max-width:520px;margin:12vh auto;text-align:center">' +
+      '<h2 style="margin:0 0 10px">' + m[0] + '</h2><p style="margin:0 0 18px">' + m[1] + ref + '</p>' +
+      (kind === 'not_authorized' ? '' : '<button class="btn btn-primary" id="retryBoot">Try again</button> ') +
+      '<a class="btn btn-secondary" href="../login/index.html" id="toLogin">Back to Sign In</a></div>';
+    const r = document.getElementById('retryBoot'); if(r) r.onclick = ()=> window.location.reload();
+    const l = document.getElementById('toLogin'); if(l) l.onclick = async (e)=>{ if(kind === 'not_authorized'){ e.preventDefault(); await Auth.logout(); window.location.href = '../login/index.html'; } };
+  }
+
+  // A session that is lost while the CRM is open (expired refresh, revoked sessions) sends the user to Sign In.
+  let authLostFired = false;
+  BZ.onAuthLost(()=>{ if(authLostFired) return; authLostFired = true; try{ localStorage.removeItem(BZ_SESSION_KEY); }catch(e){} window.location.href = '../login/index.html?expired=1'; });
+
+  // Session-first + data-first bootstrap: app.js and every other feature module assume Auth.currentUser() already resolves synchronously
+  // and DB.all()/DB.find() already read live data. Both are only true once this async IIFE has finished, so app.js (and the feature modules)
+  // are injected at the very end.
+  (async function bootstrap(){
+    const session = await Auth.restoreSession();
+    if(!session){
+      const st = Auth.lastStatus || { state:'auth_required' };
+      if(st.state === 'auth_required'){ window.location.href = '../login/index.html'; return; }
+      showStartupProblem(st.state, st.reason, st.requestId); return;
+    }
+
+    const init = await DB.init();
+    if(!init.ok){
+      if(DB.state === 'auth_required'){ window.location.href = '../login/index.html'; return; }
+      console.error('Bootstrap failed:', DB.state, DB.stateReason);
+      showStartupProblem(DB.state, DB.stateReason, DB.stateRequestId); return;
+    }
+    if(!Auth.completeSession()){ showStartupProblem('bootstrap_failed', 'own profile missing'); return; }
+
+    const scripts = [
+      '../js/dashboard.js', '../js/leads.js', '../js/pipeline.js',
+      '../js/projects.js', '../js/quotations.js', '../js/invoices.js', '../js/receipts.js', '../js/followups.js',
+      '../js/payments.js', '../js/activity.js', '../js/theme.js', '../js/app.js'
+    ];
+    for(const src of scripts){
+      await new Promise((resolve, reject)=>{
+        const s = document.createElement('script');
+        s.src = `${src}?v=${ASSET_VERSION}`;
+        s.onload = resolve;
+        s.onerror = ()=> reject(new Error('Could not load ' + src));
+        document.body.appendChild(s);
+      });
+    }
+  })().catch(err=>{
+    console.error('Start-up error', err);
+    showStartupProblem('bootstrap_failed', String(err && err.message || err));
+  });
+</script>
+</body>
+</html>

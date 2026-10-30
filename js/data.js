@@ -212,11 +212,27 @@ const LOST_REASONS = [
 ];
 
 const PAYMENT_STATUSES = ['Not Paid', 'Partially Paid', 'Fully Paid'];
-const PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'ABA', 'Wing', 'Other'];
+// Primary, spec-facing list for NEW payment entry (Record Payment / Record
+// Receipt modals, filters). 'Wing' is intentionally NOT listed here (no
+// existing payment uses it) but stays a legal value at the DB level — see
+// PAYMENT_METHODS_ALL for any surface that must stay backward-compatible
+// with legacy/edited records.
+const PAYMENT_METHODS = ['ABA Transfer', 'KHQR', 'Cash', 'Bank Transfer', 'Other'];
+// Superset used by the Edit Payment dropdown and the Receipts filter —
+// never drops a value a real record could already hold.
+const PAYMENT_METHODS_ALL = ['ABA Transfer', 'KHQR', 'Cash', 'Bank Transfer', 'Wing', 'Other'];
 // Payment TYPE describes what a single ledger entry was for. Payment STATUS
 // (above) is never stored — it's always derived live from the ledger, see
 // paymentSummaryFor() below.
-const PAYMENT_TYPES = ['Deposit', 'Partial Payment', 'Full Payment', 'Final Payment', 'Renewal', 'Other'];
+// Primary, spec-facing list for NEW payment entry (Record Payment / Record
+// Receipt modals). 'Partial Payment'/'Full Payment' are intentionally NOT
+// listed here going forward but stay legal DB values — 5 real historical
+// payments use them; see PAYMENT_TYPES_ALL for any surface that must stay
+// backward-compatible with those records.
+const PAYMENT_TYPES = ['Deposit', 'Milestone', 'Final Payment', 'Renewal', 'Add-on', 'Other'];
+// Superset used by the Edit Payment dropdown and the Receipts filter —
+// never drops a value a real record could already hold.
+const PAYMENT_TYPES_ALL = ['Deposit', 'Partial Payment', 'Full Payment', 'Milestone', 'Final Payment', 'Renewal', 'Add-on', 'Other'];
 
 // Receipt status — deliberately NOT the same as Payment Status (Not Paid/
 // Partially Paid/Fully Paid, a project/invoice-level concept derived from
@@ -1472,15 +1488,13 @@ function receiptToRow(r){
 // found by scanning existing receipt numbers for that exact base, so it
 // never returns a number that already exists (e.g. BW-RC-{code}-{date}-01,
 // then -02 for a second receipt against the same project on the same day).
-function generateReceiptNumber(projectCode, dateStr){
-  const d = dateStr ? new Date(dateStr) : new Date();
-  const ymd = d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
+function generateReceiptNumber(projectCode){
   const code = projectCode || 'DIRECT';
-  const base = `BW-RC-${code}-${ymd}`;
+  const base = `RCT-${code}`;
   const taken = new Set(DB.all('receipts').map(r=>r.receiptNumber));
   let n = 1;
-  while(taken.has(`${base}-${String(n).padStart(2,'0')}`)) n++;
-  return `${base}-${String(n).padStart(2,'0')}`;
+  while(taken.has(`${base}-${String(n).padStart(3,'0')}`)) n++;
+  return `${base}-${String(n).padStart(3,'0')}`;
 }
 
 // Local copies of app.js's initialsOf()/avatarColorFor() — DB.init() (and
@@ -1514,154 +1528,257 @@ const DB = {
             invoices:[], receipts:[] },
   _initialized: false,
 
-  // Populates _cache from Supabase. Must be awaited before any UI code runs
-  // (see dashboard/index.html's bootstrap script) — every DB.all()/find()
-  // call after that point reads synchronously from _cache.
+  // Explicit application state. Everything except 'ready' is a refusal: all()/find() THROW instead of returning an empty list,
+  // and every write returns { ok:false } — so a failed load can never look like an empty CRM.
+  state: 'loading',          // loading | ready | auth_required | not_authorized | backend_unavailable | bootstrap_failed
+  stateReason: null,
+  stateRequestId: null,
+  _meta: null,               // { activity_logs_total, activity_logs_loaded, counts }
+  _pristine: {},             // last server-confirmed copy of every record, by collection and id — used for diffing and for rolling back a failed save
+  _inflight: 0,              // writes currently on the wire (the page asks before it unloads)
+  _bg: 0,                    // audit-trail writes currently on the wire
+
+  _setState(state, reason, requestId){ this.state = state; this.stateReason = reason || null; this.stateRequestId = requestId || null; },
+
+  // GET /api/bootstrap — ONE request that replaces the eleven table reads. Never throws; resolves { ok, state, error }.
   async init(){
-    const [leadsRes, projectsRes, paymentsRes, activitiesRes, servicesRes, settingsRes, profilesRes, leadActivitiesRes, quotationsRes, invoicesRes, receiptsRes] = await Promise.all([
-      supabaseClient.from('leads').select('*'),
-      supabaseClient.from('projects').select('*'),
-      supabaseClient.from('payments').select('*'),
-      supabaseClient.from('activity_logs').select('*').order('occurred_at', { ascending:false }).limit(2000),
-      supabaseClient.from('services').select('*'),
-      supabaseClient.from('settings').select('*').eq('id', true).maybeSingle(),
-      supabaseClient.from('profiles').select('*'),
-      supabaseClient.from('lead_activities').select('*').order('created_at', { ascending:false }).limit(2000),
-      supabaseClient.from('quotations').select('*').order('created_at', { ascending:false }),
-      supabaseClient.from('invoices').select('*').order('created_at', { ascending:false }),
-      supabaseClient.from('receipts').select('*').order('created_at', { ascending:false }),
-    ]);
-
-    [leadsRes, projectsRes, paymentsRes, activitiesRes, servicesRes, settingsRes, profilesRes, leadActivitiesRes, quotationsRes, invoicesRes, receiptsRes].forEach(r=>{
-      if(r && r.error) console.error('Supabase fetch error', r.error);
-    });
-
-    // users first — lead/project/payment/activity mapping needs id->name lookups
-    this._cache.users = (profilesRes.data || []).map(rowToUser);
-    this._cache.leads = (leadsRes.data || []).map(rowToLead);
-    this._cache.projects = (projectsRes.data || []).map(rowToProject);
-    this._cache.payments = (paymentsRes.data || []).map(rowToPayment);
-    this._cache.activities = (activitiesRes.data || []).map(rowToActivity);
-    this._cache.services = (servicesRes.data || []).map(rowToService);
-    this._cache.leadActivities = (leadActivitiesRes.data || []).map(rowToLeadActivity);
-    this._cache.quotations = (quotationsRes.data || []).map(rowToQuotation);
-    this._cache.invoices = (invoicesRes.data || []).map(rowToInvoice);
-    this._cache.receipts = (receiptsRes.data || []).map(rowToReceipt);
-    this._cache.settings = {
-      discountLimitPct: (settingsRes.data && settingsRes.data.discount_limit_pct) || 10,
-      bankDetails: (settingsRes.data && settingsRes.data.bank_details) || null,
-      quotationDefaults: (settingsRes.data && settingsRes.data.quotation_defaults) || null,
-    };
-    // Never Supabase-backed — kept empty/local-only, dead cache from an
-    // earlier build; quotations itself is now fully Supabase-backed above.
-    this._cache.followups = this._cache.followups || [];
-    this._cache.quotationReviews = this._cache.quotationReviews || [];
-
-    this._initialized = true;
-    return this._cache;
+    this._initialized = false; this._setState('loading');
+    const res = await BZ.api('GET', '/api/bootstrap');
+    if(res.status === 0 || res.status === 502 || res.status === 503 || res.status === 504){
+      this._setState('backend_unavailable', res.body && res.body.error || ('http ' + res.status), res.requestId);
+      return { ok:false, state:this.state, error:res };
+    }
+    if(res.status === 401){ this._setState('auth_required', res.body && res.body.error, res.requestId); return { ok:false, state:this.state, error:res }; }
+    if(res.status === 403){ this._setState('not_authorized', res.body && res.body.error, res.requestId); return { ok:false, state:this.state, error:res }; }
+    if(res.status !== 200 || !res.body){ this._setState('bootstrap_failed', res.body && res.body.error || ('http ' + res.status), res.requestId); return { ok:false, state:this.state, error:res }; }
+    const bad = DB._validateBootstrap(res.body);
+    if(bad){ this._setState('bootstrap_failed', bad, res.requestId); return { ok:false, state:this.state, error:res }; }
+    DB._load(res.body);
+    this._initialized = true; this._setState('ready');
+    return { ok:true, state:'ready' };
   },
 
-  // Re-fetches everything fresh from Supabase (used by Settings -> "Reset
-  // Data", which used to wipe localStorage and reseed fake data — it now
-  // just re-syncs from the live backend instead).
+  // A response that merely LOOKS ok is not enough: every collection must be present and agree with the server's own counts.
+  _validateBootstrap(d){
+    if(!d || typeof d !== 'object' || !d.me || !d.me.id || !d.me.role || !d.settings || typeof d.settings !== 'object' || !d.meta || !d.meta.counts) return 'malformed response';
+    for(const k of ['leads','projects','quotations','invoices','payments','receipts','services','profiles']){
+      if(!Array.isArray(d[k])) return 'missing collection ' + k;
+      if(d.meta.counts[k] !== d[k].length) return 'count mismatch for ' + k;
+    }
+    if(!Array.isArray(d.lead_activities) || !Array.isArray(d.activity_logs)) return 'missing history collections';
+    if(!d.profiles.some(p=>p.id === d.me.id)) return 'own profile missing';
+    return null;
+  },
+
+  _load(d){
+    // users first — lead/project/payment/activity mapping needs id->name lookups
+    this._cache.users = d.profiles.map(rowToUser);
+    this._cache.leads = d.leads.map(rowToLead);
+    this._cache.projects = d.projects.map(rowToProject);
+    this._cache.payments = d.payments.map(rowToPayment);
+    this._cache.activities = d.activity_logs.map(rowToActivity);
+    this._cache.services = d.services.map(rowToService);
+    this._cache.leadActivities = d.lead_activities.map(rowToLeadActivity);
+    this._cache.quotations = d.quotations.map(rowToQuotation);
+    this._cache.invoices = d.invoices.map(rowToInvoice);
+    this._cache.receipts = d.receipts.map(rowToReceipt);
+    this._cache.settings = {
+      discountLimitPct: d.settings.discount_limit_pct || 10,
+      bankDetails: d.settings.bank_details || null,
+      quotationDefaults: d.settings.quotation_defaults || null,
+    };
+    this._cache.followups = []; this._cache.quotationReviews = [];
+    this._meta = d.meta;
+    this._pristine = {};
+    for(const c of ['leads','projects','payments','services','quotations','invoices','receipts']) this._cache[c].forEach(r=> this._snap(c, r));
+  },
+
   reset(){ return this.init(); },
 
-  // Re-fetches just the `profiles` table — used by Settings -> Users & Roles
-  // after invite/resend/role-change/deactivate/reactivate so the staff table
-  // reflects the change immediately, without the cost of a full DB.reset()
-  // across every other module's data.
+  // Re-fetches the staff list (Settings -> Users & Roles; founder and operations only).
   async refreshUsers(){
-    const { data, error } = await supabaseClient.from('profiles').select('*');
-    if(error){ console.error('Supabase profiles refresh failed', error); return this._cache.users; }
-    this._cache.users = (data || []).map(rowToUser);
-    return this._cache.users;
+    const res = await BZ.api('GET', '/api/staff');
+    if(res.status !== 200 || !Array.isArray(res.body)){ console.error('staff refresh failed', res.status); return { ok:false, userMessage: BZ.explain(res, 'The staff list could not be refreshed.') }; }
+    this._cache.users = res.body.map(rowToUser);
+    return { ok:true, users:this._cache.users };
   },
 
-  // Local passthrough only (no Supabase side effect) — kept for the few
-  // call sites that mutate a whole collection at once (e.g. the in-memory
-  // `followups` note log, which has no Supabase table). read() returns the
-  // live _cache reference, so in-place mutation + write() already "just
-  // works" the same way it did against localStorage.
   read(){ return this._cache; },
   write(db){ this._cache = db; return true; },
 
-  // ----- generic collection helpers -----
-  all(collection){ return this._cache[collection] || []; },
+  // ----- reads (synchronous, from the confirmed cache) -----
+  all(collection){
+    if(this.state !== 'ready') throw new Error(`CRM data is not ready (${this.state}${this.stateReason ? ': ' + this.stateReason : ''}); refusing to return an empty list`);
+    return this._cache[collection] || [];
+  },
   find(collection, id){ return this.all(collection).find(x=>x.id===id) || null; },
+  isReady(){ return this.state === 'ready'; },
 
-  // Optimistic: updates _cache and returns synchronously (so ~140 existing
-  // synchronous call sites keep working untouched), then fires the Supabase
-  // write in the background. Errors are logged, never thrown, so a
-  // transient network hiccup never crashes the UI.
-  upsert(collection, record){
-    if(collection==='settings'){
-      this._cache.settings = { ...this._cache.settings, ...record };
-      const patch = {};
-      if(record.discountLimitPct!==undefined) patch.discount_limit_pct = this._cache.settings.discountLimitPct;
-      if(record.bankDetails!==undefined) patch.bank_details = this._cache.settings.bankDetails;
-      if(record.quotationDefaults!==undefined) patch.quotation_defaults = this._cache.settings.quotationDefaults;
-      supabaseClient.from('settings').update(patch).eq('id', true)
-        .then(({error})=>{ if(error) console.error('Supabase settings update failed', error); })
-        .catch(e=> console.error('Supabase settings update failed', e));
-      return this._cache.settings;
-    }
-
-    const list = this._cache[collection] || (this._cache[collection]=[]);
-    const idx = list.findIndex(x=>x.id===record.id);
-    if(idx>-1) list[idx]=record; else if(collection==='activities' || collection==='leadActivities') list.unshift(record); else list.push(record);
-
-    if(collection==='activities'){
-      supabaseClient.from('activity_logs').insert(activityToInsertRow(record))
-        .then(({error})=>{ if(error) console.error('Supabase activity insert failed', error); })
-        .catch(e=> console.error('Supabase activity insert failed', e));
-      return record;
-    }
-
-    // Append-only, same pattern as activities — the row's real (bigint)
-    // primary key is server-generated and never needed client-side because
-    // lead_activities is never updated/deleted directly from the UI; when a
-    // lead IS permanently deleted, `leads.id`'s `on delete cascade` FK
-    // removes its lead_activities rows automatically on the server.
-    if(collection==='leadActivities'){
-      supabaseClient.from('lead_activities').insert(leadActivityToInsertRow(record))
-        .then(({error})=>{ if(error) console.error('Supabase lead_activities insert failed', error); })
-        .catch(e=> console.error('Supabase lead_activities insert failed', e));
-      return record;
-    }
-
-    if(collection==='followups' || collection==='quotationReviews'){
-      // No Supabase table for these (quotationReviews' info now lives inline
-      // on the quotation row itself — reasons/approvedBy/status — nothing
-      // is lost, this cache is just unused by the current quotations.js).
-      return record;
-    }
-
-    const table = COLLECTION_TABLE[collection];
-    if(!table) return record; // unknown/local-only collection — cache-only, no remote sync
-    const toRow = { leads: leadToRow, projects: projectToRow, payments: paymentToRow, services: serviceToRow, quotations: quotationToRow, invoices: invoiceToRow, receipts: receiptToRow }[collection];
-    supabaseClient.from(table).upsert(toRow(record))
-      .then(({error})=>{ if(error) console.error(`Supabase upsert failed for ${collection}`, error); })
-      .catch(e=> console.error(`Supabase upsert failed for ${collection}`, e));
-    return record;
+  /* ------------------------------------------------------------------ */
+  /* WRITES — every one is awaited, confirmed by the server, and returns */
+  /* { ok:true, record } or { ok:false, error, userMessage }.            */
+  /* The cache changes only AFTER the server confirmed.                  */
+  /* ------------------------------------------------------------------ */
+  _snap(coll, rec){ (this._pristine[coll] || (this._pristine[coll] = new Map())).set(rec.id, JSON.stringify(rec)); },
+  _restore(coll, rec){
+    const s = this._pristine[coll] && this._pristine[coll].get(rec.id); if(!s) return;
+    const o = JSON.parse(s); Object.keys(rec).forEach(k=>{ delete rec[k]; }); Object.assign(rec, o);
   },
-  remove(collection, id){
-    this._cache[collection] = (this._cache[collection]||[]).filter(x=>x.id!==id);
-    const table = COLLECTION_TABLE[collection];
-    if(!table) return; // activities (append-only), quotations/followups (local-only) never delete remotely
-    supabaseClient.from(table).delete().eq('id', id)
-      .then(({error})=>{ if(error) console.error(`Supabase delete failed for ${collection}`, error); })
-      .catch(e=> console.error(`Supabase delete failed for ${collection}`, e));
+  _fail(res, what){
+    return { ok:false, error:{ status:res.status, code:res.body && res.body.error || null, message:res.body && res.body.message || null, requestId:res.requestId }, userMessage: BZ.explain(res, what) };
   },
-  nextId(prefix, collection, pad=3){
-    const list = this._cache[collection]||[];
-    let max=0;
-    list.forEach(x=>{
-      const m = String(x.id||x.code||'').match(new RegExp('^'+prefix+'(\\d+)$'));
-      if(m) max=Math.max(max, parseInt(m[1],10));
-    });
-    return prefix + String(max+1).padStart(pad,'0');
-  }
+  _notReady(){ return { ok:false, error:{ status:0, code:'not_ready' }, userMessage:'The CRM data is not loaded, so changes are disabled. Please refresh the page.' }; },
+  _mapRow(coll, row){ return ({ leads:rowToLead, projects:rowToProject, payments:rowToPayment, services:rowToService, quotations:rowToQuotation, invoices:rowToInvoice, receipts:rowToReceipt }[coll])(row); },
+  _apiBody(coll, rec){
+    const row = ({ leads:leadToRow, projects:projectToRow, payments:paymentToRow, services:serviceToRow, quotations:quotationToRow, invoices:invoiceToRow, receipts:receiptToRow }[coll])(rec);
+    const out = {}; for(const k of API_COLUMNS[coll]) if(k in row && row[k] !== undefined) out[k] = row[k]; return out;
+  },
+  _adopt(coll, target, row){            // replace the contents of `target` (keeps every UI reference valid) with the server's version
+    const mapped = this._mapRow(coll, row); Object.keys(target).forEach(k=>{ delete target[k]; }); Object.assign(target, mapped); this._snap(coll, target); return target;
+  },
+
+  // CREATE — POST. The id / number is assigned by the server and written into `rec`. A create can never overwrite an existing record.
+  // extra (projects only): { code, linkLeadId, setLeadStatus } — the server links the lead in the SAME transaction.
+  async create(coll, rec, extra){
+    if(this.state !== 'ready') return this._notReady();
+    if(!API_COLUMNS[coll]) return { ok:false, error:{ code:'unknown_collection' }, userMessage:'Internal error: unknown collection.' };
+    const body = this._apiBody(coll, rec);
+    Object.keys(body).forEach(k=>{ if(body[k] === null) delete body[k]; });
+    if(extra && coll === 'projects'){ if(extra.code) body.code = extra.code; if(extra.linkLeadId) body.link_lead_id = extra.linkLeadId; if(extra.setLeadStatus) body.set_lead_status = extra.setLeadStatus; }
+    const key = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : undefined;
+    this._inflight++;
+    let res; try{ res = await BZ.api('POST', '/api/' + coll, body, key ? { headers:{ 'Idempotency-Key': key } } : {}); } finally { this._inflight--; }
+    // one automatic retry with the SAME key is safe: the server replays the original answer instead of creating a second row
+    if((res.status === 0 || res.status === 429 || res.status === 503) && key){
+      await new Promise(r=>setTimeout(r, res.status === 429 ? Math.max(1, res.retryAfter)*1000 : 800));
+      this._inflight++; try{ res = await BZ.api('POST', '/api/' + coll, body, { headers:{ 'Idempotency-Key': key } }); } finally { this._inflight--; }
+    }
+    if(res.status !== 201 && res.status !== 200) return this._fail(res);
+    this._adopt(coll, rec, res.body);
+    const list = this._cache[coll]; if(!list.some(x=>x===rec)) list.push(rec);
+    if(coll === 'projects' && extra && extra.linkLeadId) await this.refresh('leads', extra.linkLeadId);       // the server changed the lead too
+    return { ok:true, record:rec };
+  },
+
+  // UPDATE — PATCH of ONLY the fields that changed since the last server-confirmed copy. `rec` is normally the cached object the caller already edited in place:
+  // if the server refuses, the in-place edit is rolled back so the screen never shows data the server does not have.
+  async update(coll, rec){
+    if(this.state !== 'ready') return this._notReady();
+    if(!API_COLUMNS[coll]) return { ok:false, error:{ code:'unknown_collection' }, userMessage:'Internal error: unknown collection.' };
+    const snapStr = this._pristine[coll] && this._pristine[coll].get(rec.id);
+    if(!snapStr) return { ok:false, error:{ code:'not_loaded' }, userMessage:'This record is not loaded, so it cannot be updated. Please refresh the page.' };
+    const before = JSON.parse(snapStr); const a = this._apiBody(coll, before), b = this._apiBody(coll, rec); const patch = {};
+    for(const k of Object.keys(b)) if(JSON.stringify(a[k]) !== JSON.stringify(b[k])) patch[k] = b[k];
+    const cached = this._cache[coll].find(x=>x.id === rec.id);
+    if(!Object.keys(patch).length){ if(cached && cached !== rec){ this._cache[coll][this._cache[coll].indexOf(cached)] = rec; } return { ok:true, record:rec, unchanged:true }; }
+    if(UPDATED_AT_COLLECTIONS.includes(coll) && before.updatedAt) patch.expected_updated_at = before.updatedAt;      // stale-record protection
+    this._inflight++;
+    let res; try{ res = await BZ.api('PATCH', '/api/' + coll + '/' + encodeURIComponent(rec.id), patch); } finally { this._inflight--; }
+    if(res.status !== 200){ if(cached === rec) this._restore(coll, rec); return this._fail(res); }
+    this._adopt(coll, rec, res.body);
+    if(cached && cached !== rec) this._cache[coll][this._cache[coll].indexOf(cached)] = rec; else if(!cached) this._cache[coll].push(rec);
+    return { ok:true, record:rec };
+  },
+
+  async remove(coll, id){
+    if(this.state !== 'ready') return this._notReady();
+    this._inflight++;
+    let res; try{ res = await BZ.api('DELETE', '/api/' + coll + '/' + encodeURIComponent(id)); } finally { this._inflight--; }
+    if(res.status !== 200) return this._fail(res);
+    this._cache[coll] = this._cache[coll].filter(x=>x.id !== id); if(this._pristine[coll]) this._pristine[coll].delete(id);
+    return { ok:true };
+  },
+
+  // Re-reads ONE record from the server (used after the server changed something the browser did not ask for).
+  async refresh(coll, id){
+    const res = await BZ.api('GET', '/api/' + coll + '/' + encodeURIComponent(id));
+    if(res.status !== 200) return this._fail(res);
+    const cur = this._cache[coll].find(x=>x.id === id);
+    if(cur) this._adopt(coll, cur, res.body); else { const n = this._mapRow(coll, res.body); this._snap(coll, n); this._cache[coll].push(n); }
+    return { ok:true };
+  },
+
+  // Settings (founder only): PUT with just the changed fields.
+  async saveSettings(record){
+    if(this.state !== 'ready') return this._notReady();
+    const patch = {};
+    if(record.discountLimitPct !== undefined) patch.discount_limit_pct = record.discountLimitPct;
+    if(record.bankDetails !== undefined) patch.bank_details = record.bankDetails;
+    if(record.quotationDefaults !== undefined) patch.quotation_defaults = record.quotationDefaults;
+    this._inflight++;
+    let res; try{ res = await BZ.api('PUT', '/api/settings', patch); } finally { this._inflight--; }
+    if(res.status !== 200) return this._fail(res);
+    const s = res.body; this._cache.settings = { discountLimitPct: s.discount_limit_pct || 10, bankDetails: s.bank_details || null, quotationDefaults: s.quotation_defaults || null };
+    return { ok:true, record:this._cache.settings };
+  },
+
+  // Financial state changes have their own endpoints (never a generic PATCH).
+  async voidPayment(id, reason){
+    if(this.state !== 'ready') return this._notReady();
+    this._inflight++; let res; try{ res = await BZ.api('POST', '/api/payments/' + encodeURIComponent(id) + '/void', { reason: reason || '' }); } finally { this._inflight--; }
+    if(res.status !== 200) return this._fail(res);
+    const rec = this._cache.payments.find(x=>x.id === id); if(rec) this._adopt('payments', rec, res.body);
+    return { ok:true, record:rec };
+  },
+  // voidPayment:true voids the receipt AND its payment in ONE server transaction (what the Void Receipt action has always done).
+  async cancelReceipt(id, reason, voidPayment){
+    if(this.state !== 'ready') return this._notReady();
+    this._inflight++; let res; try{ res = await BZ.api('POST', '/api/receipts/' + encodeURIComponent(id) + '/cancel', { reason: reason || '', void_payment: !!voidPayment }); } finally { this._inflight--; }
+    if(res.status !== 200) return this._fail(res);
+    const rec = this._cache.receipts.find(x=>x.id === id); if(rec) this._adopt('receipts', rec, res.body);
+    if(voidPayment && res.body && res.body.payment_id) await this.refresh('payments', res.body.payment_id);
+    return { ok:true, record:rec };
+  },
+
+  // Append-only histories. `rec` receives the server's id/time. Failure is reported to the caller; logActivity() (below) surfaces it to the user.
+  async appendActivity(rec){
+    if(this.state !== 'ready') return this._notReady();
+    const b = activityToInsertRow(rec); const body = { ref_type:b.ref_type, ref_id:b.ref_id, ref_label:b.ref_label, action_type:b.action_type, description:b.description, from_value:b.from_value, to_value:b.to_value, remark:b.remark };
+    Object.keys(body).forEach(k=>{ if(body[k] === null || body[k] === undefined) delete body[k]; });
+    this._bg++; let res; try{ res = await BZ.api('POST', '/api/activity', body); } finally { this._bg--; }
+    if(res.status !== 201) return this._fail(res);
+    Object.assign(rec, rowToActivity(res.body)); this._cache.activities.unshift(rec); if(this._meta) this._meta.activity_logs_total++; return { ok:true, record:rec };
+  },
+  async appendLeadActivity(rec){
+    if(this.state !== 'ready') return this._notReady();
+    const b = leadActivityToInsertRow(rec); const body = { lead_id:b.lead_id, activity_type:b.activity_type, note:b.note, follow_up_date:b.follow_up_date, completed_at:b.completed_at };
+    Object.keys(body).forEach(k=>{ if(body[k] === null || body[k] === undefined) delete body[k]; });
+    this._inflight++; let res; try{ res = await BZ.api('POST', '/api/lead_activities', body); } finally { this._inflight--; }
+    if(res.status !== 201) return this._fail(res);
+    Object.assign(rec, rowToLeadActivity(res.body)); this._cache.leadActivities.unshift(rec); return { ok:true, record:rec };
+  },
+
+  // The bootstrap carries the newest 500 history rows; older rows stay in the database and are fetched here on demand (nothing is ever deleted).
+  async loadOlderActivities(limit){
+    const list = this._cache.activities; const ids = list.map(a=>Number(a.id)).filter(Number.isFinite);
+    const before = ids.length ? Math.min.apply(null, ids) : 9e15;
+    const res = await BZ.api('GET', '/api/activities?before=' + before + '&limit=' + (limit || 200));
+    if(res.status !== 200 || !Array.isArray(res.body)) return this._fail(res, 'Older history could not be loaded.');
+    res.body.map(rowToActivity).forEach(a=>{ if(!list.some(x=>x.id === a.id)) list.push(a); });
+    return { ok:true, loaded:res.body.length, hasMore: res.body.length >= (limit || 200) };
+  },
+  activityTotals(){ return { total: this._meta ? this._meta.activity_logs_total : null, loaded: this._cache.activities.filter(a=>Number.isFinite(Number(a.id))).length }; },
+
+  // The old fire-and-forget entry point is GONE on purpose: any call site that was missed fails loudly instead of silently not saving.
+  upsert(){ throw new Error('DB.upsert() has been removed in the Neon build: use await DB.create / DB.update / DB.saveSettings / DB.appendActivity / DB.appendLeadActivity and check result.ok'); },
+  nextId(){ throw new Error('DB.nextId() has been removed in the Neon build: identifiers are assigned by the server when the record is saved'); }
 };
+
+// Columns the API accepts per collection (mirror of api/crm/registry.ts — the server re-validates everything).
+const API_COLUMNS = {
+  leads: ['client_name','business_name','phone','email','industry','interested_service','status','source','assigned_sales','estimated_value','next_follow_up_date','last_contact_date','lost_reason','project_id','archived','archived_at','archived_by','archive_reason','follow_up_created_by','follow_up_updated_at','telegram','facebook','notes','expected_close_date','quotation_status','quotation_amount','quotation_ref','demo_link','hold_reason'],
+  projects: ['lead_id','client_name','business_name','industry','project_type','confirmed_value','stage','assigned_sales','start_date','expected_delivery','functions'],
+  quotations: ['root_quotation_id','version','previous_version_id','lead_id','project_code','client_name','business_name','phone','telegram','industry','interested_service','package_key','package_name','quotation_type','status','approval_status','assigned_sales','currency','domain_name','domain_cost','domain_included','domain_renewal_estimate','year1_total','year2_total','year3_total','discount_pct','manual_adjustment_amount','manual_adjustment_reason','payment_preset','quotation_date','valid_until','demo_link','scope_items','exclusions','important_notes','payment_schedule','founder_review_reasons','approved_by','demo_links_extra'],
+  invoices: ['project_code','lead_id','client_name','business_name','website_link','invoice_date','project_status','status','currency','items','discount_amount','summary','notes','assigned_sales','invoice_type','due_date','payment_stage_index'],
+  payments: ['project_id','payment_number','type','amount','payment_date','method','reference','note','invoice_id'],
+  receipts: ['payment_id','project_code','invoice_id','client_name','business_name','receipt_date','reissue_of_receipt_id'],
+  services: ['name','project_type','category','base_price','minimum_price','maximum_price','description','year2_price','year3_price','sales_can_quote','founder_review_required','max_discount_pct','default_delivery','status','functions','is_active','price_is_starting_from'],
+};
+const UPDATED_AT_COLLECTIONS = ['leads','projects','quotations','invoices'];
+
+// A page must not be closed while a save is still on the wire.
+window.addEventListener('beforeunload', (e)=>{ if(DB._inflight > 0){ e.preventDefault(); e.returnValue = 'A save is still in progress.'; return e.returnValue; } });
+
 
 /* ---------------------------------------------------------------------- */
 /* Project Code — shared uniqueness/normalization rules, used by every    */
@@ -1800,13 +1917,25 @@ function suggestNextProjectCode(){
 
 function logActivity({ userName, refType, refId, refLabel, type, description, fromValue=null, toValue=null, remark=null }){
   const rec = {
-    id: 'A' + Date.now() + Math.floor(Math.random()*1000),
+    id: null,                              // assigned by the server when the entry is stored
     at: new Date().toISOString(),
     userName, refType, refId, refLabel, type, description,
     fromValue, toValue, remark
   };
-  DB.upsert('activities', rec);
+  // The history row is written AFTER the business change was confirmed (callers log only on success). It is awaited in the background and a
+  // failure is shown to the user — never swallowed.
+  DB.appendActivity(rec).then(r=>{
+    if(!r.ok){
+      console.error('Activity history entry was not saved', r.error);
+      try{ toast('The change was saved, but its history entry could not be recorded: ' + r.userMessage, 'error'); }catch(e){}
+    }
+  });
   return rec;
+}
+// Same, but the caller can wait for (and check) the result.
+function logActivityAsync(entry){
+  const rec = { id: null, at: new Date().toISOString(), fromValue:null, toValue:null, remark:null, ...entry };
+  return DB.appendActivity(rec);
 }
 
 function activitiesFor(refId){
@@ -1879,9 +2008,9 @@ function nextPaymentNumberLabel(projectId){
 // (Project View's Record Payment) that doesn't pass it keeps recording a
 // perfectly ordinary unlinked payment, byte-identical to before the
 // Invoices module existed.
-function recordPaymentEntry({ projectId, paymentNumber, amount, date, method, type, reference, note, userName, invoiceId=null }){
+async function recordPaymentEntry({ projectId, paymentNumber, amount, date, method, type, reference, note, userName, invoiceId=null }){
   const rec = {
-    id: 'PM' + Date.now() + Math.floor(Math.random()*10000),
+    id: null,                               // assigned by the server
     projectId,
     paymentNumber: paymentNumber || nextPaymentNumberLabel(projectId),
     amount: Number(amount)||0, date, method, type,
@@ -1890,8 +2019,8 @@ function recordPaymentEntry({ projectId, paymentNumber, amount, date, method, ty
     voided: false, voidedBy: null, voidedAt: null, voidReason: null,
     invoiceId: invoiceId || null,
   };
-  DB.upsert('payments', rec);
-  return rec;
+  const r = await DB.create('payments', rec);
+  return r.ok ? { ok:true, record:r.record } : r;
 }
 
 // Edits an existing payment IN PLACE — history is never silently
@@ -1899,26 +2028,22 @@ function recordPaymentEntry({ projectId, paymentNumber, amount, date, method, ty
 // "Payment updated from $X to $Y by [user]"-style Activity Log entry with
 // the before/after values. Founder/Admin only — enforced by the UI layer
 // (canEditPayments()) and re-checked here as a second line of defense.
-function updatePaymentEntry(paymentId, patch){
+async function updatePaymentEntry(paymentId, patch){
   const rec = DB.find('payments', paymentId);
-  if(!rec) return null;
+  if(!rec) return { ok:false, userMessage:'That payment no longer exists. Please refresh the page.' };
   Object.assign(rec, patch);
-  DB.upsert('payments', rec);
-  return rec;
+  const r = await DB.update('payments', rec);
+  return r;
 }
 
 // Voids (never hard-deletes) a payment. Voided entries stay in the ledger
 // permanently for audit purposes but are excluded from every Total
 // Paid / Remaining / Payment Status calculation (see paymentsForProject).
-function voidPaymentEntry(paymentId, { voidedBy, reason }){
+async function voidPaymentEntry(paymentId, { voidedBy, reason }){
   const rec = DB.find('payments', paymentId);
-  if(!rec) return null;
-  rec.voided = true;
-  rec.voidedBy = voidedBy;
-  rec.voidedAt = new Date().toISOString();
-  rec.voidReason = reason || '';
-  DB.upsert('payments', rec);
-  return rec;
+  if(!rec) return { ok:false, userMessage:'That payment no longer exists. Please refresh the page.' };
+  // who/when are set by the server from the signed-in user; the browser only sends the reason
+  return DB.voidPayment(paymentId, reason || '');
 }
 
 /* ---------------------------------------------------------------------- */
@@ -3551,3 +3676,34 @@ function seedDatabase(){ console.warn('seedDatabase() is a no-op in production �
 // before any UI module runs — see dashboard/index.html. It is NOT called
 // here at load time (unlike the old `seedDatabase(false)` call this
 // replaces) because it needs a live Supabase session/network round trip.
+
+/* ---------------------------------------------------------------------- */
+/* Save helpers (Neon build) — every save handler uses these so a button   */
+/* cannot be double-clicked while a save is on the wire, and a failure is  */
+/* always shown to the user.                                               */
+/* ---------------------------------------------------------------------- */
+// Runs fn() once at a time per button; the button is disabled meanwhile. Returns fn's result, or undefined if a save was already running.
+async function runSave(btn, fn){
+  if(btn && btn.dataset.busy === '1') return undefined;
+  const label = btn ? btn.textContent : null;
+  if(btn){ btn.dataset.busy = '1'; btn.disabled = true; btn.setAttribute('aria-busy','true'); }
+  try{ return await fn(); }
+  finally{ if(btn){ btn.dataset.busy = ''; btn.disabled = false; btn.removeAttribute('aria-busy'); if(label !== null && btn.textContent !== label) btn.textContent = label; } }
+}
+// Shows why a save failed (server message translated for staff, never SQL) and returns false so callers can `return saveFailed(r)`.
+function saveFailed(r, fallback){
+  console.error('Save failed', r && r.error);
+  try{ toast((r && r.userMessage) || fallback || 'Could not save. Your changes were not stored. Please try again.', 'error'); }catch(e){ alert((r && r.userMessage) || fallback || 'Could not save.'); }
+  return false;
+}
+
+// Follow-up history note (lead_activities): the business change was already confirmed, so a failure here is reported but does not undo it.
+async function recordLeadActivity(rec){
+  const r = await DB.appendLeadActivity(rec);
+  if(!r.ok){ console.error('Follow-up history note was not saved', r.error); try{ toast('The change was saved, but its follow-up history note could not be stored: ' + r.userMessage, 'error'); }catch(e){} }
+  return r;
+}
+
+// Browser-side business-number generation is RETIRED: quotation, invoice and receipt numbers, lead ids and (unless a person enters one) project codes
+// are allocated by the server inside the same transaction that saves the record. Any leftover caller fails loudly instead of inventing a number.
+generateQuoteNumber = generateInvoiceNumber = generateReceiptNumber = function(){ throw new Error('Business numbers are assigned by the server when a record is saved; the browser must not generate them.'); };

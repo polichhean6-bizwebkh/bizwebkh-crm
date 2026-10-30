@@ -134,7 +134,7 @@ function createProjectFromLead(leadId, onDone){
   openModal(html, { onMount:(overlay)=>{
     overlay.querySelector('#cpClose').onclick = closeModal;
     overlay.querySelector('#cpCancel').onclick = closeModal;
-    overlay.querySelector('#cpSave').onclick = ()=>{
+    overlay.querySelector('#cpSave').onclick = function(){ return runSave(this, async ()=>{
       const codeInput = overlay.querySelector('#cp_code');
       const code = normalizeProjectCode(codeInput.value);
       if(!code){ codeInput.style.borderColor='var(--red)'; toast('Project Code is required.', 'error'); return; }
@@ -154,7 +154,8 @@ function createProjectFromLead(leadId, onDone){
       const startDate = overlay.querySelector('#cp_start').value;
       const expectedDelivery = overlay.querySelector('#cp_delivery').value;
 
-      createProjectRecord({ code, lead, confirmedValue, depositPct, startDate, expectedDelivery });
+      const made = await createProjectRecord({ code, lead, confirmedValue, depositPct, startDate, expectedDelivery });
+      if(!made.ok){ saveFailed(made); return; }       // the modal stays open; nothing was created
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: code, refLabel:`${code} — ${lead.businessName}`,
         type:'Project Created', description:`${CURRENT_USER.name} created project ${code} from lead ${lead.id}. Confirmed Value: ${moneyPrecise(confirmedValue)}.`, toValue:'Confirmed' });
 
@@ -162,7 +163,7 @@ function createProjectFromLead(leadId, onDone){
       closeModal();
       if(onDone) onDone();
       refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
-    };
+    }); };
   }});
 }
 
@@ -172,7 +173,7 @@ function createProjectFromLead(leadId, onDone){
 /* re-asking for information the lead already has.                       */
 /* ---------------------------------------------------------------------- */
 
-function createProjectRecord({ code, lead, confirmedValue, depositPct=50, startDate, expectedDelivery, overrides={} }){
+async function createProjectRecord({ code, lead, confirmedValue, depositPct=50, startDate, expectedDelivery, overrides={}, setLeadStatus }){
   const now = new Date().toISOString();
 
   // NOTE on money fields: `confirmedValue` is the only authoritative value
@@ -193,52 +194,21 @@ function createProjectRecord({ code, lead, confirmedValue, depositPct=50, startD
     confirmedValue: Number(confirmedValue)||0,
     depositPct,
     assignedSales: overrides.assignedSales ?? lead?.assignedSales ?? CURRENT_USER.name,
-    stage: 'Confirmed',
+    stage: overrides.stage || 'Confirmed',
     startDate: startDate || new Date().toISOString().slice(0,10),
     expectedDelivery: expectedDelivery || daysFromNow(21),
     leadSource: overrides.leadSource ?? lead?.leadSource ?? 'Direct',
     demoLink: lead?.demoLink || '',
     quotationRef: lead?.quotationRef || '',
     notes: overrides.notes ?? lead?.notes ?? '',
-    functions: [],
+    functions: overrides.functions || [],
     createdAt: now
   };
-  DB.upsert('projects', proj);
-
-  if(lead){
-    lead.projectCode = code;
-    lead.updatedAt = now;
-    DB.upsert('leads', lead);
-  }
-
-  // Clear-error safety net (root-cause fix, C060: "if project creation
-  // fails, do not silently finish the action"). DB.upsert() is
-  // fire-and-forget/optimistic by design — the same convention used by
-  // every write in this app — so this does not change that convention or
-  // block the caller's own success toast/UI, which already reflect the
-  // local write. It only adds a short confirming re-check shortly after, so
-  // a genuine server-side failure surfaces as a clear, actionable warning
-  // instead of staying silent until someone happens to notice the Project
-  // missing from the Projects tab (exactly what happened here). The
-  // suggested fix — reopening the lead and using "+ Create Project" — is
-  // itself safe to retry: createProjectFromLead() now correctly detects
-  // "code assigned but no Project row yet" and reuses the same code rather
-  // than ever creating a duplicate.
-  if(typeof supabaseClient !== 'undefined' && supabaseClient){
-    setTimeout(()=>{
-      supabaseClient.from('projects').select('id').eq('id', code).maybeSingle()
-        .then(({ data, error })=>{
-          if(error || !data){
-            toast(`Warning: Project ${code} may not have saved to the server. Please check the Projects tab — if it's missing, reopen this lead and use "+ Create Project" to retry (it will not create a duplicate).`, 'error');
-          }
-        })
-        .catch(()=>{
-          toast(`Warning: Project ${code} may not have saved to the server. Please check the Projects tab — if it's missing, reopen this lead and use "+ Create Project" to retry (it will not create a duplicate).`, 'error');
-        });
-    }, 1500);
-  }
-
-  return proj;
+  // ONE server transaction: the project row is inserted AND (when a lead is given) the lead is linked to it — and its status set, if asked — or nothing changes at all.
+  // The requested code is validated by the server (a taken code is refused with 'code_taken', never overwritten).
+  const created = await DB.create('projects', proj, { code, linkLeadId: lead ? lead.id : null, setLeadStatus });
+  if(!created.ok) return created;
+  return { ok:true, record:proj };
 }
 
 // Simple obvious-duplicate check for Direct Project creation (spec §5) —
@@ -458,11 +428,11 @@ function openEditPaymentModal(paymentId, proj, onDone){
       <div class="form-grid">
         <div class="form-field"><label class="required">Payment Number</label><input id="epy_number" value="${escapeHtml(payment.paymentNumber||'')}" placeholder="e.g. 1st Payment"></div>
         <div class="form-field"><label class="required">Payment Type</label>
-          <select id="epy_type">${PAYMENT_TYPES.map(t=>`<option ${payment.type===t?'selected':''}>${t}</option>`).join('')}</select>
+          <select id="epy_type">${PAYMENT_TYPES_ALL.map(t=>`<option ${payment.type===t?'selected':''}>${t}</option>`).join('')}</select>
         </div>
         <div class="form-field"><label class="required">Amount ($)</label><input type="number" id="epy_amount" value="${payment.amount}" min="0.01" step="0.01"></div>
         <div class="form-field"><label class="required">Payment Date</label><input type="date" id="epy_date" value="${payment.date||''}"></div>
-        <div class="form-field"><label class="required">Payment Method</label><select id="epy_method">${PAYMENT_METHODS.map(m=>`<option ${payment.method===m?'selected':''}>${m}</option>`).join('')}</select></div>
+        <div class="form-field"><label class="required">Payment Method</label><select id="epy_method">${PAYMENT_METHODS_ALL.map(m=>`<option ${payment.method===m?'selected':''}>${m}</option>`).join('')}</select></div>
         <div class="form-field"><label>Reference</label><input id="epy_reference" value="${escapeHtml(payment.reference||'')}" placeholder="e.g. bank txn ref, receipt #…"></div>
         <div class="form-field full"><label>Note</label><textarea id="epy_note">${escapeHtml(payment.note||'')}</textarea></div>
       </div>
@@ -479,7 +449,7 @@ function openEditPaymentModal(paymentId, proj, onDone){
       closeModal();
       openLinkPaymentInvoiceModal(payment.id, ()=>{ if(onDone) onDone(); });
     };
-    overlay.querySelector('#epySave').onclick = ()=>{
+    overlay.querySelector('#epySave').onclick = function(){ return runSave(this, async ()=>{
       // Second line of defense — the button is already hidden from Sales in
       // the table, but never trust the UI alone for a founder-only action.
       if(!canEditPayments(CURRENT_USER.role)){ toast('Only Founder/Admin can edit payments.', 'error'); return; }
@@ -521,11 +491,12 @@ function openEditPaymentModal(paymentId, proj, onDone){
 
       if(!changes.length){ toast('No changes to save.', 'success'); closeModal(); return; }
 
-      updatePaymentEntry(payment.id, { paymentNumber:newNumber, amount:newAmount, date:newDate, method:newMethod, type:newType, reference:newReference, note:newNote });
+      const upd = await updatePaymentEntry(payment.id, { paymentNumber:newNumber, amount:newAmount, date:newDate, method:newMethod, type:newType, reference:newReference, note:newNote });
+      if(!upd.ok){ saveFailed(upd); return; }      // rolled back; the form stays open with the typed values
       // Keep a linked invoice's Total Paid/Balance/Status in sync with an
       // edited amount (spec §8) — a no-op for the vast majority of payments,
       // which have no invoice link at all.
-      if(payment.invoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(payment.invoiceId);
+      if(payment.invoiceId && typeof recalcInvoiceStatus==='function') await recalcInvoiceStatus(payment.invoiceId);
 
       // Build the audit description in the spec's example format:
       // "Payment edited for C017 — 1st Payment: amount changed from $41 to $XX"
@@ -552,7 +523,7 @@ function openEditPaymentModal(paymentId, proj, onDone){
       // them; refreshAfterLeadOrProjectChange() re-renders from the
       // already-updated DB._cache, no network call.
       refreshAfterLeadOrProjectChange();
-    };
+    }); };
   }});
 }
 
@@ -575,22 +546,23 @@ function openVoidPaymentModal(paymentId, proj, onDone){
   openModal(html, { onMount:(overlay)=>{
     overlay.querySelector('#vpClose').onclick = closeModal;
     overlay.querySelector('#vpCancel').onclick = closeModal;
-    overlay.querySelector('#vpConfirm').onclick = ()=>{
+    overlay.querySelector('#vpConfirm').onclick = function(){ return runSave(this, async ()=>{
       const reason = overlay.querySelector('#vp_reason').value.trim();
       if(!reason){ toast('Please provide a reason for voiding this payment.', 'error'); return; }
-      voidPaymentEntry(payment.id, { voidedBy: CURRENT_USER.name, reason });
+      const voided = await voidPaymentEntry(payment.id, { voidedBy: CURRENT_USER.name, reason });
+      if(!voided.ok){ saveFailed(voided); return; }
       // A voided payment no longer counts toward its linked invoice's Total
       // Paid either (invoicePaymentsFor() already filters out !voided) —
       // just re-run the status transition so the invoice's stored `status`
       // reflects that too (e.g. back down from Paid to Partially Paid).
-      if(payment.invoiceId && typeof recalcInvoiceStatus==='function') recalcInvoiceStatus(payment.invoiceId);
+      if(payment.invoiceId && typeof recalcInvoiceStatus==='function') await recalcInvoiceStatus(payment.invoiceId);
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: proj.id, refLabel:`${proj.id} — ${proj.businessName}`,
         type:'Payment Voided', description:`${CURRENT_USER.name} voided payment ${payment.paymentNumber||payment.id} (${moneyPrecise(payment.amount)}). Reason: ${reason}` });
       toast('Payment voided.', 'success');
       closeModal();
       if(onDone) onDone();
       refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
-    };
+    }); };
   }});
 }
 
@@ -713,8 +685,9 @@ function functionModuleHtml(m){
 }
 
 function wireFunctionsTab(overlay, proj){
-  function persistAndRerender(){
-    DB.upsert('projects', proj);
+  async function persistAndRerender(){
+    const saved = await DB.update('projects', proj);
+    if(!saved.ok) saveFailed(saved);      // the project was rolled back to the last saved scope; the re-render below shows that
     // Keep the Scope section expanded across the re-render — the user was
     // just actively editing it.
     PROJECT_DETAIL_OPEN_SECTIONS.add('scope');
@@ -877,7 +850,7 @@ function openEditProjectModal(code){
   openModal(html, { large:true, onMount:(overlay)=>{
     overlay.querySelector('#epClose').onclick = closeModal;
     overlay.querySelector('#epCancel').onclick = closeModal;
-    overlay.querySelector('#epSave').onclick = ()=>{
+    overlay.querySelector('#epSave').onclick = function(){ return runSave(this, async ()=>{
       const val = id => overlay.querySelector(id).value.trim();
       proj.clientName = val('#ep_clientName');
       proj.businessName = val('#ep_businessName');
@@ -897,7 +870,8 @@ function openEditProjectModal(code){
       proj.startDate = val('#ep_start');
       proj.expectedDelivery = val('#ep_delivery');
       proj.notes = val('#ep_notes');
-      DB.upsert('projects', proj);
+      const saved = await DB.update('projects', proj);
+      if(!saved.ok){ saveFailed(saved); return; }      // rolled back; the form stays open with the typed values
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: proj.id, refLabel:`${proj.id} — ${proj.businessName}`,
         type:'Note Added', description:`${CURRENT_USER.name} updated project ${proj.id} details.` });
       if(newValue!==oldValue){
@@ -908,7 +882,7 @@ function openEditProjectModal(code){
       toast('Project updated.', 'success');
       closeModal();
       refreshAfterLeadOrProjectChange();
-    };
+    }); };
   }});
 }
 
@@ -939,10 +913,11 @@ function applyProjectStageChange(proj, newStage){
   openStatusChangeModal({
     refType:'project', refId: proj.id, refLabel:`${proj.id} — ${proj.businessName}`,
     fromStatus: proj.stage, toStatus: newStage,
-    onConfirm: ({ remark })=>{
+    onConfirm: async ({ remark })=>{
       const prevStage = proj.stage;
       proj.stage = newStage;
-      DB.upsert('projects', proj);
+      const saved = await DB.update('projects', proj);
+      if(!saved.ok){ saveFailed(saved); return { ok:false }; }
 
       // Project stage and Lead status are deliberately SEPARATE axes (see
       // LEAD_STATUSES) — a lead that reached Confirmed stays Confirmed
@@ -1018,18 +993,19 @@ function openConfirmProjectModal(lead){
       overlay.querySelector('#dupClose').onclick = closeModal;
       overlay.querySelector('#dupCancel').onclick = closeModal;
       overlay.querySelector('#dupOpenProject').onclick = ()=>{ closeModal(); openProjectDetailModal(lead.projectCode); };
-      overlay.querySelector('#dupConfirm').onclick = ()=>{
+      overlay.querySelector('#dupConfirm').onclick = function(){ return runSave(this, async ()=>{
         const remark = overlay.querySelector('#dupRemark').value.trim();
-        closeModal();
         lead.status = 'Confirmed';
         lead.updatedAt = new Date().toISOString();
-        DB.upsert('leads', lead);
+        const saved = await DB.update('leads', lead);
+        if(!saved.ok){ saveFailed(saved); return; }
+        closeModal();
         logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
           type:'Status Changed', description:`${CURRENT_USER.name} changed status: ${pipelineStageLabel(prevStatus)} → ${pipelineStageLabel('Confirmed')}`,
           fromValue: pipelineStageLabel(prevStatus), toValue: pipelineStageLabel('Confirmed'), remark: remark || `No new project created — already linked to ${lead.projectCode}.` });
         toast(`Status changed to "${pipelineStageLabel('Confirmed')}". Project ${lead.projectCode} was not duplicated.`, 'success');
         refreshAfterLeadOrProjectChange();
-      };
+      }); };
     }});
     return;
   }
@@ -1078,7 +1054,7 @@ function openConfirmProjectModal(lead){
   openModal(html, { large:true, onMount:(overlay)=>{
     overlay.querySelector('#cfClose').onclick = closeModal;
     overlay.querySelector('#cfCancel').onclick = closeModal;
-    overlay.querySelector('#cfConfirm').onclick = ()=>{
+    overlay.querySelector('#cfConfirm').onclick = function(){ return runSave(this, async ()=>{
       const codeInput = overlay.querySelector('#cf_code');
       const code = normalizeProjectCode(codeInput.value);
       if(!code){ codeInput.style.borderColor='var(--red)'; toast('Project Code is required.', 'error'); return; }
@@ -1102,18 +1078,15 @@ function openConfirmProjectModal(lead){
       const startDate = overlay.querySelector('#cf_start').value;
       const expectedDelivery = overlay.querySelector('#cf_delivery').value;
       const remark = overlay.querySelector('#cf_remark').value.trim();
-      closeModal();
 
-      // 1. lead status -> Confirmed, logged
-      lead.status = 'Confirmed';
-      lead.updatedAt = new Date().toISOString();
-      DB.upsert('leads', lead);
+      // 1+2. create the linked project AND set the lead to Confirmed in ONE server transaction (the Supabase build did two separate writes)
+      const made = await createProjectRecord({ code, lead, confirmedValue, depositPct, startDate, expectedDelivery, setLeadStatus: 'Confirmed' });
+      if(!made.ok){ saveFailed(made); return; }       // nothing changed; the modal stays open with the typed values
+      closeModal();
       logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
         type:'Status Changed', description:`${CURRENT_USER.name} changed status: ${pipelineStageLabel(prevStatus)} → ${pipelineStageLabel('Confirmed')}`,
         fromValue: pipelineStageLabel(prevStatus), toValue: pipelineStageLabel('Confirmed'), remark });
 
-      // 2. auto-create the linked project (no re-entry of client info)
-      createProjectRecord({ code, lead, confirmedValue, depositPct, startDate, expectedDelivery });
 
       // 3. activity: system created project (on both the project and the lead)
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: code, refLabel:`${code} — ${lead.businessName}`,
@@ -1135,15 +1108,17 @@ function openConfirmProjectModal(lead){
           if(confirm(`This lead is now Confirmed — delivery is tracked on Project ${code} instead of sales follow-up.\n\nRemove the scheduled follow-up (${fmtDate(keptDate)})?\n\nChoose Cancel to keep it for a special reason.`)){
             lead.nextFollowup = null;
             lead.followUpUpdatedAt = new Date().toISOString();
-            DB.upsert('leads', lead);
+            DB.update('leads', lead).then(saved=>{
+              if(!saved.ok){ saveFailed(saved); return; }
+              refreshAfterLeadOrProjectChange();
+            });
             logActivity({ userName: CURRENT_USER.name, refType:'lead', refId: lead.id, refLabel:`${lead.clientName} — ${lead.businessName}`,
               type:'Follow-up Cancelled', description:`${CURRENT_USER.name} removed the sales follow-up for ${lead.clientName} — now tracked via Project ${code} instead.`,
               fromValue: keptDate, toValue: null });
-            refreshAfterLeadOrProjectChange();
           }
         }, 150);
       }
-    };
+    }); };
   }});
 }
 
@@ -1302,7 +1277,7 @@ function openCreateProjectManualModal(){
       };
     });
 
-    overlay.querySelector('#mpSave').onclick = ()=>{
+    overlay.querySelector('#mpSave').onclick = function(){ return runSave(this, async ()=>{
       const codeInput = overlay.querySelector('#mp_code');
       const code = normalizeProjectCode(codeInput.value);
       if(!code){ codeInput.style.borderColor='var(--red)'; toast('Project Code is required.', 'error'); return; }
@@ -1359,7 +1334,7 @@ function openCreateProjectManualModal(){
       // again here in case of a tampered DOM value.
       const assignedSales = canChooseAssignedSales(CURRENT_USER.role) ? overlay.querySelector('#mp_sales').value : CURRENT_USER.name;
 
-      const proj = createProjectRecord({
+      const made = await createProjectRecord({
         code, lead: linkedLead, confirmedValue, depositPct,
         startDate: overlay.querySelector('#mp_start').value,
         expectedDelivery: overlay.querySelector('#mp_delivery').value,
@@ -1370,10 +1345,10 @@ function openCreateProjectManualModal(){
           assignedSales,
           notes: overlay.querySelector('#mp_notes').value.trim(),
           leadSource: linkedLead ? undefined : 'Direct',
+          stage,
         }
       });
-      proj.stage = stage;
-      DB.upsert('projects', proj);
+      if(!made.ok){ saveFailed(made); return; }       // nothing was created; the form stays open
 
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: code, refLabel:`${code} — ${businessName}`,
         type:'Project Created',
@@ -1390,6 +1365,6 @@ function openCreateProjectManualModal(){
       toast(`Project ${code} created.`, 'success');
       closeModal();
       refreshAfterLeadOrProjectChange();
-    };
+    }); };
   }});
 }

@@ -5,6 +5,7 @@
    ========================================================================== */
 
 let ACTIVITY_FILTER_STATE = { user:'', type:'', date:'', ref:'' };
+let ACTIVITY_SHOW = 400;      // rows rendered; grows when older history is loaded
 
 function renderActivityPage(){
   const el = document.getElementById('pageContent');
@@ -50,7 +51,9 @@ function filteredActivities(){
 
 function renderActivityTable(){
   const wrap = document.getElementById('activityTableWrap');
-  const acts = filteredActivities().slice(0, 400);
+  const acts = filteredActivities().slice(0, ACTIVITY_SHOW);
+  const totals = DB.activityTotals();       // the server keeps EVERY row; the page starts with the newest 500 and fetches older ones on request
+  const olderLeft = totals.total !== null && totals.total > totals.loaded;
   wrap.innerHTML = `
     <div class="table-wrap scroll-x">
       <table class="data-table">
@@ -67,8 +70,16 @@ function renderActivityTable(){
         </tbody>
       </table>
     </div>
-    <p class="text-muted" style="margin-top:10px;font-size:12px">Showing ${acts.length} of ${DB.all('activities').length} activity records</p>
+    <p class="text-muted" style="margin-top:10px;font-size:12px">Showing ${acts.length} of ${DB.all('activities').length} loaded activity records${totals.total !== null ? ` (${totals.total} stored in total)` : ''}</p>
+    ${olderLeft ? `<button class="btn btn-secondary" id="aLoadOlder">Load older history (${totals.total - totals.loaded} more)</button>` : ''}
   `;
+  const olderBtn = document.getElementById('aLoadOlder');
+  if(olderBtn) olderBtn.onclick = function(){ return runSave(this, async ()=>{
+    const r = await DB.loadOlderActivities(200);
+    if(!r.ok){ saveFailed(r, 'Older history could not be loaded.'); return; }
+    ACTIVITY_SHOW += r.loaded;
+    renderActivityTable();
+  }); };
   wrap.querySelectorAll('[data-open]').forEach(x=> x.onclick = ()=>{
     if(x.dataset.type==='project') openProjectDetailModal(x.dataset.open);
     else openLeadDetailModal(x.dataset.open);

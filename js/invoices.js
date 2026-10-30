@@ -208,24 +208,57 @@ function icOtherCommitted(projectCode, excludeInvoiceId){
 function icFmtPct(p){ return String(Number((Number(p)||0).toFixed(2))); }
 // "30% Deposit + Full Payment (Microsoft 365…, Additional email…)" — the
 // human-readable Current Payment Stage line shown in the editor + on the PDF.
+// Which kind of item is this? (derived from the item's own wording — only used
+// to word the Current Payment Stage line, never for any calculation.)
+function icItemCategory(desc){
+  const d = String(desc||'').toLowerCase();
+  if(/e-?mail|microsoft|m365|office 365|google workspace|mailbox/.test(d)) return 'Email Services';
+  if(/domain|hosting/.test(d)) return 'Domain & Hosting';
+  if(/website|web site|cms|e-?commerce|landing|web app|development|redesign|online store/.test(d)) return 'Website';
+  if(/logo|brand|design|graphic/.test(d)) return 'Design';
+  if(/seo|marketing|social media|advertis/.test(d)) return 'Marketing';
+  return null;
+}
+// "Deposit" / "Progress Payment" / "Final Payment" — from the invoice type;
+// a Custom invoice that is the FIRST money billed on the project reads as a
+// deposit, a later one as a plain payment.
+function icStageWord(inv){
+  if(inv.invoiceType==='Deposit') return 'Deposit';
+  if(inv.invoiceType==='Progress') return 'Progress Payment';
+  if(inv.invoiceType==='Final') return 'Final Payment';
+  const prior = inv.projectCode ? icOtherCommitted(inv.projectCode, inv.id) : 0;
+  return prior > IC_EPS ? 'Payment' : 'Deposit';
+}
+// "30% Website Deposit + 100% Email Services" — built from what is ACTUALLY
+// being billed on this invoice (each item's own %), never a single global
+// label: an invoice with some 100% items is not called "Full Payment".
 function icStageDescription(inv){
   const items = (inv.items||[]).filter(icItemHasPct).filter(it=> icItemDue(it) > 0.004);
   if(!items.length) return '';
-  const word = { Deposit:'Deposit', Progress:'Progress Payment', Final:'Final Payment' }[inv.invoiceType] || 'Payment';
-  const partial = {}; const full = [];
-  items.forEach(it=>{
-    const p = icClampPct(it.payPct);
-    if(p >= 100) full.push(it.description||'Item');
-    else (partial[p] = partial[p] || []).push(it.description||'Item');
-  });
-  const keys = Object.keys(partial).map(Number).sort((a,b)=>b-a);
-  const multi = keys.length + (full.length?1:0) > 1;
-  const parts = keys.map(p=> `${icFmtPct(p)}% ${word}` + (multi ? ` (${partial[p].join(', ')})` : ''));
-  if(full.length){
-    const lbl = inv.invoiceType==='Final' ? 'Final Payment' : 'Full Payment';
-    parts.push(lbl + (multi ? ` (${full.join(', ')})` : ''));
+  const word = icStageWord(inv);
+  const groups = new Map();
+  items.forEach(it=>{ const p = icRound2(icClampPct(it.payPct)); if(!groups.has(p)) groups.set(p, []); groups.get(p).push(it); });
+  const partial = [...groups.keys()].filter(p=>p<100).sort((a,b)=>b-a);
+  const order = groups.has(100) || [...groups.keys()].some(p=>p>=100) ? partial.concat([100]) : partial;
+  if(order.length===1 && order[0]>=100){
+    // 100% of the billed items. It is only a "Full / Final Payment" when this
+    // invoice (plus everything already billed/paid) actually covers the project.
+    const pv = icProjectValueInfo(inv.projectCode).value;
+    const billed = icOtherCommitted(inv.projectCode, inv.id) + items.reduce((sum,it)=> sum + icItemDue(it), 0);
+    if(pv > 0 && billed >= pv - IC_EPS) return inv.invoiceType==='Final' ? 'Final Payment' : 'Full Payment';
   }
-  return parts.join(' + ');
+  const proj = inv.projectCode ? DB.find('projects', inv.projectCode) : null;
+  const anyClassified = items.some(i=> icItemCategory(i.description));
+  const projCat = !anyClassified && proj ? icItemCategory(proj.projectType) : null;
+  const catOf = (arr, fallback)=>{
+    const cats = [...new Set(arr.map(i=>icItemCategory(i.description)).filter(Boolean))];
+    if(cats.length) return cats.slice(0,2).join(' & ');
+    return anyClassified ? 'Other Services' : (projCat || fallback);
+  };
+  return order.map(p=>{
+    const arr = groups.get(p) || [];
+    return p>=100 ? `100% ${catOf(arr, 'Selected Items')}` : `${icFmtPct(p)}% ${catOf(arr, 'Project')} ${word}`;
+  }).join(' + ');
 }
 function icSelectedItems(s){ const ex = s._applyExclude||[]; return (s.items||[]).filter(it=> !ex.includes(it.id)); }
 function icSetRowSelected(s, id, on){
@@ -372,14 +405,19 @@ function nextInvoiceStatus(inv, totals){
 // Recomputes + persists the status transition for one invoice (called after
 // any payment is recorded/edited/voided against it). Returns the fresh
 // {inv, totals} pair, or null if the invoice no longer exists.
-function recalcInvoiceStatus(invoiceId){
+async function recalcInvoiceStatus(invoiceId){
   if(!invoiceId) return null;
   const inv = DB.find('invoices', invoiceId);
   if(!inv) return null;
   const totals = invoiceTotals(inv);
   const next = nextInvoiceStatus(inv, totals);
-  if(next !== inv.status){ inv.status = next; DB.upsert('invoices', inv); }
-  return { inv, totals };
+  let saveError = null;
+  if(next !== inv.status){
+    inv.status = next;
+    const r = await DB.update('invoices', inv);      // rolls inv.status back if the server refuses (for example a role that may not edit this invoice)
+    if(!r.ok){ saveError = r; try{ toast('The payment was saved, but the invoice status could not be updated: ' + r.userMessage, 'error'); }catch(e){} }
+  }
+  return { inv, totals, saveError };
 }
 
 /* ---------------------------------------------------------------------- */
@@ -627,10 +665,10 @@ function openInvoiceUnsavedChangesDialog(){
   openChildModal(html, { onMount:(overlay)=>{
     overlay.querySelector('#iucContinue').onclick = ()=> closeChildModal();
     overlay.querySelector('#iucDiscard').onclick = ()=>{ closeChildModal(); icEndDirtyTracking(); IC_STATE = null; closeModal(); };
-    overlay.querySelector('#iucSave').onclick = ()=>{
+    overlay.querySelector('#iucSave').onclick = function(){ return runSave(this, async ()=>{
       closeChildModal();
-      saveInvoiceFromState(keepsStatus ? (INVOICE_CREATE_STATUSES.includes(s.status) ? s.status : null) : 'Draft');
-    };
+      await saveInvoiceFromState(keepsStatus ? (INVOICE_CREATE_STATUSES.includes(s.status) ? s.status : null) : 'Draft');
+    }); };
   }});
 }
 
@@ -788,7 +826,7 @@ function icStageAmountWarningHtml(w){
 
 function icInvoiceNumberPreview(s){
   if(s.invoiceNumber) return s.invoiceNumber;
-  return generateInvoiceNumber(s.projectCode || null, s.businessName || s.clientName, s.invoiceDate);
+  return 'Number assigned when saved';       // the server allocates BW-INV-{code}-{NAME}-{date} atomically; the browser never guesses it
 }
 
 function invoiceItemsEditorHtml(items, currency, st){
@@ -955,7 +993,7 @@ function renderCreateInvoiceModal(){
               <p class="text-muted" style="font-size:11px;margin:4px 0 0">Untick items that must be paid in full (or set their own % in the table), then pick a percentage. Amount due = Full Value × %.</p></div>`;
             })()}
             <div class="form-field"><label>Invoice No. <span class="field-auto-badge">Auto</span></label>
-              <input id="ic_invnum" value="${escapeHtml(icInvoiceNumberPreview(s))}" ${(!isFounder() || (s.editingId && !INVOICE_CREATE_STATUSES.includes(s.status)))?'readonly class="field-locked"':''}>
+              <input id="ic_invnum" value="${escapeHtml(icInvoiceNumberPreview(s))}" readonly class="field-locked">
             </div>
             <div class="form-field"><label class="required">Invoice Date</label><input type="date" id="ic_date" value="${s.invoiceDate}"></div>
             <div class="form-field"><label>Payment Due Date <span class="text-muted" style="font-weight:400">(optional)</span></label><input type="date" id="ic_due" value="${s.dueDate||''}"></div>
@@ -1072,8 +1110,8 @@ function renderCreateInvoiceModal(){
     overlay.querySelectorAll('[data-icpct]').forEach(b=> b.onclick = ()=>{ icApplyPctToSelected(s, b.dataset.icpct); renderCreateInvoiceModal(); });
     wireInvoiceItemsEditor(overlay, s);
 
-    overlay.querySelector('#icSaveDraft').onclick = ()=> saveInvoiceFromState('Draft');
-    overlay.querySelector('#icIssue').onclick = ()=> saveInvoiceFromState(s.editingId && !INVOICE_CREATE_STATUSES.includes(s.status) ? null : 'Issued');
+    overlay.querySelector('#icSaveDraft').onclick = function(){ return runSave(this, ()=> saveInvoiceFromState('Draft')); };
+    overlay.querySelector('#icIssue').onclick = function(){ return runSave(this, ()=> saveInvoiceFromState(s.editingId && !INVOICE_CREATE_STATUSES.includes(s.status) ? null : 'Issued')); };
   }});
 }
 
@@ -1122,7 +1160,7 @@ function icWireResize(overlay){
 // first time only), or null (Save Changes on an already-Issued+ invoice,
 // where status stays exactly what the real payment-driven state machine
 // says — issuing/editing NEVER marks an invoice Paid by itself, spec §11/§17).
-function saveInvoiceFromState(forceStatus){
+async function saveInvoiceFromState(forceStatus){
   const s = IC_STATE;
   if(!s.projectCode){ toast('Please select a project.', 'error'); return; }
   if(!s.clientName.trim()){ toast('Please enter a client name.', 'error'); return; }
@@ -1143,10 +1181,10 @@ function saveInvoiceFromState(forceStatus){
     return;
   }
 
-  const invoiceNumber = s.invoiceNumber || existing?.invoiceNumber || generateInvoiceNumber(s.projectCode, s.businessName||s.clientName, s.invoiceDate);
+  const invoiceNumber = existing ? existing.invoiceNumber : null;       // new invoices get their number from the server
   const status = forceStatus || s.status || 'Draft';
   const record = {
-    id: existing ? existing.id : 'INV' + Date.now() + Math.floor(Math.random()*10000),
+    id: existing ? existing.id : null,
     invoiceNumber,
     projectCode: s.projectCode, leadId: proj ? proj.leadId : null,
     clientName: s.clientName.trim(), businessName: s.businessName.trim(),
@@ -1159,16 +1197,19 @@ function saveInvoiceFromState(forceStatus){
     createdBy: existing ? existing.createdBy : CURRENT_USER.name,
     createdAt: existing ? existing.createdAt : new Date().toISOString(),
   };
-  DB.upsert('invoices', record);
+  const saved = existing ? await DB.update('invoices', record) : await DB.create('invoices', record);
+  if(!saved.ok){ saveFailed(saved); return false; }       // the editor stays open with everything typed; nothing was stored
+  const savedNumber = record.invoiceNumber;
   logActivity({ userName: CURRENT_USER.name, refType:'project', refId: s.projectCode, refLabel:`${s.projectCode} — ${s.businessName||s.clientName}`,
     type: existing ? 'Invoice Updated' : 'Invoice Created',
-    description: `${CURRENT_USER.name} ${existing?'updated':'created'} invoice ${invoiceNumber} (${record.status}).` });
+    description: `${CURRENT_USER.name} ${existing?'updated':'created'} invoice ${savedNumber} (${record.status}).` });
 
-  toast(existing ? 'Invoice updated.' : 'Invoice created.', 'success');
+  toast(existing ? 'Invoice updated.' : `Invoice ${savedNumber} created.`, 'success');
   icEndDirtyTracking();
   closeModal();
   refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
   openInvoiceDetailModal(record.id);
+  return true;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1256,15 +1297,16 @@ function openInvoiceDetailModal(id){
     const cancelBtn = overlay.querySelector('#iaCancel');
     if(cancelBtn) cancelBtn.onclick = ()=> openCancelInvoiceModal(inv.id);
     const delBtn = overlay.querySelector('#iaDelete');
-    if(delBtn) delBtn.onclick = ()=>{
+    if(delBtn) delBtn.onclick = function(){ return runSave(this, async ()=>{
       if(!confirm(`Permanently delete invoice ${inv.invoiceNumber}? This cannot be undone.`)) return;
-      DB.remove('invoices', inv.id);
+      const removed = await DB.remove('invoices', inv.id);
+      if(!removed.ok){ saveFailed(removed); return; }
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: inv.projectCode||inv.id, refLabel: inv.invoiceNumber,
         type:'Invoice Deleted', description:`${CURRENT_USER.name} deleted invoice ${inv.invoiceNumber}.` });
       toast('Invoice deleted.', 'success');
       closeModal();
       refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
-    };
+    }); };
   }});
 }
 
@@ -1323,18 +1365,19 @@ function openCancelInvoiceModal(id){
   openModal(html, { onMount:(overlay)=>{
     overlay.querySelector('#ciClose').onclick = closeModal;
     overlay.querySelector('#ciCancel').onclick = closeModal;
-    overlay.querySelector('#ciConfirm').onclick = ()=>{
+    overlay.querySelector('#ciConfirm').onclick = function(){ return runSave(this, async ()=>{
       const reason = overlay.querySelector('#ci_reason').value.trim();
       if(!reason){ toast('Please provide a reason.', 'error'); return; }
       inv.status = 'Cancelled';
-      DB.upsert('invoices', inv);
+      const saved = await DB.update('invoices', inv);
+      if(!saved.ok){ saveFailed(saved); return; }
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: inv.projectCode||inv.id, refLabel: inv.invoiceNumber,
         type:'Invoice Cancelled', description:`${CURRENT_USER.name} cancelled invoice ${inv.invoiceNumber}. Reason: ${reason}` });
       toast('Invoice cancelled.', 'success');
       closeModal();
       refreshAfterLeadOrProjectChange(); // data-freshness fix — see openRecordPaymentModal in js/payments.js
       openInvoiceDetailModal(inv.id);
-    };
+    }); };
   }});
 }
 
@@ -1426,15 +1469,16 @@ function invoiceDocTitle(inv, totals){
 
 function invoiceFullHeaderHtml(inv){
   const totals = invoiceTotals(inv);
-  return `<div class="quote-doc-head">
-    <div class="quote-doc-brand">
-      <img class="quote-doc-logo" src="../assets/branding/bizweb-kh-logo-main-print.png" alt="BizWeb KH">
-      <div class="text-muted" style="font-size:11px">Tel: 017 400 044 | Telegram: @BizWebKH | www.bizwebkh.com</div>
+  const title = invoiceDocTitle(inv, totals);
+  return `<div class="inv-head">
+    <div class="inv-brand">
+      <img class="quote-doc-logo" src="../assets/branding/bizweb-kh-logo-main-print.png" alt="BizWeb KH" width="150" height="41">
+      <div class="inv-contact">Tel: 017 400 044 &nbsp;|&nbsp; Telegram: @BizWebKH &nbsp;|&nbsp; www.bizwebkh.com</div>
     </div>
-    <div class="quote-doc-meta">
-      <div class="khmer-text" style="font-size:13px;color:var(--blue)">វិក្កយបត្រ</div>
-      <div><b>${escapeHtml(invoiceDocTitle(inv, totals))}</b> ${statusBadge(inv.status)}</div>
-      <div>Invoice No: ${escapeHtml(inv.invoiceNumber)}</div>
+    <div class="inv-head-right">
+      <div class="khmer-text inv-title-km">វិក្កយបត្រ</div>
+      <div class="inv-title-en${title.length>14?' inv-title-long':''}">${escapeHtml(title)}</div>
+      <div class="inv-meta">No. <b>${escapeHtml(inv.invoiceNumber)}</b> ${statusBadge(inv.status)}</div>
     </div>
   </div>`;
 }
@@ -1517,124 +1561,163 @@ function invoicePaymentScheduleBlockHtml(inv){
   </table>`;
 }
 
-// Project-level payment summary for the printed/preview invoice — Full
-// Confirmed Value, Current Payment Stage, Current Invoice Amount, Previously
-// Paid and Remaining Future Balance, ALL shown separately (the invoice
-// amount never replaces the full project value). Uses the same
-// invoicePaymentBreakdown() numbers as everything else; used identically by
-// the live preview pane and Print/PDF.
-function invoiceProjectSummaryHtml(inv){
-  const bd = invoicePaymentBreakdown(inv);
+/* ---------------------------------------------------------------------- */
+/* Invoice document body (compact, one-page-first A4 layout).               */
+/* Presentation only — every figure comes from invoiceTotals() /            */
+/* invoicePaymentBreakdown() / icProjectValueInfo(); nothing is recomputed  */
+/* here. Used identically by the live preview pane, the saved preview and   */
+/* Print/PDF (they all render through buildInvoiceSections).                */
+/* ---------------------------------------------------------------------- */
+function invKm(km){ return `<span class="khmer-text inv-km">${km}</span>`; }
+// Returns { term, sub }: `term` is the inline "(30% Deposit of $384.00)" /
+// "(100%)" suffix; when the item's own description already says
+// Deposit/Final/%, no suffix is added and the % is shown as a small sub-line.
+function invItemTerm(it, inv){
+  if(!icItemHasPct(it)) return { term:'', sub:'' };
+  const p = icClampPct(it.payPct);
+  const ofTxt = `${icFmtPct(p)}% of ${moneyPrecise(it.fullAmount)}`;
+  if(/%|deposit|final payment|progress/i.test(it.description||'')) return { term:'', sub: p<100 ? ofTxt : '' };
+  const txt = p>=100 ? '100%' : `${icFmtPct(p)}% ${icStageWord(inv)} of ${moneyPrecise(it.fullAmount)}`;
+  return { term: ` <span class="inv-item-term">(${escapeHtml(txt)})</span>`, sub:'' };
+}
+function invoiceInfoCardsHtml(inv, proj, totals){
+  const row = (en, km, val)=> `<div class="inv-kv-row"><span class="inv-k">${escapeHtml(en)} ${invKm(km)}</span><span class="inv-v">${val}</span></div>`;
+  const biz = inv.businessName && String(inv.businessName).trim() && String(inv.businessName).trim()!==String(inv.clientName||'').trim() ? String(inv.businessName).trim() : '';
+  const rows = [
+    row('Date', 'កាលបរិច្ឆេទ', escapeHtml(fmtDate(inv.invoiceDate))),
+    inv.dueDate ? row('Due Date', 'ថ្ងៃកំណត់', escapeHtml(fmtDate(inv.dueDate))) : '',
+    row('Project', 'គម្រោង', escapeHtml(inv.projectCode||'—') + (proj ? ' — ' + escapeHtml(serviceDisplayName(proj.projectType)) : '')),
+    row('Payment Status', 'ការទូទាត់', escapeHtml(invoicePaymentDisplayStatus(inv, totals))),
+  ].join('');
+  return `<div class="inv-twocol">
+    <div class="inv-card">
+      <div class="inv-card-h">Billed To ${invKm('· អតិថិជន')}</div>
+      <div class="inv-client">${escapeHtml(inv.clientName||'—')}</div>
+      ${biz ? `<div class="inv-biz">${escapeHtml(biz)}</div>` : ''}
+      ${inv.websiteLink ? `<div class="inv-sub">${escapeHtml(inv.websiteLink)}</div>` : ''}
+    </div>
+    <div class="inv-card">
+      <div class="inv-card-h">Invoice Details ${invKm('· ព័ត៌មានវិក្កយបត្រ')}</div>
+      ${rows}
+    </div>
+  </div>`;
+}
+// Full Confirmed Project Value + Current Payment Stage, shown separately from
+// the amount billed on THIS invoice (item 3 of the layout spec).
+function invoiceValueStripHtml(inv, bd){
+  const info = icProjectValueInfo(inv.projectCode);
+  if(info.value <= 0) return '';
+  let stage = icStageDescription(inv);
+  if(!stage){
+    const st = inv.paymentStageIndex!=null && bd.schedule ? bd.schedule[inv.paymentStageIndex] : null;
+    const w = { Deposit:'Deposit', Progress:'Progress Payment', Final:'Final Payment' }[inv.invoiceType];
+    stage = st && st.pct!=null && w ? `${icFmtPct(st.pct)}% ${w}` : (w || 'Payment');
+  }
+  return `<div class="inv-strip">
+    <div class="inv-stat">
+      <div class="inv-stat-label">Full Confirmed Project Value ${invKm('តម្លៃគម្រោងសរុប')}</div>
+      <div class="inv-stat-value">${moneyPrecise(info.value)}</div>
+    </div>
+    <div class="inv-stat">
+      <div class="inv-stat-label">Current Payment Stage ${invKm('ដំណាក់កាលបង់ប្រាក់')}</div>
+      <div class="inv-stat-text" id="invStageText">${escapeHtml(stage)}</div>
+    </div>
+  </div>`;
+}
+function invoiceFinancialSummaryHtml(inv, bd){
   const t = bd.totals;
   const info = icProjectValueInfo(inv.projectCode);
-  const projectTotal = info.value > 0 ? info.value : 0;
-  if(projectTotal <= 0) return '';
+  const projectTotal = info.value;
+  const paidInFull = t.balance <= 0.004 && t.totalPaid > 0.004;
   const remainingFuture = Math.max(0, icRound2(projectTotal - bd.previouslyPaid - t.total));
-  const stage = icStageDescription(inv);
-  return `<h4 class="quote-doc-h">Project Payment Summary</h4><table class="quote-doc-table qc-mini-table" style="max-width:460px" id="invProjectSummary">
-    <tbody>
-      <tr><td>Full Confirmed Project Value</td><td style="text-align:right">${moneyPrecise(projectTotal)}</td></tr>
-      ${stage ? `<tr><td>Current Payment Stage</td><td style="text-align:right">${escapeHtml(stage)}</td></tr>` : ''}
-      <tr><td>Previously Paid</td><td style="text-align:right">${moneyPrecise(bd.previouslyPaid)}</td></tr>
-      <tr><td><b>Current Invoice Amount</b></td><td style="text-align:right"><b>${moneyPrecise(t.total)}</b></td></tr>
-      ${t.totalPaid>0.004 ? `<tr><td>Balance Due Now</td><td style="text-align:right">${moneyPrecise(t.balance)}</td></tr>` : ''}
-      <tr><td><b>Remaining Future Project Balance</b></td><td style="text-align:right"><b>${moneyPrecise(remainingFuture)}</b></td></tr>
-    </tbody>
-  </table>`;
+  const r = (label, val, cls='')=> `<div class="inv-sum-row ${cls}"><span>${label}</span><span>${val}</span></div>`;
+  return `<div class="inv-sum">
+    ${t.discount>0 ? r('Subtotal', moneyPrecise(t.subtotal)) + r('Discount / Promotion', '-' + moneyPrecise(t.discount)) : ''}
+    ${r('Invoice Total', moneyPrecise(t.total), 'inv-sum-strong')}
+    ${t.totalPaid>0.004 ? r('Payments Received on This Invoice', '-' + moneyPrecise(t.totalPaid)) : ''}
+    <div class="inv-due" id="invAmountDue">
+      <span class="inv-due-label">${paidInFull ? 'PAID IN FULL' : 'AMOUNT DUE NOW'} ${invKm('ត្រូវបង់ឥឡូវនេះ')}</span>
+      <span class="inv-due-val">${moneyPrecise(t.balance)}</span>
+    </div>
+    ${projectTotal>0 ? `<div class="inv-sum-sep"></div>
+      ${r('Previously Paid on Project', moneyPrecise(bd.previouslyPaid))}
+      ${r('Remaining Future Balance After This Invoice Is Paid', moneyPrecise(remainingFuture), 'inv-sum-strong inv-sum-remaining')}` : ''}
+  </div>`;
 }
 
 function buildInvoiceSections(inv){
   const bank = bankDetails();
   const proj = inv.projectCode ? DB.find('projects', inv.projectCode) : null;
   const totals = invoiceTotals(inv);
+  const bd = invoicePaymentBreakdown(inv);
   const sections = [];
 
-  sections.push({ id:'info', kind:'block', html:`<table class="quote-doc-infotable">${invoiceInfoRows(inv, proj)}</table>` });
+  sections.push({ id:'info', kind:'block', html: invoiceInfoCardsHtml(inv, proj, totals) });
+  const strip = invoiceValueStripHtml(inv, bd);
+  if(strip) sections.push({ id:'strip', kind:'block', html: strip });
 
-  sections.push({ id:'summary', kind:'block',
-    html:`<h4 class="quote-doc-h">Invoice Summary</h4><p style="font-size:12.5px;margin:0;white-space:pre-wrap">${escapeHtml(inv.summary||'—')}</p>` });
-
-  const pctMode = icInvoiceUsesPct(inv);
-  // Invoices carrying per-item % data use the unified Project Payment Summary
-  // below; older invoices keep their original stage-framing table unchanged.
-  const typeFraming = pctMode ? '' : invoiceTypeFramingHtml(inv);
-  if(typeFraming){
-    sections.push({ id:'stageframing', kind:'block',
-      html:`<h4 class="quote-doc-h">${escapeHtml(invoiceDocTitle(inv, totals))}</h4>${typeFraming}` });
+  // Items + financial summary are ONE group: every item is its own <tbody>, and
+  // the LAST item shares its <tbody> with the summary row — so the totals can
+  // never be separated from the final line item, and a long invoice splits
+  // cleanly between rows with the column header repeated on every page.
+  const showSummaryText = inv.summary && String(inv.summary).trim();
+  const showNotes = inv.notes && String(inv.notes).trim();
+  const left = (showSummaryText || showNotes) ? `<div class="inv-sumleft">
+      ${showSummaryText ? `<div class="inv-h2">Invoice Summary ${invKm('· សង្ខេប')}</div><p class="inv-p">${escapeHtml(inv.summary)}</p>` : ''}
+      ${showNotes ? `<div class="inv-h2">Notes / Payment Terms ${invKm('· កំណត់សម្គាល់')}</div><p class="inv-p inv-notes">${escapeHtml(inv.notes)}</p>` : ''}
+    </div>` : '<div></div>';
+  const summaryRow = `<tr class="inv-sumrow"><td colspan="5"><div class="inv-sumwrap">${left}${invoiceFinancialSummaryHtml(inv, bd)}</div></td></tr>`;
+  const items = inv.items||[];
+  const rowHtml = (it,i)=>{ const tm = invItemTerm(it, inv); return `<tr><td class="inv-c-no">${i+1}</td><td class="inv-c-desc">${escapeHtml(it.description||'')}${tm.term}${tm.sub ? `<div class="inv-item-sub">${escapeHtml(tm.sub)}</div>` : ''}</td><td class="inv-c-period">${escapeHtml(it.period||'—')}</td><td class="inv-c-qty">${it.qty!=null?it.qty:1}</td><td class="inv-c-amt">${moneyPrecise(icItemDue(it))}</td></tr>`; };
+  let itemEntries;
+  if(!items.length){
+    itemEntries = [{ html: `<tbody><tr><td colspan="5" class="inv-empty">No line items.</td></tr>${summaryRow}</tbody>` }];
+  } else {
+    itemEntries = items.map((it,i)=> ({ html: `<tbody>${rowHtml(it,i)}${i===items.length-1 ? summaryRow : ''}</tbody>` }));
   }
-  if(pctMode){
-    const ps = invoiceProjectSummaryHtml(inv);
-    if(ps) sections.push({ id:'projectsummary', kind:'block', html: ps });
-  }
-  const scheduleBlock = invoicePaymentScheduleBlockHtml(inv);
-  if(scheduleBlock) sections.push({ id:'schedule', kind:'block', html: scheduleBlock });
-
-  // Extra "Project Value / Pay %" columns only appear when at least one row is
-  // NOT billed at its full value — fully-billed invoices look exactly as before.
-  const showPct = (inv.items||[]).some(it=> icItemHasPct(it) && (Math.abs(icRound2(it.fullAmount) - icRound2(it.amount)) > 0.004 || icClampPct(it.payPct) < 100));
-  sections.push({ id:'items', kind:'group',
-    headingHtml:`<h4 class="quote-doc-h">Items</h4>`,
-    contHeadingHtml:`<h4 class="quote-doc-h">Items (continued)</h4>`,
-    wrapOpenHtml: showPct
-      ? `<table class="quote-doc-table"><thead><tr><th>No.</th><th>Description</th><th>Timeline / Period</th><th>Qty</th><th>Full Value</th><th>Pay %</th><th>Amount Due</th></tr></thead><tbody>`
-      : `<table class="quote-doc-table"><thead><tr><th>No.</th><th>Description</th><th>Timeline / Period</th><th>Qty</th><th>Amount</th></tr></thead><tbody>`,
-    wrapCloseHtml:`</tbody></table>`,
-    items: (inv.items||[]).length ? (inv.items||[]).map((it,i)=>({ html: showPct
-        ? `<tr><td>${i+1}</td><td>${escapeHtml(it.description||'')}</td><td>${escapeHtml(it.period||'—')}</td><td>${it.qty!=null?it.qty:1}</td><td>${moneyPrecise(icItemHasPct(it)?it.fullAmount:it.amount)}</td><td>${icItemHasPct(it)?icFmtPct(it.payPct)+'%':'100%'}</td><td>${moneyPrecise(it.amount)}</td></tr>`
-        : `<tr><td>${i+1}</td><td>${escapeHtml(it.description||'')}</td><td>${escapeHtml(it.period||'—')}</td><td>${it.qty!=null?it.qty:1}</td><td>${moneyPrecise(it.amount)}</td></tr>` }))
-      : [{ html:`<tr><td colspan="${showPct?7:5}" style="text-align:center;color:var(--muted)">No line items.</td></tr>` }],
+  const thead = `<table class="inv-items"><colgroup><col style="width:7%"><col style="width:49%"><col style="width:16%"><col style="width:7%"><col style="width:21%"></colgroup>
+    <thead><tr><th>No.</th><th>Description ${invKm('ការពិពណ៌នា')}</th><th>Period</th><th class="inv-c-qty">Qty</th><th class="inv-c-amt">Amount Due</th></tr></thead>`;
+  sections.push({ id:'items', kind:'group', splitFill:true,
+    headingHtml:`<div class="inv-h">Invoice Breakdown ${invKm('· ការបែងចែក')}</div>`,
+    contHeadingHtml:`<div class="inv-h">Invoice Breakdown (continued)</div>`,
+    wrapOpenHtml: thead, wrapCloseHtml:`</table>`,
+    items: itemEntries,
   });
 
-  sections.push({ id:'notes', kind:'block',
-    html: inv.notes ? `<h4 class="quote-doc-h">Notes</h4><p style="font-size:12.5px;margin:0;white-space:pre-wrap">${escapeHtml(inv.notes)}</p>` : '' });
-
-  sections.push({ id:'totals', kind:'block',
-    html:`<table class="quote-doc-table qc-mini-table" style="max-width:340px;margin-left:auto">
-      <tbody>
-        <tr><td>Subtotal</td><td style="text-align:right">${moneyPrecise(totals.subtotal)}</td></tr>
-        ${totals.discount>0 ? `<tr><td>Discount / Promotion</td><td style="text-align:right">-${moneyPrecise(totals.discount)}</td></tr>` : ''}
-        <tr><td><b>Total Amount</b></td><td style="text-align:right"><b>${moneyPrecise(totals.total)}</b></td></tr>
-        <tr><td>Total Paid</td><td style="text-align:right;color:var(--green)">${moneyPrecise(totals.totalPaid)}</td></tr>
-        <tr><td><b>Balance Due</b></td><td style="text-align:right"><b>${moneyPrecise(totals.balance)}</b></td></tr>
-      </tbody>
-    </table>` });
-
-  const bankDetailRows = [
-    `<div><b>Account Name:</b> ${escapeHtml(bank.accountName)}</div>`,
-    `<div><b>Account Number:</b> ${escapeHtml(bank.accountNumber)}</div>`,
-    `<div><b>Bank Name:</b> ${escapeHtml(bank.bankName)}</div>`,
-    bank.memo ? `<div><b>Memo:</b> ${escapeHtml(bank.memo)}</div>` : '',
-  ].join('');
-  const qrHtml = bank.qrImageUrl ? `
-      <div class="quote-doc-qr-title">KHQR</div>
-      <div class="quote-doc-qr-frame"><img class="quote-doc-qr-img" src="${escapeHtml(bank.qrImageUrl)}" alt="KHQR Payment QR Code" width="180" height="180"></div>
-      <div class="quote-doc-qr-caption">Scan to Pay</div>
-      <div class="quote-doc-qr-help">Scan with your preferred banking app.</div>` : '';
+  let bankHtml = '';
   if(totals.balance > 0.004){
-    sections.push({ id:'bank', kind:'block',
-      html:`<h4 class="quote-doc-h">Payment Bank Details</h4><div class="quote-doc-bankbox">
-        <div class="quote-doc-bankbox-details">
-          <div class="quote-doc-bankbox-label">Bank Details</div>
-          ${bankDetailRows}
+    const brow = (k, v)=> `<div class="inv-bank-row"><span class="inv-k">${k}</span><span class="inv-v">${v}</span></div>`;
+    const qrHtml = bank.qrImageUrl ? `
+        <div class="inv-qr-frame"><img class="quote-doc-qr-img" src="${escapeHtml(bank.qrImageUrl)}" alt="KHQR Payment QR Code" width="130" height="130"></div>
+        <div class="inv-qr-caption">KHQR · Scan to Pay</div>` : '';
+    bankHtml = `<div class="inv-bank">
+        <div class="inv-bank-details">
+          <div class="inv-card-h">Payment Details ${invKm('· ព័ត៌មានទូទាត់')}</div>
+          ${brow('Bank Name', `<b>${escapeHtml(bank.bankName)}</b>`)}
+          ${brow('Account Name', `<b>${escapeHtml(bank.accountName)}</b>`)}
+          ${brow('Account Number', `<b>${escapeHtml(bank.accountNumber)}</b>`)}
+          ${brow('Payment Reference', escapeHtml(inv.invoiceNumber))}
+          ${bank.memo ? brow('Memo', escapeHtml(bank.memo)) : ''}
         </div>
-        ${qrHtml ? `<div class="quote-doc-bankbox-qr">${qrHtml}</div>` : ''}
-      </div>` });
+        ${qrHtml ? `<div class="inv-bank-qr">${qrHtml}</div>` : ''}
+      </div>`;
   }
 
-  sections.push({ id:'accept', kind:'block',
-    html:`<div class="quote-doc-accept">
-      <div class="quote-doc-accept-client">
+  // Payment details + signatures are ONE block: they stay together on a page.
+  sections.push({ id:'paysign', kind:'block',
+    html: bankHtml + `<div class="inv-sign">
+      <div class="inv-sign-col">
         <div class="sig-line"></div>
-        <span>Client Signature</span>
+        <span>Client Signature ${invKm('ហត្ថលេខាអតិថិជន')}</span>
       </div>
-      <div class="quote-doc-accept-rep">
-        <img class="quote-doc-accept-sig" src="../assets/signature/chhean-poli-signature.png" alt="Authorized Signature" width="194" height="68">
+      <div class="inv-sign-col inv-sign-rep">
+        <img class="inv-sign-img" src="../assets/signature/chhean-poli-signature.png" alt="Authorized Signature" width="150" height="53">
         <div class="sig-line"></div>
-        <span>BizWeb KH Representative</span>
+        <span>BizWeb KH Representative ${invKm('តំណាង BizWeb KH')}</span>
       </div>
     </div>` });
 
-  return sections.filter(sec=> sec.kind!=='block' || sec.html);
+  return sections;
 }
 
 async function buildInvoicePagesHtml(inv){

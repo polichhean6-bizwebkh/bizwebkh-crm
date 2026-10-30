@@ -1,6 +1,19 @@
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BizWeb KH CRM - Scheduled maintenance</title>
-<style>:root{--bg:#f5f7fb;--fg:#12203a;--mut:#5b6b86;--card:#fff;--bd:#dbe3f0;--ac:#1f6bff}@media(prefers-color-scheme:dark){:root{--bg:#0e1524;--fg:#e8eefc;--mut:#9fb0cf;--card:#16213a;--bd:#25324f;--ac:#6ea0ff}}
-body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:16px}
-.c{max-width:460px;background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:28px}h1{margin:0 0 8px;font-size:20px}p{margin:0 0 10px;color:var(--mut)}b{color:var(--fg)}</style></head>
-<body><div class="c"><h1>Scheduled maintenance</h1><p>The BizWeb KH CRM is being upgraded and is <b>temporarily read-only / unavailable</b>.</p><p>Please do <b>not</b> enter or edit data until you are told the CRM is back. Anything entered now may be lost.</p><p>We will notify the team as soon as it is ready.</p></div></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BizWeb KH — Internal CRM</title>
+<script>
+  (function(){
+    try{
+      var session = localStorage.getItem('bizwebkh_crm_session_v1');
+      if(session){ window.location.replace('dashboard/index.html'); }
+      else { window.location.replace('login/index.html'); }
+    }catch(e){ window.location.replace('login/index.html'); }
+  })();
+</script>
+</head>
+<body>
+  <noscript>Please enable JavaScript to use the BizWeb KH Internal CRM.</noscript>
+</body>
+</html>

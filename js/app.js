@@ -384,7 +384,8 @@ function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus,
   openModal(html, { onMount:(overlay)=>{
     overlay.querySelector('#scmClose').onclick = closeModal;
     overlay.querySelector('#scmCancel').onclick = closeModal;
-    overlay.querySelector('#scmConfirm').onclick = ()=>{
+    overlay.querySelector('#scmConfirm').onclick = async function(){
+      const confirmBtn = this;
       let remark = overlay.querySelector('#scmRemark').value.trim();
       if(needsLostReason){
         const reasonSel = overlay.querySelector('#scmLostReason');
@@ -438,13 +439,15 @@ function openStatusChangeModal({ refType, refId, refLabel, fromStatus, toStatus,
         }
         dateInput.style.borderColor='';
       }
-      closeModal();
-      onConfirm({
+      // onConfirm saves to the server and resolves { ok:false } on failure: the modal then STAYS OPEN with everything the user typed.
+      const out = await runSave(confirmBtn, ()=> onConfirm({
         remark,
         lostReason: needsLostReason ? overlay.querySelector('#scmLostReason').value : null,
         nextFollowup: needsHoldFollowup ? nextFollowup : undefined,
         projectCode: needsProjectCode ? projectCode : undefined,
-      });
+      }));
+      if(out && out.ok === false) return;
+      closeModal();
     };
   }});
 }
@@ -658,7 +661,7 @@ function renderUsersPage(){
         </tbody>
       </table>
     </div>
-    <p class="text-muted" style="margin:14px 0 24px;font-size:12.5px">Live BizWeb KH team accounts from Supabase. New team members are added by creating a Supabase Auth user + linked <code>profiles</code> row — this page will list them automatically once that's done.</p>
+    <p class="text-muted" style="margin:14px 0 24px;font-size:12.5px">Live BizWeb KH team accounts. New team members are invited by a Founder/Admin under Settings → Users & Roles.</p>
 
     <div class="section-title">Sales Performance</div>
     <p class="text-muted" style="margin:0 0 10px;font-size:12px">Only users with a Sales role, or who have at least one lead assigned, appear here.</p>
@@ -730,15 +733,11 @@ function renderSettingsBody(){
 
   if(SETTINGS_TAB==='general'){
     document.getElementById('resetBtn').onclick = async ()=>{
-      if(confirm('This will discard any unsaved local changes and re-sync this browser with the live Supabase data. Continue?')){
+      if(confirm('This will discard any unsaved local changes and re-sync this browser with the live server data. Continue?')){
         toast('Reloading data from the server…');
-        try{
-          await DB.reset();
-          toast('Data re-synced from the server.', 'success');
-        }catch(err){
-          console.error('DB.reset() failed', err);
-          toast('Could not reload data from the server.', 'error');
-        }
+        const re = await DB.reset();
+        if(re.ok){ toast('Data re-synced from the server.', 'success'); }
+        else { toast('Could not reload data from the server. Please refresh the page.', 'error'); return; }
         window.location.hash = '#dashboard';
         router();
       }
@@ -746,8 +745,9 @@ function renderSettingsBody(){
     document.getElementById('settingsLogout').onclick = async ()=>{ await Auth.logout(); window.location.href = '../login/index.html'; };
     const discountInput = document.getElementById('discountLimitInput');
     if(discountInput){
-      discountInput.onchange = ()=>{
-        DB.upsert('settings', { discountLimitPct: Math.max(0, Number(discountInput.value)||0) });
+      discountInput.onchange = async ()=>{
+        const r = await DB.saveSettings({ discountLimitPct: Math.max(0, Number(discountInput.value)||0) });
+        if(!r.ok){ saveFailed(r); renderSettingsBody(); return; }       // the field is redrawn with the value the server still has
         toast('Sales discount authority updated.', 'success');
       };
     }
@@ -767,7 +767,7 @@ function settingsGeneralTab(){
     <div class="panel" style="max-width:640px;margin-top:14px">
       <div class="panel-head"><h3>Demo Environment</h3></div>
       <div class="panel-body pad">
-        <p class="text-muted" style="margin-top:0">This CRM is connected to BizWeb KH's live Supabase backend. Leads, projects, payments, activity and quotations are all stored server-side and shared across every device/user.</p>
+        <p class="text-muted" style="margin-top:0">This CRM is connected to BizWeb KH's live backend. Leads, projects, payments, activity and quotations are all stored server-side and shared across every device/user.</p>
         <div class="divider"></div>
         <div class="flex-row" style="justify-content:space-between;margin-bottom:10px">
           <div>
@@ -780,7 +780,7 @@ function settingsGeneralTab(){
         <div class="flex-row" style="justify-content:space-between;margin-bottom:10px">
           <div>
             <strong style="font-size:13.5px">Reload data from server</strong>
-            <div class="text-muted" style="font-size:12px">Discards any unsaved local changes and re-syncs this browser with live Supabase data.</div>
+            <div class="text-muted" style="font-size:12px">Discards any unsaved local changes and re-syncs this browser with the server data.</div>
           </div>
           <button class="btn btn-danger btn-sm" id="resetBtn">Reset Data</button>
         </div>
@@ -885,16 +885,17 @@ function wireSettingsPricesTab(){
   });
   if(!isFounder()) return;
   document.querySelectorAll('#settingsTabBody [data-field]').forEach(input=>{
-    input.onchange = ()=>{
+    input.onchange = async ()=>{
       const row = input.closest('[data-svc]');
       const svc = DB.all('services').find(s=>s.id===row.dataset.svc);
       svc[input.dataset.field] = Number(input.value)||0;
-      DB.upsert('services', svc);
+      const r = await DB.update('services', svc);
+      if(!r.ok){ saveFailed(r); renderSettingsBody(); return; }        // rolled back; the screen shows what the server still has
       toast(`${svc.name} updated.`, 'success');
     };
   });
   document.querySelectorAll('#settingsTabBody [data-fn-field]').forEach(input=>{
-    input.addEventListener('change', ()=>{
+    input.addEventListener('change', async ()=>{
       const tr = input.closest('[data-fn]');
       const svc = DB.all('services').find(s=>s.id===tr.dataset.svcFn);
       const fn = svc && (svc.functions||[]).find(f=>f.id===tr.dataset.fn);
@@ -912,7 +913,8 @@ function wireSettingsPricesTab(){
       } else {
         fn[field] = input.value===''? null : Number(input.value);
       }
-      DB.upsert('services', svc);
+      const r = await DB.update('services', svc);
+      if(!r.ok){ saveFailed(r); renderSettingsBody(); return; }
       toast(`${svc.name} — ${fn.name} updated.`, 'success');
       if(field==='priceType') renderSettingsBody();
     });
@@ -922,12 +924,13 @@ function wireSettingsPricesTab(){
 /* ---------------------------------------------------------------------- */
 /* Settings -> Users & Roles — Founder/Admin-only staff management.        */
 /* Invite/resend/role-change/deactivate/reactivate all go through the      */
-/* staff-manage Supabase Edge Function (supabase/functions/staff-manage) — */
-/* the ONLY place the service_role key or the Auth Admin API is ever used. */
-/* This module never touches either. "Send Password Reset" is the one     */
-/* exception: it calls supabaseClient.auth.resetPasswordForEmail() (a      */
-/* public, anon-key method — no elevated access needed), the exact same    */
-/* call already used by the login page's own "Forgot password?" link.      */
+/* server (POST /api/staff-manage in the Neon Function) — the ONLY place   */
+/* the Neon Auth admin credential is ever used; it exists only as a server */
+/* secret and the server checks the caller is a Founder/Admin first. This  */
+/* module never touches it. "Send Password Reset" is the one exception: it */
+/* calls BZ.authClient.resetPasswordForEmail() (a public method, no        */
+/* elevated access needed), the exact same call as the login page's own    */
+/* "Forgot password?" link.                                                 */
 /* ---------------------------------------------------------------------- */
 
 const STAFF_ROLE_OPTIONS = ['founder_admin', 'sales', 'sales_rep', 'finance', 'partner_operations'];
@@ -937,20 +940,14 @@ const STAFF_ROLE_OPTIONS = ['founder_admin', 'sales', 'sales_rep', 'finance', 'p
 // CRM user" / permission messages the Edge Function returns are surfaced
 // as-is rather than a generic failure.
 async function callStaffManage(action, fields){
-  const { data, error } = await supabaseClient.functions.invoke('staff-manage', { body: { action, ...fields } });
-  if(error){
-    // supabase-js surfaces a non-2xx Edge Function response as `error`, with
-    // the function's own JSON body reachable via error.context — fall back
-    // to a generic message only if that shape isn't there.
-    let msg = 'Something went wrong. Please try again.';
-    try{
-      const body = error.context && typeof error.context.json === 'function' ? await error.context.json() : null;
-      if(body && body.error) msg = body.error;
-    }catch(e){ /* ignore — use generic message */ }
-    throw new Error(msg);
+  // The privileged work (creating the sign-in account, revoking sessions) happens ON THE SERVER, after it has checked that the caller is a Founder/Admin.
+  // The browser only sends the founder's own token; no admin credential is ever in browser code.
+  const res = await BZ.api('POST', '/api/staff-manage', { action, ...fields });
+  if(res.status !== 200){
+    const e = new Error(res.body && res.body.message ? res.body.message : BZ.explain(res, 'Something went wrong. Please try again.'));
+    e.requestId = res.requestId; e.status = res.status; throw e;
   }
-  if(data && data.error) throw new Error(data.error);
-  return data;
+  return res.body;
 }
 
 function staffStatusLabel(status){
@@ -1007,7 +1004,8 @@ function settingsUsersTab(){
 }
 
 async function reloadUsersTabAfterChange(){
-  await DB.refreshUsers();
+  const ru = await DB.refreshUsers();
+  if(!ru.ok) toast(ru.userMessage, 'error');
   if(SETTINGS_TAB==='users') renderSettingsBody();
 }
 
@@ -1076,8 +1074,8 @@ function wireSettingsUsersTab(){
     if(!confirm(`Send a password reset email to ${u.name} (${u.email})? You will never see or set their password directly.`)) return;
     b.disabled = true;
     try{
-      const { error } = await supabaseClient.auth.resetPasswordForEmail(u.email, { redirectTo: productionRedirectToForApp() });
-      if(error) throw error;
+      const rr = await BZ.authClient.resetPasswordForEmail(u.email, { redirectTo: productionRedirectToForApp() });
+      if(rr && rr.error) throw rr.error;
       logActivity({
         userName: CURRENT_USER.name, refType:'user', refId: u.id, refLabel: u.name,
         type:'Password Reset Requested', description: `${CURRENT_USER.name} sent a password reset link to ${u.name} (${u.email}).`
@@ -1096,9 +1094,7 @@ function wireSettingsUsersTab(){
 // login/, so it needs its own copy rather than sharing that file's local
 // const — kept logically identical on purpose).
 function productionRedirectToForApp(){
-  return window.location.hostname === 'crm.bizwebkh.com'
-    ? 'https://crm.bizwebkh.com/login/index.html'
-    : 'https://polichhean6-bizwebkh.github.io/bizwebkh-crm/login/index.html';
+  return window.location.origin + '/login/index.html';      // the origin this page is served from
 }
 
 function openInviteStaffModal(){
@@ -1368,7 +1364,7 @@ function wireQsCurrentSubtabBody(){
 
   if(QS_SUBTAB==='general'){
     const saveBtn = document.getElementById('qsSaveGeneral');
-    if(saveBtn) saveBtn.onclick = ()=>{
+    if(saveBtn) saveBtn.onclick = function(){ return runSave(this, async ()=>{
       const newBank = {
         accountName: document.getElementById('qs_accountName').value.trim(),
         accountNumber: document.getElementById('qs_accountNumber').value.trim(),
@@ -1379,46 +1375,49 @@ function wireQsCurrentSubtabBody(){
       const qd = quotationDefaults();
       const validityDays = Math.max(1, Number(document.getElementById('qs_validityDays').value)||30);
       const standardNotesText = document.getElementById('qs_standardNotes').value.trim() || DEFAULT_STANDARD_NOTES_TEXT;
-      DB.upsert('settings', { bankDetails: newBank, quotationDefaults: { ...qd, validityDays, standardNotesText } });
+      const r = await DB.saveSettings({ bankDetails: newBank, quotationDefaults: { ...qd, validityDays, standardNotesText } });
+      if(!r.ok){ saveFailed(r); return; }       // the typed values stay in the form
       QS_DIRTY = false;
       toast('Quotation settings saved.', 'success');
-    };
+    }); };
   } else {
     const type = QS_SUBTAB;
     const saveBtn = document.getElementById('qsSaveTemplate');
-    if(saveBtn) saveBtn.onclick = ()=>{
+    if(saveBtn) saveBtn.onclick = function(){ return runSave(this, async ()=>{
       const lines = document.getElementById(`qs_excl_${type}`).value.split('\n').map(s=>s.trim()).filter(Boolean);
       const qd = quotationDefaults();
       const notes = (qd.notes[type]||[]).map((n,i)=>{
         const ta = document.querySelector(`[data-note="${type}|${i}"]`);
         return ta ? { ...n, text: ta.value } : n;
       });
-      DB.upsert('settings', {
+      const r = await DB.saveSettings({
         quotationDefaults: {
           ...qd,
           exclusions: { ...qd.exclusions, [type]: lines },
           notes: { ...qd.notes, [type]: notes },
         }
       });
+      if(!r.ok){ saveFailed(r); return; }
       QS_DIRTY = false;
       toast('Quotation settings saved.', 'success');
-    };
+    }); };
     const resetBtn = document.getElementById('qsResetTemplate');
-    if(resetBtn) resetBtn.onclick = ()=>{
+    if(resetBtn) resetBtn.onclick = function(){ return runSave(this, async ()=>{
       if(!confirm(`Reset ${type==='website'?'Website':'System'} Template exclusions and notes back to the factory default? This cannot be undone.`)) return;
       const qd = quotationDefaults();
-      DB.upsert('settings', {
+      const r = await DB.saveSettings({
         quotationDefaults: {
           ...qd,
           exclusions: { ...qd.exclusions, [type]: [...DEFAULT_QUOTATION_EXCLUSIONS[type]] },
           notes: { ...qd.notes, [type]: DEFAULT_QUOTATION_NOTES[type].map(n=>({...n})) },
         }
       });
+      if(!r.ok){ saveFailed(r); return; }
       QS_DIRTY = false;
       toast('Quotation settings saved.', 'success');
       document.getElementById('qsSubtabBody').innerHTML = qsSubtabBodyHtml(true);
       wireQsCurrentSubtabBody();
-    };
+    }); };
   }
 }
 
