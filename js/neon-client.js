@@ -74,6 +74,7 @@ const BZ = (function(){
       if(code === 'inactive') return 'This account has been deactivated. Please contact your Founder/Admin.';
       if(code === 'not_activated') return 'This account has not been activated yet.';
       if(code === 'no_profile') return 'This account has no CRM profile. Please contact your Founder/Admin.';
+      if(msg && ['founder_managed_quotation','forbidden_field','confirmed_value_protected'].includes(code)) return msg;
       return 'You do not have permission to do that.';
     }
     if(s === 404) return (fallback ? fallback + ' ' : '') + 'The record no longer exists. Please refresh the page.';

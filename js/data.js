@@ -800,6 +800,11 @@ function defaultAnnualCostForService(svc){
     base.year2.hosting = r.hosting; base.year2.maintenance = 0; base.year2.displayMode = r.mode;
     base.year3.hosting = r.hosting; base.year3.maintenance = 0; base.year3.displayMode = r.mode;
   }
+  if(typeof qpEnforced==='function' && qpEnforced()){            // Policy v2: renewals come from the central configuration (domain cost + service renewal price)
+    base.year2.domain = base.year3.domain = qpStdDomain();
+    if(svc.year2Price!=null){ base.year2.hosting = Number(svc.year2Price); base.year2.displayMode = 'estimated'; }
+    if(svc.year3Price!=null){ base.year3.hosting = Number(svc.year3Price); base.year3.displayMode = 'estimated'; }
+  }
   return base;
 }
 // The user-facing label for a stored project-type/interested-service ID.
@@ -1112,6 +1117,33 @@ function generateQuoteNumber(refCode, dateStr){
   return `${base}-R${n}`;
 }
 
+/* ---------------------------------------------------------------------- */
+/* Quotation Control Policy v2 -- browser helpers. The server enforces every */
+/* rule; these only decide what the screens SHOW (locked fields, messages).  */
+/* Active only when settings.quotePolicyMode === 'enforce'.                  */
+/* ---------------------------------------------------------------------- */
+const QP_FOUNDER_ONLY_MSG = 'Founder quotation required — this service uses custom pricing.';
+function qpEnforced(){ const st = (typeof DB!=='undefined' && DB._cache && DB._cache.settings) || {}; return st.quotePolicyMode === 'enforce'; }
+function qpIsSalesRestricted(){ return qpEnforced() && typeof CURRENT_USER!=='undefined' && CURRENT_USER && !/Founder/i.test(CURRENT_USER.role); }
+function qpStdDomain(){ const st = (DB._cache && DB._cache.settings) || {}; return st.standardDomainCost == null ? 15 : Number(st.standardDomainCost); }
+function qpIsDirectService(svc){ return !!svc && svc.isActive !== false && svc.salesCanQuote === true && !svc.priceIsStartingFrom; }
+function qpAddons(){ return ((DB._cache && DB._cache.quoteAddons) || []).filter(a=>a.active); }
+// official add-ons Sales may still add to a quotation for this package (not already included, not a duplicate of a non-repeatable one)
+function qpAddonsFor(svc, items){ if(!svc) return []; const have = (items||[]).filter(i=>i.included!==false).map(i=>i.name);
+  return qpAddons().filter(a=> !(a.notForProjectTypes||[]).includes(svc.projectType) && (a.repeatable || !have.includes(a.name))); }
+// a line Sales may not remove or untick: the base package line and every included package function
+function qpIsRequiredLine(it){ return it.priceType === 'included'; }
+// official annual cost for a service: Year 2/3 = configured domain cost + configured service renewal price (hosting share); Year 1 included unless "separate"
+function qpOfficialAnnualCost(svc, like){
+  const d = defaultAnnualCostForService(svc); const base = like || d; const ok = ['included','separate','client_own'];
+  const mode = ok.includes(base.year1 && base.year1.domainMode) ? base.year1.domainMode : 'included';
+  const note = n => (n && n.enabled && n.type==='freePeriod' && ['1 Month','2 Months','3 Months','6 Months','1 Year'].includes(n.period)) ? { enabled:true, type:'freePeriod', period:n.period, customText:'' } : { enabled:false, type:'freePeriod', period:'1 Month', customText:'' };
+  const y = (src, yr) => ({ ...src, domain: qpStdDomain(), hosting: Number(yr===2 ? svc.year2Price : svc.year3Price)||0, maintenance:0, maintenanceInclude:false, maintenanceNote: note(src.maintenanceNote), displayMode: src.displayMode==='exact' ? 'exact' : 'estimated' });
+  return { year1: { ...base.year1, domainMode:mode, domain: mode==='separate' ? qpStdDomain() : 0, hosting:0, hostingIncluded:true, maintenance:0, maintenanceInclude:false, maintenanceNote: note(base.year1 && base.year1.maintenanceNote) }, year2: y(base.year2||d.year2, 2), year3: y(base.year3||d.year3, 3) };
+}
+// Accepted, official, Policy-v2 quotation for a lead (the only source of a Sales user's project value)
+function qpAcceptedOfficialQuoteForLead(leadId){ if(!leadId) return null; return DB.all('quotations').filter(q=>q.leadId===leadId && q.status==='Accepted' && q.pricingPolicyVersion===2 && q.policyCheck && q.policyCheck.official).sort((a,b)=>String(b.updatedAt).localeCompare(String(a.updatedAt)))[0] || null; }
+
 function slug(s){ return String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,''); }
 
 /* ---------------------------------------------------------------------- */
@@ -1345,6 +1377,8 @@ function rowToQuotation(row){
     createdAt: row.created_at, updatedAt: row.updated_at,
     finalPrice: row.year1_total, priceIsTBC: row.year1_total==null,
     basePrice: row.year1_total,
+    // Policy v2 (server-computed, read-only): null while quote_policy_mode = off
+    policyCheck: row.policy_check || null, pricingPolicyVersion: row.pricing_policy_version == null ? null : row.pricing_policy_version,
   };
 }
 function quotationToRow(q){
@@ -1586,7 +1620,10 @@ const DB = {
       discountLimitPct: d.settings.discount_limit_pct || 10,
       bankDetails: d.settings.bank_details || null,
       quotationDefaults: d.settings.quotation_defaults || null,
+      standardDomainCost: d.settings.standard_domain_cost == null ? 15 : Number(d.settings.standard_domain_cost),
+      quotePolicyMode: d.settings.quote_policy_mode || 'off',
     };
+    this._cache.quoteAddons = (d.quote_addons || []).map(a=>({ code:a.code, name:a.name, officialPrice:Number(a.official_price), active:a.active!==false, repeatable:!!a.repeatable, notForProjectTypes:a.not_for_project_types||[] }));
     this._cache.followups = []; this._cache.quotationReviews = [];
     this._meta = d.meta;
     this._pristine = {};
@@ -1662,7 +1699,7 @@ const DB = {
 
   // UPDATE — PATCH of ONLY the fields that changed since the last server-confirmed copy. `rec` is normally the cached object the caller already edited in place:
   // if the server refuses, the in-place edit is rolled back so the screen never shows data the server does not have.
-  async update(coll, rec){
+  async update(coll, rec, extra){
     if(this.state !== 'ready') return this._notReady();
     if(!API_COLUMNS[coll]) return { ok:false, error:{ code:'unknown_collection' }, userMessage:'Internal error: unknown collection.' };
     const snapStr = this._pristine[coll] && this._pristine[coll].get(rec.id);
@@ -1672,6 +1709,7 @@ const DB = {
     const cached = this._cache[coll].find(x=>x.id === rec.id);
     if(!Object.keys(patch).length){ if(cached && cached !== rec){ this._cache[coll][this._cache[coll].indexOf(cached)] = rec; } return { ok:true, record:rec, unchanged:true }; }
     if(UPDATED_AT_COLLECTIONS.includes(coll) && before.updatedAt) patch.expected_updated_at = before.updatedAt;      // stale-record protection
+    if(extra && extra.valueChangeReason && coll === 'projects') patch.value_change_reason = extra.valueChangeReason;      // Policy v2: Founder Confirmed Value override reason (audited)
     this._inflight++;
     let res; try{ res = await BZ.api('PATCH', '/api/' + coll + '/' + encodeURIComponent(rec.id), patch); } finally { this._inflight--; }
     if(res.status !== 200){ if(cached === rec) this._restore(coll, rec); return this._fail(res); }
@@ -1705,11 +1743,23 @@ const DB = {
     if(record.discountLimitPct !== undefined) patch.discount_limit_pct = record.discountLimitPct;
     if(record.bankDetails !== undefined) patch.bank_details = record.bankDetails;
     if(record.quotationDefaults !== undefined) patch.quotation_defaults = record.quotationDefaults;
+    if(record.standardDomainCost !== undefined) patch.standard_domain_cost = record.standardDomainCost;
+    if(record.quotePolicyMode !== undefined) patch.quote_policy_mode = record.quotePolicyMode;
     this._inflight++;
     let res; try{ res = await BZ.api('PUT', '/api/settings', patch); } finally { this._inflight--; }
     if(res.status !== 200) return this._fail(res);
-    const s = res.body; this._cache.settings = { discountLimitPct: s.discount_limit_pct || 10, bankDetails: s.bank_details || null, quotationDefaults: s.quotation_defaults || null };
+    const s = res.body; this._cache.settings = { discountLimitPct: s.discount_limit_pct || 10, bankDetails: s.bank_details || null, quotationDefaults: s.quotation_defaults || null, standardDomainCost: s.standard_domain_cost == null ? 15 : Number(s.standard_domain_cost), quotePolicyMode: s.quote_policy_mode || 'off' };
     return { ok:true, record:this._cache.settings };
+  },
+
+  // Policy v2: official add-on catalogue (Founder only). An add-on is deactivated, never deleted.
+  async saveQuoteAddon(a){
+    if(this.state !== 'ready') return this._notReady();
+    this._inflight++; let res; try{ res = await BZ.api('PUT', '/api/quote-addons/' + encodeURIComponent(a.code), { name:a.name, official_price:a.officialPrice, active:a.active, repeatable:!!a.repeatable, not_for_project_types:a.notForProjectTypes||[] }); } finally { this._inflight--; }
+    if(res.status !== 200) return this._fail(res);
+    const n = { code:res.body.code, name:res.body.name, officialPrice:Number(res.body.official_price), active:res.body.active!==false, repeatable:!!res.body.repeatable, notForProjectTypes:res.body.not_for_project_types||[] };
+    const i = (this._cache.quoteAddons||[]).findIndex(x=>x.code===n.code); if(i>=0) this._cache.quoteAddons[i] = n; else (this._cache.quoteAddons = this._cache.quoteAddons||[]).push(n);
+    return { ok:true, record:n };
   },
 
   // Financial state changes have their own endpoints (never a generic PATCH).

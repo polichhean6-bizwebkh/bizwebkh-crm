@@ -203,7 +203,7 @@ function createProjectFromLead(leadId, onDone){
       <button class="btn btn-primary" id="cpSave">Create Project</button>
     </div>
   `;
-  openModal(html, { onMount:(overlay)=>{
+  openModal(html, { onMount:(overlay)=>{ qpLockProjectValue(overlay, '#cp_value', lead && lead.id);
     overlay.querySelector('#cpClose').onclick = closeModal;
     overlay.querySelector('#cpCancel').onclick = closeModal;
     overlay.querySelector('#cpSave').onclick = function(){ return runSave(this, async ()=>{
@@ -906,7 +906,8 @@ function openEditProjectModal(code){
         <div class="form-field"><label>Phone</label><input id="ep_phone" value="${escapeHtml(proj.phone||'')}"></div>
         <div class="form-field"><label class="required">Industry / SME Type</label><select id="ep_industry">${INDUSTRIES.map(s=>`<option ${proj.industry===s?'selected':''}>${s}</option>`).join('')}</select></div>
         <div class="form-field"><label class="required">Project Type</label><select id="ep_projectType">${SERVICE_TYPES.map(s=>`<option value="${escapeHtml(s)}" ${proj.projectType===s?'selected':''}>${escapeHtml(serviceDisplayName(s))}</option>`).join('')}</select></div>
-        <div class="form-field"><label class="required">Confirmed Value ($)</label><input type="number" step="0.01" id="ep_value" value="${proj.confirmedValue}"></div>
+        <div class="form-field"><label class="required">Confirmed Value ($)</label><input type="number" step="0.01" id="ep_value" value="${proj.confirmedValue}" ${qpIsSalesRestricted()?'readonly class="field-locked" title="Only the Founder/Admin can change the project value"':''}>${qpIsSalesRestricted()?'<div class="text-muted" style="font-size:11.5px;margin-top:4px">The project value comes from the Accepted quotation. Only the Founder/Admin can change it.</div>':''}</div>
+        ${qpEnforced() && !qpIsSalesRestricted() ? `<div class="form-field"><label>Reason for changing the value <span class="text-muted" style="font-weight:400">(required if the value changes)</span></label><input id="ep_valueReason" placeholder="e.g. client added a page" maxlength="300"></div>` : ''}
         ${assignedSalesFieldHtml({ id:'ep_sales', currentValue: proj.assignedSales })}
         <div class="form-field"><label>Start Date</label><input type="date" id="ep_start" value="${proj.startDate||''}"></div>
         <div class="form-field"><label>Expected Delivery</label><input type="date" id="ep_delivery" value="${proj.expectedDelivery||''}"></div>
@@ -931,6 +932,11 @@ function openEditProjectModal(code){
       proj.projectType = val('#ep_projectType');
       const newValue = Number(val('#ep_value'))||0;
       const oldValue = proj.confirmedValue;
+      const qpReason = qpEnforced() && !qpIsSalesRestricted() ? val('#ep_valueReason') : '';
+      if(qpEnforced() && !qpIsSalesRestricted() && newValue !== Number(oldValue)){
+        const aq = proj.leadId ? DB.all('quotations').find(q=>q.leadId===proj.leadId && q.status==='Accepted' && Number(q.year1Total)===newValue) : null;
+        if(!qpReason && !aq){ toast('Please enter a reason for changing the Confirmed Value.', 'error'); return; }
+      }
       proj.confirmedValue = newValue;
       // Remaining Balance is never stored — it's derived live from the
       // payment ledger via paymentSummaryFor(), so simply changing the
@@ -942,7 +948,7 @@ function openEditProjectModal(code){
       proj.startDate = val('#ep_start');
       proj.expectedDelivery = val('#ep_delivery');
       proj.notes = val('#ep_notes');
-      const saved = await DB.update('projects', proj);
+      const saved = await DB.update('projects', proj, qpReason ? { valueChangeReason: qpReason } : undefined);
       if(!saved.ok){ saveFailed(saved); return; }      // rolled back; the form stays open with the typed values
       logActivity({ userName: CURRENT_USER.name, refType:'project', refId: proj.id, refLabel:`${proj.id} — ${proj.businessName}`,
         type:'Note Added', description:`${CURRENT_USER.name} updated project ${proj.id} details.` });
@@ -1123,7 +1129,7 @@ function openConfirmProjectModal(lead){
       <button class="btn btn-primary" id="cfConfirm">Confirm &amp; Create Project</button>
     </div>
   `;
-  openModal(html, { large:true, onMount:(overlay)=>{
+  openModal(html, { large:true, onMount:(overlay)=>{ qpLockProjectValue(overlay, '#cf_value', lead && lead.id);
     overlay.querySelector('#cfClose').onclick = closeModal;
     overlay.querySelector('#cfCancel').onclick = closeModal;
     overlay.querySelector('#cfConfirm').onclick = function(){ return runSave(this, async ()=>{
@@ -1268,7 +1274,7 @@ function openCreateProjectManualModal(){
     </div>
   `;
 
-  openModal(html, { large:true, onMount:(overlay)=>{
+  openModal(html, { large:true, onMount:(overlay)=>{ qpLockProjectValue(overlay, '#mp_value', null);
     overlay.querySelector('#mpClose').onclick = closeModal;
     overlay.querySelector('#mpCancel').onclick = closeModal;
 
@@ -1439,4 +1445,17 @@ function openCreateProjectManualModal(){
       refreshAfterLeadOrProjectChange();
     }); };
   }});
+}
+
+
+/* ---------------------------------------------------------------------- */
+/* Quotation Control Policy v2 -- project Confirmed Value protection        */
+/* ---------------------------------------------------------------------- */
+// Sales never type a Confirmed Value: it is the Year-1 total of the lead's Accepted official quotation. (The server refuses anything else.)
+function qpLockProjectValue(overlay, selector, leadId){
+  if(!qpIsSalesRestricted()) return;
+  const inp = overlay.querySelector(selector); if(!inp) return;
+  const q = qpAcceptedOfficialQuoteForLead(leadId);
+  inp.value = q && q.year1Total != null ? q.year1Total : 0; inp.readOnly = true; inp.classList.add('field-locked');
+  inp.insertAdjacentHTML('afterend', '<div class="text-muted" style="font-size:11.5px;margin-top:4px" data-qp-value-note>' + (q ? 'From Accepted quotation ' + escapeHtml(q.quoteNumber) + '. Sales users cannot change the project value.' : 'No Accepted official quotation for this lead. The Founder/Admin sets the project value.') + '</div>');
 }

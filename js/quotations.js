@@ -732,6 +732,7 @@ function applyLeadToQC(leadId){
 
 function selectPackageOnQC(projectType){
   const svc = serviceByProjectType(projectType);
+  if(qpIsSalesRestricted() && svc && !qpIsDirectService(svc)){ toast(QP_FOUNDER_ONLY_MSG, 'error'); QC_STATE.packageKey = ''; QC_STATE.items = []; return; }
   QC_STATE.packageKey = projectType;
   QC_STATE.quotationType = svc ? quotationTypeForProjectType(svc.projectType) : 'website';
   // Package selection also drives the Annual Cost Breakdown's default
@@ -740,6 +741,7 @@ function selectPackageOnQC(projectType){
   // items/exclusions below, so switching packages never leaves stale
   // numbers from a different package's pricing shape behind.
   QC_STATE.annualCost = defaultAnnualCostState(svc);
+  if(qpIsSalesRestricted() && svc) QC_STATE.annualCost = qpOfficialAnnualCost(svc, QC_STATE.annualCost);
   if(!svc){ QC_STATE.items = []; QC_STATE.exclusions = []; return; }
   const baseItem = { id: fnId(), module: svc.category, name: `${svc.shortName || svc.name} (Base Package${svc.priceIsStartingFrom?' — starting from':''})`,
     price: svc.basePrice, priceType:'included', editableOnQuotation:false, included: true };
@@ -750,10 +752,11 @@ function selectPackageOnQC(projectType){
   // 'manual' functions start at null (shown as TBC until Sales enters the
   // agreed figure) -- and starts selected/unselected per the package's own
   // `defaultSelected`, not forced on for every function.
-  const fnItems = svc.functions.map(f=>({ id:fnId(), module: svc.category, name:f.name,
+  const qpSales = qpIsSalesRestricted();
+  const fnItems = svc.functions.filter(f=> !qpSales || f.priceType==='included' || qpAddons().some(a=>a.name===f.name)).map(f=>{ if(qpSales && f.priceType!=='included'){ const a = qpAddons().find(x=>x.name===f.name); return { id:fnId(), module: svc.category, name:f.name, price:a.officialPrice, priceType:'fixed', editableOnQuotation:false, included:false, addonCode:a.code }; } return ({ id:fnId(), module: svc.category, name:f.name,
     price: f.priceType==='included' ? 0 : f.defaultPrice,
     priceType: f.priceType, editableOnQuotation: f.editableOnQuotation,
-    included: f.defaultSelected }));
+    included: f.defaultSelected }); });
   QC_STATE.items = [baseItem, ...fnItems];
   // Package-specific exclusions (APPROVED FINAL, 2026-09-13, Section E) take
   // priority over the generic per-type template — see PACKAGE_SPECIFIC_
@@ -848,8 +851,9 @@ function renderCreateQuotationModal(){
               <label class="required">Package (from Service Price List)</label>
               <select id="cq_package" class="sel" style="width:100%">
                 <option value="">Select a package…</option>
-                ${(DB.all('services').length?DB.all('services'):SERVICE_PRICE_LIST).map(p=>`<option value="${p.projectType}" ${s.packageKey===p.projectType?'selected':''}>${p.name} — ${p.priceIsStartingFrom?'from ':''}$${p.basePrice}</option>`).join('')}
+                ${(DB.all('services').length?DB.all('services'):SERVICE_PRICE_LIST).map(p=>{ const qpOff = qpIsSalesRestricted() && !qpIsDirectService(p); return `<option value="${p.projectType}" ${s.packageKey===p.projectType?'selected':''} ${qpOff?'disabled':''}>${p.name} — ${p.priceIsStartingFrom?'from ':''}$${p.basePrice}${qpOff?' — Founder quotation required':''}</option>`; }).join('')}
               </select>
+              ${qpIsSalesRestricted() ? `<div class="text-muted" style="font-size:12px;margin-top:6px" id="qpPkgNote">Packages marked “Founder quotation required” use custom pricing and are prepared by the Founder/Admin. ${(()=>{ const sv = s.packageKey ? serviceByProjectType(s.packageKey) : null; return sv && !qpIsDirectService(sv) ? '<b style="color:#b42318">'+QP_FOUNDER_ONLY_MSG+'</b>' : ''; })()}</div>` : ''}
             </div>
             <div class="form-field"><label>Project Code <span class="field-auto-badge">Auto</span></label><input value="${escapeHtml(s.projectCode||'Assigned when quotation is sent to a Pipeline project')}" readonly></div>
             <div class="form-field"><label>Quote No. (preview) <span class="field-auto-badge">Auto</span></label><input value="${s.packageKey?qcQuoteNumberPreview():'—'}" readonly></div>
@@ -1067,7 +1071,7 @@ function renderCreateQuotationModal(){
     };
 
     overlay.querySelector('#cq_addFn').onclick = ()=> openAddQuotationFunctionModal((fnDef)=>{
-      s.items.push({ id: fnId(), module:'Add-on', name: fnDef.name, price: fnDef.defaultPrice, priceType: fnDef.priceType||'manual', editableOnQuotation: fnDef.editableOnQuotation!==undefined?fnDef.editableOnQuotation:(fnDef.priceType==='manual'), included:true });
+      s.items.push({ id: fnId(), module:'Add-on', name: fnDef.name, price: fnDef.defaultPrice, priceType: fnDef.priceType||'manual', editableOnQuotation: fnDef.editableOnQuotation!==undefined?fnDef.editableOnQuotation:(fnDef.priceType==='manual'), included:true, ...(fnDef.addonCode ? { addonCode: fnDef.addonCode } : {}) });
       renderCreateQuotationModal();
     });
     wireQuotationItemsEditor(overlay, s);
@@ -1082,8 +1086,30 @@ function renderCreateQuotationModal(){
     overlay.querySelector('#cq_paymentPreset').onchange = e=>{ s.paymentPreset = e.target.value; renderCreateQuotationModal(); };
     overlay.querySelector('#cq_clientNote').oninput = e=>{ s.clientNote = e.target.value; refreshQcPreview(overlay); };
 
+    qpLockSalesForm(overlay);
     overlay.querySelector('#cqSave').onclick = function(){ return runSave(this, ()=> saveQuotationFromState(s)); };
   }});
+}
+
+// Policy v2: Sales see every price as read-only (prices come from the central configuration); only price-neutral wording options remain selectable.
+function qpLockSalesForm(overlay){
+  if(!qpIsSalesRestricted()) return;
+  const lock = el=>{ if(!el) return; el.disabled = true; if('readOnly' in el) el.readOnly = true; el.classList.add('field-locked'); el.title = 'Set by the Founder/Admin configuration'; };
+  [1,2,3].forEach(n=>{ ['domain','hosting','maint','hostingIncluded','maintInclude'].forEach(k=> lock(overlay.querySelector('#cq_y'+n+'_'+k)));
+    const ty = overlay.querySelector('#cq_y'+n+'_maintNoteType'); if(ty) Array.from(ty.options).forEach(o=>{ if(o.value!=='freePeriod') o.remove(); });
+    const pe = overlay.querySelector('#cq_y'+n+'_maintNotePeriod'); if(pe) Array.from(pe.options).forEach(o=>{ if(o.value==='Custom') o.remove(); });
+    overlay.querySelectorAll('[id^="cq_y'+n+'_maintNote"]').forEach(el=>{ if(el.tagName==='TEXTAREA' || (el.tagName==='INPUT' && el.type==='text')) lock(el); }); });
+  const col = overlay.querySelector('.qc-edit-col');
+  if(col && !overlay.querySelector('#qpSalesBanner')) col.insertAdjacentHTML('afterbegin', '<div id="qpSalesBanner" class="panel" style="background:#eef4ff;border-color:#1d7bff;padding:10px 14px;margin-bottom:12px;font-size:12.5px"><b>Official pricing only.</b> Package, add-on, domain and renewal prices are fixed by the Founder/Admin configuration. For anything custom, ask the Founder/Admin to prepare the quotation.</div>');
+}
+// Re-labels recognised official lines (older quotations stored them without a price type) so the server sees canonical items; anything else is left for the server to refuse.
+function qpCanonicalItems(svc, items){
+  return items.map(it=>{
+    if(/\(Base Package( — starting from)?\)$/.test(it.name||'')) return { ...it, price:Number(svc.basePrice), priceType:'included', editableOnQuotation:false };
+    if((svc.functions||[]).some(f=>f.name===it.name && f.priceType==='included')) return { ...it, price:0, priceType:'included', editableOnQuotation:false };
+    const a = qpAddons().find(x=>x.name===it.name); if(a) return { ...it, price:a.officialPrice, priceType:'fixed', editableOnQuotation:false, addonCode:a.code };
+    return it;
+  });
 }
 
 function refreshQcPreview(overlay){
@@ -1185,6 +1211,7 @@ function pricingNotesHtml(evalRes){
 // (spec §6/§7 — this is the actual fix for the reported "Cancel resets
 // Create Quotation" bug: the two modals no longer share one overlay).
 function openAddQuotationFunctionModal(onPick){
+  const qpSales = qpIsSalesRestricted(); const qpSvc = serviceByProjectType(QC_STATE.packageKey); const qpList = qpSales ? qpAddonsFor(qpSvc, QC_STATE.items) : [];
   const html = `
     <div class="modal-head"><h3>Add Scope Item</h3><button class="modal-close" id="afqClose">&times;</button></div>
     <div class="modal-body">
@@ -1192,15 +1219,15 @@ function openAddQuotationFunctionModal(onPick){
         <label>A. Add Existing Function</label>
         <select id="afq_pick" class="sel" style="width:100%">
           <option value="">Select a function…</option>
-          ${ADDITIONAL_FUNCTIONS_CATALOG.map(a=>`<option value="${a.id}">${escapeHtml(a.name)} — ${a.priceType==='manual'?'Manual (enter amount)':'$'+a.defaultPrice}</option>`).join('')}
+          ${qpSales ? qpList.map(a=>`<option value="${a.code}">${escapeHtml(a.name.length>90?a.name.slice(0,90)+'…':a.name)} — $${a.officialPrice}</option>`).join('') : ADDITIONAL_FUNCTIONS_CATALOG.map(a=>`<option value="${a.id}">${escapeHtml(a.name)} — ${a.priceType==='manual'?'Manual (enter amount)':'$'+a.defaultPrice}</option>`).join('')}
         </select>
       </div>
-      <div class="flex-row" style="justify-content:center;margin:10px 0"><span class="text-muted" style="font-size:11.5px;font-weight:700;letter-spacing:.4px">OR</span></div>
+      ${qpSales ? `<p class="text-muted" style="font-size:11.5px;margin:10px 0 0" id="qpAddonNote">Only official fixed-price add-ons are available. For any custom function or custom price, ask the Founder/Admin to create the quotation.</p>` : `<div class="flex-row" style="justify-content:center;margin:10px 0"><span class="text-muted" style="font-size:11.5px;font-weight:700;letter-spacing:.4px">OR</span></div>
       <div class="form-field" style="margin-bottom:4px">
         <label>B. Add Custom Function</label>
         <input id="afq_custom" placeholder="Custom item name — e.g. Loyalty points system">
       </div>
-      <p class="text-muted" style="font-size:11.5px;margin:8px 0 0">Pick one option — a custom item is always Manual pricing (enter the amount agreed with Founder/client; shows as TBC until you do).</p>
+      <p class="text-muted" style="font-size:11.5px;margin:8px 0 0">Pick one option — a custom item is always Manual pricing (enter the amount agreed with Founder/client; shows as TBC until you do).</p>`}
     </div>
     <div class="modal-foot">
       <button class="btn btn-secondary" id="afqCancel">Cancel</button>
@@ -1209,7 +1236,7 @@ function openAddQuotationFunctionModal(onPick){
   `;
   openChildModal(html, { onMount:(overlay)=>{
     const pickSel = overlay.querySelector('#afq_pick');
-    const customInput = overlay.querySelector('#afq_custom');
+    const customInput = overlay.querySelector('#afq_custom') || { value:'', disabled:false, oninput:null };
     const addBtn = overlay.querySelector('#afqAdd');
     // Neither option is required on its own, but they're mutually exclusive:
     // picking a catalog function clears/disables the custom name field and
@@ -1231,6 +1258,7 @@ function openAddQuotationFunctionModal(onPick){
     addBtn.onclick = ()=>{
       const pickId = pickSel.value;
       const custom = customInput.value.trim();
+      if(pickId && qpSales){ const a = qpList.find(x=>x.code===pickId); if(!a){ toast('That add-on is not available.', 'error'); return; } closeChildModal(); onPick({ name:a.name, defaultPrice:a.officialPrice, priceType:'fixed', editableOnQuotation:false, addonCode:a.code }); return; }
       if(pickId){
         const def = ADDITIONAL_FUNCTIONS_CATALOG.find(a=>a.id===pickId);
         closeChildModal(); onPick(def); return;
@@ -1260,17 +1288,18 @@ function quotationItemsEditorHtml(items){
         <tbody>
           ${items.map(it=>{
             const isTbc = it.price===null || it.price===undefined;
-            const canEditPrice = it.included!==false && (it.priceType==='manual' || it.editableOnQuotation);
+            const qpS = qpIsSalesRestricted(), qpReq = qpS && qpIsRequiredLine(it);
+            const canEditPrice = !qpS && it.included!==false && (it.priceType==='manual' || it.editableOnQuotation);
             const priceCell = canEditPrice
               ? `<input type="number" step="0.01" data-price="${it.id}" value="${isTbc?'':it.price}" placeholder="${isTbc?'Enter amount':''}" style="width:100px">`
               : (isTbc ? 'TBC' : moneyPrecise(it.price));
             return `
             <tr data-item="${it.id}">
-              <td><input type="checkbox" data-inc="${it.id}" ${it.included!==false?'checked':''}></td>
+              <td>${qpReq ? '<span title="Required package item" style="color:var(--muted)">✓</span>' : `<input type="checkbox" data-inc="${it.id}" ${it.included!==false?'checked':''}>`}</td>
               <td>${escapeHtml(it.module)}</td>
               <td>${escapeHtml(it.name)}${isTbc && it.included!==false?' <span class="badge chip-overdue" style="margin-left:4px">Needs Price</span>':''}</td>
               <td>${priceCell}</td>
-              <td><span class="icon-btn" data-remove-item="${it.id}" title="Remove" style="font-size:15px;cursor:pointer">&times;</span></td>
+              <td>${qpReq ? '' : `<span class="icon-btn" data-remove-item="${it.id}" title="Remove" style="font-size:15px;cursor:pointer">&times;</span>`}</td>
             </tr>`;
           }).join('')}
         </tbody>
@@ -1450,6 +1479,10 @@ async function saveQuotationFromState(s){
   if(isFounder() && s.adjustment && !s.adjustmentReason.trim()){ toast('A Reason for Price Adjustment is required.', 'error'); return; }
 
   const svc = serviceByProjectType(s.packageKey);
+  if(qpIsSalesRestricted()){
+    if(svc && !qpIsDirectService(svc)){ toast(QP_FOUNDER_ONLY_MSG, 'error'); return; }
+    if(svc){ s.annualCost = qpOfficialAnnualCost(svc, normalizeAnnualCost(s.annualCost)); s.items = qpCanonicalItems(svc, s.items); }
+  }
   const activeItems = s.items.filter(i=>i.included!==false);
   const evalRes = evaluateQuotation({
     items: activeItems.map(i=>({name:i.name, price:i.price, priceType:i.priceType})),
@@ -1517,7 +1550,8 @@ async function saveQuotationFromState(s){
   let isNewRevision = false;
   let id, rootQuotationId, version, previousVersionId, quoteNumber, createdAt, createdBy;
 
-  if(existing && existing.status==='Draft'){
+  const qpInPlace = !!(existing && existing.status==='Draft' && (!qpEnforced() || existing.pricingPolicyVersion===2));   // Policy v2: a legacy Draft is never edited in place; saving creates a new revision
+  if(qpInPlace){
     // Draft is mutable in place — no version bump, same id/number.
     id = existing.id; rootQuotationId = existing.rootQuotationId || existing.id;
     version = existing.version||1; previousVersionId = existing.previousVersionId||null;
@@ -1576,7 +1610,7 @@ async function saveQuotationFromState(s){
     paymentPreset: s.paymentPreset, quotationDate: s.quotationDate, validUntil: s.validUntil,
     demoLink: s.demoLink,
     demoLinks: s.demoLinks||[],
-    items: activeItems.map(i=>({ id:i.id, module:i.module, name:i.name, price:i.price, priceType:i.priceType, editableOnQuotation:i.editableOnQuotation })),
+    items: activeItems.map(i=>({ id:i.id, module:i.module, name:i.name, price:i.price, priceType:i.priceType, editableOnQuotation:i.editableOnQuotation, ...(i.addonCode ? { addonCode:i.addonCode } : {}) })),
     exclusions: s.exclusions, importantNotes: finalNotes, paymentSchedule: schedule,
     reasons: evalRes.reasons,
     status: (existing && existing.status==='Draft') ? existing.status : 'Draft',
@@ -1594,7 +1628,7 @@ async function saveQuotationFromState(s){
   };
 
   // Draft edited in place -> PATCH of what changed; anything else is a NEW row (POST) so no earlier version is ever overwritten.
-  const savedQ = (existing && existing.status==='Draft') ? await DB.update('quotations', quotation) : await DB.create('quotations', quotation);
+  const savedQ = qpInPlace ? await DB.update('quotations', quotation) : await DB.create('quotations', quotation);
   if(!savedQ.ok){ saveFailed(savedQ); return false; }       // the editor stays open with everything typed (the unsaved-changes guard is untouched)
 
   if(isNewRevision){
@@ -1773,19 +1807,26 @@ function openQuotationDetailModal(id){
     // role -- markAsSent() itself still blocks (with a clear message)
     // while any item is unpriced (req #7), so nothing can ship with a
     // silent $0 in place of a real amount.
+    const qpBlocked = qpIsSalesRestricted() && !(q.policyCheck && q.policyCheck.official);
+    const qpLegacyRevise = qpBlocked && q.pricingPolicyVersion===null && (q.status==='Draft' || q.status==='Sent');
+    if(qpBlocked){
+      const why = qpLegacyRevise ? 'This quotation was created before the official-pricing rules. Open <b>Edit</b> to create a new revision with official prices (the original stays unchanged).' : 'This quotation uses custom pricing and is managed by the Founder/Admin. You can view it but not edit, send, accept or convert it.';
+      overlay.querySelector('.modal-body').insertAdjacentHTML('afterbegin', `<div class="panel" id="qpBlockedBanner" style="background:#fff8ec;border-color:#d98a12;padding:10px 14px;margin-bottom:12px;font-size:12.5px">${why}${(q.policyCheck && q.policyCheck.reasons && q.policyCheck.reasons.length) ? '<ul style="margin:6px 0 0;padding-left:18px">'+q.policyCheck.reasons.slice(0,4).map(r=>'<li>'+escapeHtml(r)+'</li>').join('')+'</ul>' : ''}</div>`);
+      if(qpLegacyRevise) btns.push(`<button class="btn btn-ghost btn-sm" id="qaEdit">Edit (new revision)</button>`);
+    } else
     if(q.status==='Draft'){
       btns.push(`<button class="btn btn-ghost btn-sm" id="qaEdit">Edit</button>`);
       btns.push(`<button class="btn btn-primary btn-sm" id="qaSend">Mark as Sent</button>`);
     }
-    if(q.status==='Approved'){
+    if(!qpBlocked && q.status==='Approved'){
       btns.push(`<button class="btn btn-primary btn-sm" id="qaSend">Mark as Sent</button>`);
     }
-    if(q.status==='Sent'){
+    if(!qpBlocked && q.status==='Sent'){
       btns.push(`<button class="btn btn-ghost btn-sm" id="qaEdit">Edit (new revision)</button>`);
       btns.push(`<button class="btn btn-primary btn-sm" id="qaAccept">Mark as Accepted</button>`);
       btns.push(`<button class="btn btn-ghost btn-sm" id="qaReject2">Mark as Rejected</button>`);
     }
-    if(q.status==='Accepted' && !linkedProject){
+    if(!qpBlocked && q.status==='Accepted' && !linkedProject){
       btns.push(`<button class="btn btn-primary btn-sm" id="qaConvert">Convert to Project</button>`);
     }
     actionsEl.innerHTML = btns.join('');
@@ -1800,7 +1841,8 @@ function openQuotationDetailModal(id){
     // nothing here overwrites the saved record unless the user explicitly
     // saves (saveQuotationFromState only ever runs on an explicit Save
     // click, never as a side effect of opening/closing this form).
-    if(editBtn) editBtn.onclick = ()=>{ QC_STATE = loadStateFromQuotation(q); QC_STATE.projectCode = q.projectCode; QC_TAB='edit'; qcArmDirtyTracking(); renderCreateQuotationModal(); };
+    if(editBtn) editBtn.onclick = ()=>{ QC_STATE = loadStateFromQuotation(q); QC_STATE.projectCode = q.projectCode;
+      if(qpIsSalesRestricted()){ const sv = serviceByProjectType(QC_STATE.packageKey); if(sv && qpIsDirectService(sv)){ QC_STATE.annualCost = qpOfficialAnnualCost(sv, normalizeAnnualCost(QC_STATE.annualCost)); QC_STATE.items = qpCanonicalItems(sv, QC_STATE.items); } } QC_TAB='edit'; qcArmDirtyTracking(); renderCreateQuotationModal(); };
     const sendBtn = overlay.querySelector('#qaSend');
     if(sendBtn) sendBtn.onclick = function(){ return runSave(this, ()=> markAsSent(q.id)); };
     const reject2Btn = overlay.querySelector('#qaReject2');
@@ -1918,6 +1960,7 @@ async function convertQuotationToProject(id){
   });
 
   if(linkedExisting){
+    if(qpEnforced() && !q.leadId && q.projectCode!==linkedExisting.id){ q.projectCode = linkedExisting.id; const pre = await DB.update('quotations', q); if(!pre.ok){ saveFailed(pre); return; } }
     linkedExisting.confirmedValue = q.year1Total || linkedExisting.confirmedValue || 0;
     linkedExisting.quotationRef = q.quoteNumber;
     linkedExisting.functions = Object.values(groups);
@@ -1934,6 +1977,7 @@ async function convertQuotationToProject(id){
   }
 
   const code = (lead && lead.projectCode) ? lead.projectCode : (q.projectCode || suggestNextProjectCode());
+  if(qpEnforced() && !q.leadId && q.projectCode!==code){ q.projectCode = code; const pre = await DB.update('quotations', q); if(!pre.ok){ saveFailed(pre); return; } }
   const made = await createProjectRecord({
     code, lead, confirmedValue: q.year1Total || 0, depositPct:50,
     overrides: {

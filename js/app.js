@@ -743,6 +743,7 @@ function renderSettingsBody(){
       }
     };
     document.getElementById('settingsLogout').onclick = async ()=>{ await Auth.logout(); window.location.href = '../login/index.html'; };
+    if(qpEnforced()){ const di = document.getElementById('discountLimitInput'); const row = di && di.closest('.flex-row'); if(row) row.innerHTML = '<div><strong style="font-size:13.5px">Sales Discount Authority</strong><div class="text-muted" style="font-size:12px">Quotation Policy v2: Sales users cannot apply discounts (0%). Only the Founder/Admin can.</div></div>'; }
     const discountInput = document.getElementById('discountLimitInput');
     if(discountInput){
       discountInput.onchange = async ()=>{
@@ -822,7 +823,8 @@ function settingsRenewalCell(s, field, editable){
 // longer exists for quotation pricing); each package's own add-ons are
 // now expandable per row for Price Type / Default Price / Default
 // Selected / Editable on Quotation -- never hardcoded in a JS file again.
-function settingsPricesTab(){
+function settingsPricesTab(){ return settingsPricesTabBase() + (isFounder() ? settingsPolicyPanelHtml() : ''); }
+function settingsPricesTabBase(){
   const services = DB.all('services');
   const editable = isFounder();
   return `
@@ -874,7 +876,8 @@ function settingsAddonsHtml(svc, editable){
       </table>
     </div>`;
 }
-function wireSettingsPricesTab(){
+function wireSettingsPricesTab(){ wireSettingsPricesTabBase(); if(isFounder()) wireSettingsPolicyPanel(); }
+function wireSettingsPricesTabBase(){
   document.querySelectorAll('#settingsTabBody [data-toggle-addons]').forEach(btn=>{
     btn.onclick = ()=>{
       const row = document.querySelector(`[data-addons-row="${btn.dataset.toggleAddons}"]`);
@@ -1422,3 +1425,52 @@ function wireQsCurrentSubtabBody(){
 }
 
 if(CURRENT_USER){ initApp(); }
+
+
+/* ---------------------------------------------------------------------- */
+/* Quotation Control Policy v2 -- Settings panel (Founder/Admin only)       */
+/* ---------------------------------------------------------------------- */
+function settingsPolicyPanelHtml(){
+  const st = (DB._cache && DB._cache.settings) || {}; const mode = st.quotePolicyMode || 'off'; const addons = (DB._cache && DB._cache.quoteAddons) || [];
+  const modeText = { off:'Off — no Policy v2 rule runs (behaviour as before)', report:'Report — rules are evaluated and violations logged, nothing is blocked', enforce:'Enforce — Sales may only quote official fixed prices; the server refuses everything else' };
+  return `
+  <div class="panel" style="margin-top:18px" id="qpPolicyPanel">
+    <div class="panel-head"><h3>Quotation Policy v2</h3></div>
+    <div class="panel-body pad">
+      <div class="form-grid">
+        <div class="form-field"><label>Policy mode</label>
+          <select id="qpMode" class="sel">${Object.keys(modeText).map(m=>`<option value="${m}" ${mode===m?'selected':''}>${modeText[m]}</option>`).join('')}</select></div>
+        <div class="form-field"><label>Standard domain cost ($)</label><input type="number" step="0.01" min="0" id="qpDomainCost" value="${st.standardDomainCost==null?15:st.standardDomainCost}">
+          <div class="text-muted" style="font-size:11.5px;margin-top:4px">Year-1 domain (charged separately) and the domain part of every Year 2/3 renewal. Year 2/3 = this + the service renewal price in the table above.</div></div>
+      </div>
+      <button class="btn btn-primary btn-sm" id="qpSaveSettings" style="margin-top:8px">Save policy settings</button>
+      <div class="divider"></div>
+      <div class="section-title" style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Official fixed-price add-ons (the only add-ons Sales may use)</div>
+      <div class="table-wrap scroll-x"><table class="data-table qc-mini-table">
+        <thead><tr><th>Code</th><th>Add-on</th><th>Official price ($)</th><th>Active</th><th>Repeatable</th><th>Not offered with</th><th></th></tr></thead>
+        <tbody>${addons.map(a=>`<tr data-qpa="${escapeHtml(a.code)}"><td>${escapeHtml(a.code)}</td><td title="${escapeHtml(a.name)}">${escapeHtml(a.name.length>70?a.name.slice(0,70)+'…':a.name)}</td>
+          <td><input type="number" step="0.01" min="0" data-qpa-price value="${a.officialPrice}" style="width:90px"></td>
+          <td><input type="checkbox" data-qpa-active ${a.active?'checked':''}></td><td>${a.repeatable?'Yes':'No'}</td><td>${escapeHtml((a.notForProjectTypes||[]).join(', ')||'—')}</td>
+          <td><button class="btn btn-outline btn-sm" data-qpa-save>Save</button></td></tr>`).join('')}</tbody></table></div>
+      <p class="text-muted" style="font-size:11.5px;margin:8px 0 0">An add-on is deactivated, never deleted. Anything not listed here (custom functions, other catalogue items) can only be quoted by the Founder/Admin.</p>
+    </div>
+  </div>`;
+}
+function wireSettingsPolicyPanel(){
+  const sv = document.getElementById('qpSaveSettings'); if(!sv) return;
+  sv.onclick = async ()=>{
+    const r = await DB.saveSettings({ quotePolicyMode: document.getElementById('qpMode').value, standardDomainCost: Math.max(0, Number(document.getElementById('qpDomainCost').value)||0) });
+    if(!r.ok){ saveFailed(r); renderSettingsBody(); return; }
+    toast('Quotation policy settings saved. Reload the page for the mode change to take full effect.', 'success');
+  };
+  document.querySelectorAll('#qpPolicyPanel [data-qpa]').forEach(tr=>{
+    tr.querySelector('[data-qpa-save]').onclick = async ()=>{
+      const a = DB._cache.quoteAddons.find(x=>x.code===tr.dataset.qpa); if(!a) return;
+      const price = Number(tr.querySelector('[data-qpa-price]').value);
+      if(!(price >= 0)){ toast('Enter a price of $0 or more.', 'error'); return; }
+      const r = await DB.saveQuoteAddon({ ...a, officialPrice: price, active: tr.querySelector('[data-qpa-active]').checked });
+      if(!r.ok){ saveFailed(r); return; }
+      toast('Add-on ' + a.code + ' saved.', 'success');
+    };
+  });
+}
