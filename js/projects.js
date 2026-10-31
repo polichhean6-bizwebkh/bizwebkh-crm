@@ -76,7 +76,7 @@ function renderProjectsTable(){
               <td><div class="flex-row"><div class="avatar-sm" style="background:${userColor(p.assignedSales)}">${userInitials(p.assignedSales)}</div>${escapeHtml(p.assignedSales)}</div></td>
               <td>${statusBadge(p.stage)}</td>
               <td>${paymentBadge(s.status)}</td>
-              <td><button class="btn btn-secondary btn-sm" data-open="${p.id}">View</button></td>
+              <td><div style="display:flex;flex-direction:column;gap:6px;align-items:stretch"><button class="btn btn-secondary btn-sm" data-open="${p.id}">View</button>${isFounder() ? `<button class="btn btn-outline btn-sm" data-delete="${p.id}" title="Delete this project (Founder/Admin only)" style="color:var(--red)">Delete</button>` : ''}</div></td>
             </tr>`;}).join('') : `<tr><td colspan="10"><div class="empty-row">No projects match your filters. Confirm a lead, or create one directly.</div></td></tr>`}
         </tbody>
       </table>
@@ -84,6 +84,78 @@ function renderProjectsTable(){
     <p class="text-muted" style="margin-top:10px;font-size:12px">Showing ${projects.length} of ${DB.all('projects').length} projects</p>
   `;
   wrap.querySelectorAll('[data-open]').forEach(x=> x.onclick = ()=> openProjectDetailModal(x.dataset.open));
+  wrap.querySelectorAll('[data-delete]').forEach(x=> x.onclick = ()=> openDeleteProjectFlow(x.dataset.delete));
+}
+
+/* ---------------------------------------------------------------------- */
+/* Delete Project — Founder/Admin only (the server enforces it as well).   */
+/* Step 1 warning -> server dependency check -> step 2 typed confirmation. */
+/* Payments / invoices / receipts of ANY status block the deletion. Quotes, */
+/* leads and activity history are kept; the project code is retired for     */
+/* ever (the server never hands it out again).                              */
+/* ---------------------------------------------------------------------- */
+function openDeleteProjectFlow(code){
+  if(!isFounder()) return;
+  const p = DB.find('projects', code); if(!p){ toast('That project no longer exists. Please refresh the page.', 'error'); return; }
+  const info = `
+    <div class="pd-keyinfo" style="grid-template-columns:1fr;margin:10px 0 14px">
+      <div>${infoRow('Project', escapeHtml(p.id))}${infoRow('Client', escapeHtml(p.clientName))}${infoRow('Business', escapeHtml(p.businessName))}</div>
+    </div>`;
+  const step1 = ()=> openModal(`
+    <div class="modal-head"><h3>Delete Project?</h3><button class="modal-close" id="dpClose">&times;</button></div>
+    <div class="modal-body">
+      <p style="margin:0">You are about to permanently delete:</p>${info}
+      <p style="margin:0;color:var(--red);font-weight:600">This action cannot be undone.</p>
+    </div>
+    <div class="modal-foot"><button class="btn btn-secondary" id="dpCancel">Cancel</button><button class="btn btn-primary" id="dpContinue">Continue</button></div>
+  `, { onMount:(ov)=>{
+    ov.querySelector('#dpClose').onclick = closeModal; ov.querySelector('#dpCancel').onclick = closeModal;
+    ov.querySelector('#dpContinue').onclick = function(){ return runSave(this, async ()=>{
+      const r = await DB.projectDeleteCheck(code); if(!r.ok) return saveFailed(r);
+      if(!r.check.can_delete) return blocked(r.check.financial);
+      return step2(r.check);
+    }); };
+  }});
+  const blocked = (fin)=> openModal(`
+    <div class="modal-head"><h3>Project cannot be deleted</h3><button class="modal-close" id="dpClose">&times;</button></div>
+    <div class="modal-body">
+      <p style="margin:0 0 10px;font-weight:600">This project cannot be deleted because it contains financial records.</p>
+      ${info}
+      <ul style="margin:0 0 6px 18px;padding:0;font-size:13px">
+        ${fin && fin.payments ? `<li>Payments: ${fin.payments}${fin.voided_payments ? ` (${fin.voided_payments} voided)` : ''}</li>` : ''}
+        ${fin && fin.invoices ? `<li>Invoices: ${fin.invoices}</li>` : ''}
+        ${fin && fin.receipts ? `<li>Receipts: ${fin.receipts}</li>` : ''}
+      </ul>
+      <p class="text-muted" style="margin:8px 0 0;font-size:12.5px">Nothing was deleted. Financial records are never removed automatically.</p>
+    </div>
+    <div class="modal-foot"><button class="btn btn-primary" id="dpOk">Close</button></div>
+  `, { onMount:(ov)=>{ ov.querySelector('#dpClose').onclick = closeModal; ov.querySelector('#dpOk').onclick = closeModal; }});
+  const step2 = (chk)=>{
+    const kq = (chk.kept && chk.kept.quotations || []).length, kl = (chk.kept && chk.kept.leads || []).length;
+    const keptNote = (kq || kl) ? `<p class="text-muted" style="margin:0 0 10px;font-size:12.5px">Kept as history (not changed): ${kq ? kq + ' linked quotation' + (kq===1?'':'s') : ''}${kq && kl ? ' and ' : ''}${kl ? kl + ' linked lead' + (kl===1?'':'s') : ''}. The activity history is kept too.</p>` : `<p class="text-muted" style="margin:0 0 10px;font-size:12.5px">The activity history is kept.</p>`;
+    openModal(`
+      <div class="modal-head"><h3>Permanent deletion</h3><button class="modal-close" id="dpClose">&times;</button></div>
+      <div class="modal-body">
+        <p style="margin:0 0 8px"><strong>${escapeHtml(p.id)} &ndash; ${escapeHtml(p.businessName)}</strong><br>will be permanently removed.</p>
+        ${keptNote}
+        <p class="text-muted" style="margin:0 0 10px;font-size:12.5px">This project code can never be used again.</p>
+        <div class="form-field"><label class="required">Type <strong>${escapeHtml(p.id)}</strong> to confirm</label><input id="dpType" autocomplete="off" placeholder="${escapeHtml(p.id)}"></div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-secondary" id="dpCancel2">Cancel</button><button class="btn btn-primary" id="dpDelete" disabled style="background:var(--red);border-color:var(--red)">Delete permanently</button></div>
+    `, { onMount:(ov)=>{
+      const inp = ov.querySelector('#dpType'), btn = ov.querySelector('#dpDelete');
+      inp.oninput = ()=>{ btn.disabled = inp.value.trim().toUpperCase() !== String(p.id).toUpperCase(); };
+      ov.querySelector('#dpClose').onclick = closeModal; ov.querySelector('#dpCancel2').onclick = closeModal;
+      btn.onclick = function(){ return runSave(this, async ()=>{
+        const r = await DB.deleteProject(p.id, inp.value.trim());
+        if(!r.ok){ if(r.error && r.error.code === 'has_financial_records'){ closeModal(); return blocked({}); } saveFailed(r); return false; }
+        closeModal(); toast(`Project ${p.id} deleted.`, 'success'); if(typeof renderProjectsPage === 'function' && currentRoute() === 'projects') renderProjectsPage();
+        return true;
+      }); };
+      inp.focus();
+    }});
+  };
+  step1();
 }
 
 /* ---------------------------------------------------------------------- */

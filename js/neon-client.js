@@ -80,6 +80,8 @@ const BZ = (function(){
     if(s === 409){
       if(code === 'conflict') return 'This record was changed by someone else since you opened it. Please refresh the page and try again.';
       if(code === 'code_taken') return 'That project code is already in use. Please choose another.';
+      if(code === 'has_financial_records') return 'This project cannot be deleted because it contains financial records.';
+      if(code === 'code_retired') return msg || 'That project code belonged to a deleted project and can never be used again. Please choose another.';
       if(code === 'duplicate') return msg || 'This already exists.';
       if(code === 'reference_missing_or_in_use' || code === 'not_deletable') return 'This record is linked to other records and cannot be deleted or changed this way.';
       return msg || 'This change conflicts with existing data.';

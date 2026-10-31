@@ -1720,6 +1720,25 @@ const DB = {
     const rec = this._cache.payments.find(x=>x.id === id); if(rec) this._adopt('payments', rec, res.body);
     return { ok:true, record:rec };
   },
+  // Delete Project (Founder/Admin only; the server re-checks everything). projectDeleteCheck = read-only dependency check; deleteProject = the transaction.
+  async projectDeleteCheck(id){
+    if(this.state !== 'ready') return this._notReady();
+    this._inflight++; let res; try{ res = await BZ.api('GET', '/api/projects/' + encodeURIComponent(id) + '/delete-check'); } finally { this._inflight--; }
+    if(res.status !== 200 || !res.body) return this._fail(res);
+    return { ok:true, check:res.body };
+  },
+  async deleteProject(id, confirmCode, reason){
+    if(this.state !== 'ready') return this._notReady();
+    this._inflight++; let res; try{ res = await BZ.api('POST', '/api/projects/' + encodeURIComponent(id) + '/delete', { confirm_code: confirmCode, reason: reason || 'project deleted' }); } finally { this._inflight--; }
+    if(res.status !== 200) return this._fail(res);
+    this._cache.projects = this._cache.projects.filter(p=>p.id !== id); if(this._pristine.projects) this._pristine.projects.delete(id);
+    if(this._meta){ this._meta.retired_project_codes = [...new Set([...(this._meta.retired_project_codes || []), String(id).toUpperCase()])]; if(this._meta.counts) this._meta.counts.projects = this._cache.projects.length; }
+    try{                                                   // the server wrote the "Project Deleted" activity row itself: fetch the newest rows so the Activity page shows it without a reload
+      const a = await BZ.api('GET', '/api/activities?limit=10');
+      if(a.status === 200 && Array.isArray(a.body)){ const list = this._cache.activities; a.body.map(rowToActivity).reverse().forEach(r=>{ if(!list.some(x=>String(x.id) === String(r.id))){ list.unshift(r); if(this._meta) this._meta.activity_logs_total++; } }); }
+    }catch(e){ /* cosmetic only */ }
+    return { ok:true, result:res.body };
+  },
   // voidPayment:true voids the receipt AND its payment in ONE server transaction (what the Void Receipt action has always done).
   async cancelReceipt(id, reason, voidPayment){
     if(this.state !== 'ready') return this._notReady();
@@ -1903,7 +1922,8 @@ function allKnownProjectCodes(){
     ...DB.all('projects').map(p=>p.id),
     ...DB.all('leads').map(l=>l.projectCode),
     ...DB.all('quotations').map(q=>q.projectCode),
-    ...DB.all('invoices').map(i=>i.projectCode)
+    ...DB.all('invoices').map(i=>i.projectCode),
+    ...((typeof DB !== 'undefined' && DB._meta && DB._meta.retired_project_codes) || [])      // codes of deleted projects: never suggested again
   ];
 }
 
