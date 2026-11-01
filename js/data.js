@@ -229,10 +229,12 @@ const PAYMENT_METHODS_ALL = ['ABA Transfer', 'KHQR', 'Cash', 'Bank Transfer', 'W
 // listed here going forward but stay legal DB values — 5 real historical
 // payments use them; see PAYMENT_TYPES_ALL for any surface that must stay
 // backward-compatible with those records.
-const PAYMENT_TYPES = ['Deposit', 'Milestone', 'Final Payment', 'Renewal', 'Add-on', 'Other'];
+// Payment Purpose (since the Payment Purpose release): ONLY these two can be chosen for a NEW payment. The label (First/Second/.../Final Payment, Renewal Payment) is made by the
+// server, never typed. The older purposes below stay legal for the historical records that already hold them.
+const PAYMENT_TYPES = ['Project Payment', 'Renewal'];
 // Superset used by the Edit Payment dropdown and the Receipts filter —
 // never drops a value a real record could already hold.
-const PAYMENT_TYPES_ALL = ['Deposit', 'Partial Payment', 'Full Payment', 'Milestone', 'Final Payment', 'Renewal', 'Add-on', 'Other'];
+const PAYMENT_TYPES_ALL = ['Project Payment', 'Deposit', 'Partial Payment', 'Full Payment', 'Milestone', 'Final Payment', 'Renewal', 'Add-on', 'Other'];
 
 // Receipt status — deliberately NOT the same as Payment Status (Not Paid/
 // Partially Paid/Fully Paid, a project/invoice-level concept derived from
@@ -2032,8 +2034,13 @@ function paymentsForProject(projectId, opts={}){
     .filter(p=> opts.includeVoided ? true : !p.voided)
     .sort((a,b)=> new Date(a.date||a.createdAt) - new Date(b.date||b.createdAt));
 }
+// Total Paid / Remaining / Payment Status are about the PROJECT: Renewal money (hosting/domain renewals) is kept out of them — it is a separate stream. No Renewal
+// payment existed before the Payment Purpose release, so for every historical project these figures are exactly what they always were.
 function totalPaidForProject(projectId){
-  return paymentsForProject(projectId).reduce((s,p)=> s + (Number(p.amount)||0), 0);
+  return paymentsForProject(projectId).filter(p=> p.type!=='Renewal').reduce((s,p)=> s + (Number(p.amount)||0), 0);
+}
+function renewalPaidForProject(projectId){
+  return paymentsForProject(projectId).filter(p=> p.type==='Renewal').reduce((s,p)=> s + (Number(p.amount)||0), 0);
 }
 // Confirmed Value, Total Paid, Remaining Balance and a derived Payment
 // Status — always computed from the project record + ledger, never stored.
@@ -2059,30 +2066,41 @@ function paymentSummaryFor(projectId){
   else if(totalPaid < confirmedValue - PAYMENT_STATUS_EPSILON) status = 'Partially Paid';
   else status = 'Fully Paid'; // totalPaid >= confirmedValue - EPSILON, i.e. fully covers the project value (or overpays it)
   const lastPayment = paymentsForProject(projectId).slice(-1)[0] || null;
-  return { confirmedValue, totalPaid, remaining, status, lastPayment };
+  return { confirmedValue, totalPaid, remaining, status, lastPayment, renewalPaid: renewalPaidForProject(projectId) };
 }
-// "1st Payment", "2nd Payment", "3rd Payment", "4th Payment"... — purely a
-// display label suggestion, never used for calculation. Counts ALL ledger
-// entries ever recorded for the project (including voided ones) so a voided
-// payment's number is never reused by a later payment.
-function ordinalLabel(n){
-  const s = ['th','st','nd','rd'];
-  const v = n % 100;
-  return n + (s[(v-20)%10] || s[v] || s[0]) + ' Payment';
+// Payment Purpose: the label of a NEW payment. The SERVER decides it (api/crm/paymentRules.ts) — this mirror only shows it live while the user types an amount, and is
+// never sent. Project Payment: the exact remaining balance is the "Final Payment", anything less is the next First / Second / Third ... Payment (voided payments and Renewals do not
+// count). Renewal: always "Renewal Payment". Amounts are compared in whole cents so 0.1 + 0.2 style float noise can never flip a label.
+const PAYMENT_WORDS = ['First','Second','Third','Fourth','Fifth','Sixth','Seventh','Eighth','Ninth','Tenth'];
+function paymentSequenceWord(n){
+  if(n >= 1 && n <= PAYMENT_WORDS.length) return PAYMENT_WORDS[n-1];
+  const v = n % 100, sfx = ['th','st','nd','rd'];
+  return n + (sfx[(v-20)%10] || sfx[v] || sfx[0]);
 }
-function nextPaymentNumberLabel(projectId){
-  const count = DB.all('payments').filter(p=>p.projectId===projectId).length;
-  return ordinalLabel(count + 1);
+function previewPaymentLabel(projectId, purpose, amount){
+  if(purpose === 'Renewal') return { label:'Renewal Payment', isFinal:false, valid:true, error:'' };
+  const summary = paymentSummaryFor(projectId);
+  const count = paymentsForProject(projectId).filter(p=> p.type!=='Renewal').length;
+  const remainingC = Math.round(summary.remaining * 100);
+  const raw = (amount === '' || amount === null || amount === undefined) ? NaN : Number(amount);
+  const amountC = Math.round(raw * 100);
+  const nextLabel = paymentSequenceWord(count + 1) + ' Payment';
+  if(!Number.isFinite(raw)) return { label:nextLabel, isFinal:false, valid:false, error:'Enter the payment amount.' };
+  if(raw <= 0) return { label:nextLabel, isFinal:false, valid:false, error:'Amount must be greater than 0.' };
+  if(Math.abs(amountC - raw*100) > 1e-6) return { label:nextLabel, isFinal:false, valid:false, error:'Amount can have at most 2 decimal places.' };
+  if(amountC > remainingC) return { label:nextLabel, isFinal:false, valid:false, error:'Payment exceeds the remaining project balance of ' + moneyPrecise(remainingC/100) + '.' };
+  if(amountC === remainingC) return { label:'Final Payment', isFinal:true, valid:true, error:'' };
+  return { label:nextLabel, isFinal:false, valid:true, error:'' };
 }
 // `invoiceId` is OPTIONAL and defaults to null — every existing call site
 // (Project View's Record Payment) that doesn't pass it keeps recording a
 // perfectly ordinary unlinked payment, byte-identical to before the
 // Invoices module existed.
-async function recordPaymentEntry({ projectId, paymentNumber, amount, date, method, type, reference, note, userName, invoiceId=null }){
+async function recordPaymentEntry({ projectId, amount, date, method, type, reference, note, userName, invoiceId=null }){
   const rec = {
     id: null,                               // assigned by the server
     projectId,
-    paymentNumber: paymentNumber || nextPaymentNumberLabel(projectId),
+    paymentNumber: null,                    // the label is made by the server (First/Second/.../Final Payment, Renewal Payment); anything sent here is ignored
     amount: Number(amount)||0, date, method, type,
     reference: reference || '', note: note||'',
     recordedBy: userName, createdAt: new Date().toISOString(),

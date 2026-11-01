@@ -88,6 +88,7 @@ function receiptPaymentAndSummary(receipt){
     const ledger = paymentsForProject(receipt.projectCode);
     for(const p of ledger){
       if(p.id === payment.id) break;
+      if(p.type === 'Renewal') continue;           // Renewals are not project money
       previouslyPaid += Number(p.amount)||0;
     }
     previouslyPaid = Math.max(0, Math.round(previouslyPaid * 100) / 100);
@@ -459,6 +460,7 @@ function buildReceiptSections(receipt){
   infoRows.push(`<tr><th>${bilingualLabel('គម្រោង','Project')}</th><td>${escapeHtml(receipt.projectCode||'—')}${proj?' — '+escapeHtml(serviceDisplayName(proj.projectType)):''}</td></tr>`);
   infoRows.push(`<tr><th>Related Invoice</th><td>${invoice?escapeHtml(invoice.invoiceNumber):'—'}</td></tr>`);
   infoRows.push(`<tr><th>Payment Type</th><td>${escapeHtml(payment?payment.type:'—')}</td></tr>`);
+  if(payment && (payment.type==='Project Payment' || payment.type==='Renewal') && payment.paymentNumber) infoRows.push(`<tr><th>Payment</th><td><b>${escapeHtml(payment.paymentNumber)}</b></td></tr>`);
   infoRows.push(`<tr><th>Payment Method</th><td>${escapeHtml(payment?(payment.method||'—'):'—')}</td></tr>`);
   if(payment && payment.reference) infoRows.push(`<tr><th>Reference</th><td>${escapeHtml(payment.reference)}</td></tr>`);
   sections.push({ id:'info', kind:'block', html:`<table class="quote-doc-infotable">${infoRows.join('')}</table>` });
@@ -481,7 +483,8 @@ function buildReceiptSections(receipt){
   // payments that hadn't happened yet.
   const totalPaidAsOf = Math.round((previouslyPaid + amount) * 100) / 100;
   const remainingAsOf = Math.max(0, Math.round((summary.confirmedValue - totalPaidAsOf) * 100) / 100);
-  sections.push({ id:'summary', kind:'block',
+  const isRenewalReceipt = !!(payment && payment.type === 'Renewal');
+  if(!isRenewalReceipt) sections.push({ id:'summary', kind:'block',
     html:`<h4 class="quote-doc-h">Payment Summary</h4><table class="quote-doc-table qc-mini-table" style="max-width:380px">
       <tbody>
         <tr><td>Project Value</td><td style="text-align:right">${moneyPrecise(summary.confirmedValue)}</td></tr>

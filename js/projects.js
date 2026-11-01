@@ -419,7 +419,7 @@ function paymentHistoryTableHtml(ledger){
     <div class="table-wrap scroll-x">
       <table class="data-table payment-history-table">
         <thead>
-          <tr><th>Payment #</th><th>Type</th><th>Amount</th><th>Payment Date</th><th>Method</th><th>Reference</th><th>Linked Invoice</th><th>Receipt No.</th><th>Action</th></tr>
+          <tr><th>Payment</th><th>Purpose</th><th>Amount</th><th>Payment Date</th><th>Method</th><th>Reference</th><th>Linked Invoice</th><th>Receipt No.</th><th>Action</th></tr>
         </thead>
         <tbody>
           ${ledger.map(p=>{
@@ -481,6 +481,10 @@ function openEditPaymentModal(paymentId, proj, onDone){
   // amount/type/date/method/reference/note or any receipt already generated
   // for this payment (see relinkPaymentInvoice() in js/payments.js).
   const linkedInvoice = payment.invoiceId ? DB.find('invoices', payment.invoiceId) : null;
+  // Payments made under the Payment Purpose flow (Project Payment | Renewal) have a system-made label and cannot change purpose/amount/label: to correct one, void it and record the right one.
+  // The server refuses such edits too. Older payments (Deposit, Milestone, ...) keep the editable form they always had.
+  const managed = payment.type === 'Project Payment' || payment.type === 'Renewal';
+  const lock = managed ? 'disabled' : '';
   const html = `
     <div class="modal-head"><h3>Edit Payment — ${escapeHtml(payment.paymentNumber||'')}</h3><button class="modal-close" id="epyClose">&times;</button></div>
     <div class="modal-body">
@@ -498,11 +502,12 @@ function openEditPaymentModal(paymentId, proj, onDone){
         <span class="cell-link" style="font-size:12px" id="epyLinkInvoice">Link / Change Invoice</span>
       </div>
       <div class="form-grid">
-        <div class="form-field"><label class="required">Payment Number</label><input id="epy_number" value="${escapeHtml(payment.paymentNumber||'')}" placeholder="e.g. 1st Payment"></div>
-        <div class="form-field"><label class="required">Payment Type</label>
-          <select id="epy_type">${PAYMENT_TYPES_ALL.map(t=>`<option ${payment.type===t?'selected':''}>${t}</option>`).join('')}</select>
+        <div class="form-field"><label class="required">${managed ? 'Payment Label' : 'Payment Number'}</label><input id="epy_number" value="${escapeHtml(payment.paymentNumber||'')}" placeholder="e.g. 1st Payment" ${lock}></div>
+        <div class="form-field"><label class="required">${managed ? 'Payment Purpose' : 'Payment Type'}</label>
+          <select id="epy_type" ${lock}>${(managed ? PAYMENT_TYPES_ALL : PAYMENT_TYPES_ALL.filter(t=>t!=='Project Payment' && t!=='Renewal')).map(t=>`<option ${payment.type===t?'selected':''}>${t}</option>`).join('')}</select>
         </div>
-        <div class="form-field"><label class="required">Amount ($)</label><input type="number" id="epy_amount" value="${payment.amount}" min="0.01" step="0.01"></div>
+        <div class="form-field"><label class="required">Amount ($)</label><input type="number" id="epy_amount" value="${payment.amount}" min="0.01" step="0.01" ${lock}></div>
+        ${managed ? '<p class="text-muted full" style="grid-column:1/-1;font-size:11.5px;margin:-4px 0 0">The label, purpose and amount of this payment are set by the system. To correct them, void this payment and record the right one.</p>' : ''}
         <div class="form-field"><label class="required">Payment Date</label><input type="date" id="epy_date" value="${payment.date||''}"></div>
         <div class="form-field"><label class="required">Payment Method</label><select id="epy_method">${PAYMENT_METHODS_ALL.map(m=>`<option ${payment.method===m?'selected':''}>${m}</option>`).join('')}</select></div>
         <div class="form-field"><label>Reference</label><input id="epy_reference" value="${escapeHtml(payment.reference||'')}" placeholder="e.g. bank txn ref, receipt #…"></div>
@@ -539,15 +544,11 @@ function openEditPaymentModal(paymentId, proj, onDone){
       if(!newType){ toast('Please select a payment type.', 'error'); return; }
       if(!newMethod){ toast('Please select a payment method.', 'error'); return; }
 
-      // If raising the amount would push Total Paid past Project Value,
-      // warn and require confirmation before proceeding (same guard as
-      // Record Payment — see openRecordPaymentModal). This is a warning,
-      // not a hard block — spec §4 only requires blocking if an existing
-      // rule already does, and none does here.
-      const otherPaid = paymentsForProject(proj.id).filter(p=>p.id!==payment.id).reduce((s,p)=>s+p.amount,0);
-      const newTotal = otherPaid + newAmount;
-      if(newTotal > proj.confirmedValue + 0.004){
-        if(!confirm(`This payment is greater than the remaining project balance.\n\nProject Value: ${moneyPrecise(proj.confirmedValue)}\nTotal Paid (with this edit): ${moneyPrecise(newTotal)}\n\nSave anyway?`)) return;
+      // Raising the amount of an older payment may not push the project's Total Paid past its Project Value (the server refuses it too; Founder/Admin included).
+      const otherPaid = paymentsForProject(proj.id).filter(p=>p.id!==payment.id && p.type!=='Renewal').reduce((s,p)=>s+p.amount,0);
+      const allowed = Math.max(0, Math.round((proj.confirmedValue - otherPaid) * 100) / 100);
+      if(!managed && payment.type!=='Renewal' && newAmount > payment.amount && newAmount > allowed + 0.004){
+        toast('Payment exceeds the remaining project balance of ' + moneyPrecise(Math.max(0, allowed - payment.amount)) + '.', 'error'); return;
       }
 
       // Track every field that actually changed for the audit trail (spec
