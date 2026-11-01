@@ -9,7 +9,16 @@
    Records — no separate follow-up dataset is created or maintained here.
    ========================================================================== */
 
-let PIPELINE_FILTER_STATE = { sales:'', industry:'', followup:'', search:'' };
+let PIPELINE_FILTER_STATE = { sales:'', industry:'', followup:'', search:'', view:'active' };
+// Each column renders its first PIPELINE_PAGE_SIZE cards and offers "Show more" for the rest, so one huge column never builds an enormous DOM / page.
+// The column HEADER count and value total always cover ALL cards matching the current filters, rendered or not.
+const PIPELINE_PAGE_SIZE = 40;
+let PIPELINE_COL_SHOWN = {};
+// Show: Active (default) / Archived / All. Archived cards never touch the Active view's cards or counts.
+function pipelineViewLeads(){
+  const v = PIPELINE_FILTER_STATE.view;
+  return DB.all('leads').filter(l=> v==='all' ? true : v==='archived' ? !!l.archived : !l.archived);
+}
 
 /* ---------------------------------------------------------------------- */
 /* Drag auto-scroll — native HTML5 drag-and-drop never auto-scrolls a      */
@@ -117,7 +126,7 @@ function leadMatchesPipelineSearch(l, nq){
 // them resets another.
 function pipelineBoardLeads(){
   const nq = normalizePipelineSearch(PIPELINE_FILTER_STATE.search);
-  return activeLeads().filter(l=>{
+  return pipelineViewLeads().filter(l=>{
     if(!PIPELINE_STATUSES.includes(l.status)) return false;
     if(PIPELINE_FILTER_STATE.sales && l.assignedSales!==PIPELINE_FILTER_STATE.sales) return false;
     if(PIPELINE_FILTER_STATE.industry && l.industry!==PIPELINE_FILTER_STATE.industry) return false;
@@ -174,12 +183,17 @@ function renderPipelinePage(){
 
   el.innerHTML = `
     <div class="filters-bar">
-      ${isFounder() ? `<button class="btn btn-outline" id="pArchiveBtn" style="margin-right:4px">${icon('archive','width="15" height="15"')} Archive</button>` : ''}
+      ${canUsePipeline() ? `<button class="btn btn-outline" id="pArchiveBtn" style="margin-right:4px" title="Archived opportunities list (search, restore)">${icon('archive','width="15" height="15"')} Archive</button>` : ''}
       <div class="search-box pipeline-search-box">
         ${icon('search')}
         <input type="text" id="pFltSearch" autocomplete="off" placeholder="Search client, project, or code..." value="${escapeHtml(PIPELINE_FILTER_STATE.search)}">
         <button type="button" class="search-box-clear" id="pFltSearchClear" ${PIPELINE_FILTER_STATE.search?'':'hidden'} aria-label="Clear search">&times;</button>
       </div>
+      <select id="pFltView" class="sel" title="Show Active, Archived or All pipeline cards">
+        <option value="active" ${PIPELINE_FILTER_STATE.view==='active'?'selected':''}>Show: Active</option>
+        <option value="archived" ${PIPELINE_FILTER_STATE.view==='archived'?'selected':''}>Show: Archived</option>
+        <option value="all" ${PIPELINE_FILTER_STATE.view==='all'?'selected':''}>Show: All</option>
+      </select>
       <select id="pFltSales" class="sel">
         <option value="">All Sales</option>
         ${salesList.map(s=>`<option value="${escapeHtml(s)}" ${PIPELINE_FILTER_STATE.sales===s?'selected':''}>${escapeHtml(s)}</option>`).join('')}
@@ -205,7 +219,7 @@ function renderPipelinePage(){
       <button type="button" class="fu-counter-chip chip-today ${PIPELINE_FILTER_STATE.followup==='today'?'active':''}" data-count-filter="today">Today <b>${todayCount}</b></button>
       <button type="button" class="fu-counter-chip chip-week ${PIPELINE_FILTER_STATE.followup==='week'?'active':''}" data-count-filter="week">This Week <b>${weekCount}</b></button>
       ${PIPELINE_FILTER_STATE.followup ? `<button type="button" class="fu-counter-chip chip-clear" data-count-filter="">Clear filter &times;</button>` : ''}
-      <div class="text-muted" style="font-size:11.5px;margin-left:4px">Drag a card to another column to move it through the pipeline. Every move requires confirmation and is logged.</div>
+      <div class="text-muted" style="font-size:11.5px;margin-left:4px">Drag a card to another column to move it through the pipeline. Every move requires confirmation and is logged.${PIPELINE_FILTER_STATE.view==='archived'?' Archived cards are read-only here: restore a card to move it.':''}</div>
     </div>
 
     <div id="pSearchEmptyMsg" class="empty-row" style="display:${PIPELINE_FILTER_STATE.search.trim() && boardLeads.length===0 ? 'block':'none'};margin-bottom:14px">No matching pipeline records found.</div>
@@ -222,9 +236,10 @@ function renderPipelinePage(){
   if(addToPipelineBtn) addToPipelineBtn.onclick = ()=> openAddToPipelineModal();
   const archiveBtn = document.getElementById('pArchiveBtn');
   if(archiveBtn) archiveBtn.onclick = ()=> openArchivedPipelineModal();
-  document.getElementById('pFltSales').onchange = (e)=>{ PIPELINE_FILTER_STATE.sales=e.target.value; renderPipelinePage(); };
+  document.getElementById('pFltView').onchange = (e)=>{ PIPELINE_FILTER_STATE.view=e.target.value; PIPELINE_COL_SHOWN={}; renderPipelinePage(); };
+  document.getElementById('pFltSales').onchange = (e)=>{ PIPELINE_FILTER_STATE.sales=e.target.value; PIPELINE_COL_SHOWN={}; renderPipelinePage(); };
   document.getElementById('pFltFollowup').onchange = (e)=>{ PIPELINE_FILTER_STATE.followup=e.target.value; renderPipelinePage(); };
-  document.getElementById('pFltIndustry').onchange = (e)=>{ PIPELINE_FILTER_STATE.industry=e.target.value; renderPipelinePage(); };
+  document.getElementById('pFltIndustry').onchange = (e)=>{ PIPELINE_FILTER_STATE.industry=e.target.value; PIPELINE_COL_SHOWN={}; renderPipelinePage(); };
   el.querySelectorAll('[data-count-filter]').forEach(btn=>{
     btn.onclick = ()=>{
       const val = btn.dataset.countFilter;
@@ -298,6 +313,8 @@ function pipelineBoardColumnsHtml(boardLeads){
       });
     }
     const total = cards.reduce((s,l)=>s+(l.estimatedValue||0),0);
+    const shown = PIPELINE_COL_SHOWN[st] || PIPELINE_PAGE_SIZE;
+    const visible = cards.slice(0, shown); const hidden = cards.length - visible.length;
     return `
     <div class="pipeline-col" data-status="${st}">
       <div class="pipeline-col-head">
@@ -308,7 +325,8 @@ function pipelineBoardColumnsHtml(boardLeads){
         <div class="col-count">${cards.length}</div>
       </div>
       <div class="pipeline-cards" data-status="${st}">
-        ${cards.map(l=>pipelineCardHtml(l)).join('')}
+        ${visible.map(l=>pipelineCardHtml(l)).join('')}
+        ${hidden>0 ? `<button type="button" class="pcol-more" data-more="${st}">Show ${Math.min(hidden, PIPELINE_PAGE_SIZE)} more (${hidden} not shown)</button>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -374,6 +392,19 @@ function wirePipelineBoardInteractions(){
     btn.addEventListener('mousedown', (e)=> e.stopPropagation());
   });
 
+  // Archive / Restore (every Pipeline role) and Show more: like the code-edit icon, they must not trigger the card's own click (Lead Detail) or a drag start.
+  document.querySelectorAll('[data-archive]').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{ e.stopPropagation(); const lead = DB.find('leads', btn.dataset.archive); if(lead) openArchiveLeadModal(lead, ()=> renderPipelinePage()); });
+    btn.addEventListener('mousedown', (e)=> e.stopPropagation());
+  });
+  document.querySelectorAll('[data-restore-card]').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{ e.stopPropagation(); const lead = DB.find('leads', btn.dataset.restoreCard); if(lead) openRestoreToPipelineModal(lead, ()=> renderPipelinePage()); });
+    btn.addEventListener('mousedown', (e)=> e.stopPropagation());
+  });
+  document.querySelectorAll('[data-more]').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{ e.stopPropagation(); const st = btn.dataset.more; PIPELINE_COL_SHOWN[st] = (PIPELINE_COL_SHOWN[st] || PIPELINE_PAGE_SIZE) + PIPELINE_PAGE_SIZE; renderPipelineBoardOnly(); });
+  });
+
   document.querySelectorAll('.pipeline-col').forEach(col=>{
     col.addEventListener('dragover', (e)=>{ e.preventDefault(); col.classList.add('drag-over'); });
     col.addEventListener('dragleave', ()=> col.classList.remove('drag-over'));
@@ -383,7 +414,7 @@ function wirePipelineBoardInteractions(){
       const leadId = e.dataTransfer.getData('text/plain');
       const targetStatus = col.dataset.status;
       const lead = DB.find('leads', leadId);
-      if(!lead || lead.status===targetStatus) return;
+      if(!lead || lead.archived || lead.status===targetStatus) return;
       applyLeadStatusChange(lead, targetStatus);
     });
   });
@@ -408,23 +439,34 @@ function pipelineCardHtml(l){
   // can spot an old historical lead that still needs one.
   const codeGateIdx = PIPELINE_STATUSES.indexOf(QUOTE_AND_DEMO_SENT_STATUS);
   const showCode = PIPELINE_STATUSES.indexOf(l.status) >= codeGateIdx;
+  // Project Code on the card: the Founder keeps the edit pencil; the lead's own Sales (and the Founder) get "Set code" on a lead that has NO code yet.
+  // An established code is shown, never offered for change to anyone but the Founder (and the server refuses it for everybody else).
+  const canCode = isFounder() || canSetFirstProjectCode(l);
+  const codeBtn = !canCode ? '' : (l.projectCode
+    ? `<button type="button" class="pcard-code-edit" data-edit-code="${l.id}" title="Edit Project Code">${icon('edit','width="12" height="12"')}</button>`
+    : `<button type="button" class="pcard-code-set" data-edit-code="${l.id}" title="Set Project Code">Set code</button>`);
+  const archBtn = l.archived
+    ? `<button type="button" class="pcard-act" data-restore-card="${l.id}" title="Restore this item to the active Pipeline">Restore</button>`
+    : `<button type="button" class="pcard-act pcard-act-icon" data-archive="${l.id}" title="Archive this item (hidden from the active Pipeline, can be restored)" aria-label="Archive">${icon('archive','width="13" height="13"')}</button>`;
   return `
-    <div class="pcard ${isOnHold?'pcard-onhold':''}" draggable="true" data-lead-id="${l.id}">
-      <div class="pcard-biz">${escapeHtml(l.businessName)}</div>
-      <div class="pcard-client">${escapeHtml(l.clientName)}</div>
+    <div class="pcard ${isOnHold?'pcard-onhold':''} ${l.archived?'pcard-archived':''}" draggable="${l.archived?'false':'true'}" data-lead-id="${l.id}">
+      <div class="pcard-top">
+        <div class="pcard-biz" title="${escapeHtml(l.businessName)}">${escapeHtml(l.businessName)}</div>
+        ${archBtn}
+      </div>
+      <div class="pcard-client">${escapeHtml(l.clientName)}${l.archived?' <span class="pcard-tag">Archived</span>':''}</div>
       ${showCode ? `
       <div class="pcard-code-row">
         <span class="pcard-code ${l.projectCode?'':'pcard-code-unset'}">Code: ${l.projectCode ? escapeHtml(l.projectCode) : 'Not Set'}</span>
-        ${isFounder() ? `<button type="button" class="pcard-code-edit" data-edit-code="${l.id}" title="Edit Project Code">${icon('edit','width="12" height="12"')}</button>` : ''}
+        ${codeBtn}
       </div>` : ''}
-      <span class="pcard-svc">${escapeHtml(serviceShortName(l.interestedService))}</span>
       <div class="pcard-row">
+        <span class="pcard-svc" title="${escapeHtml(serviceShortName(l.interestedService))}">${escapeHtml(serviceShortName(l.interestedService))}</span>
         <span class="pcard-value">${moneyPrecise(l.estimatedValue)}</span>
-        <div class="avatar-sm" style="background:${userColor(l.assignedSales)}" title="${escapeHtml(l.assignedSales)}">${userInitials(l.assignedSales)}</div>
       </div>
-      <div class="pcard-row" style="margin-top:6px">
-        <span class="text-muted">Next:</span>
-        ${l.nextFollowup ? urgencyChip(l.nextFollowup) : '<span class="text-muted">—</span>'}
+      <div class="pcard-row pcard-row-next">
+        <div class="avatar-sm" style="background:${userColor(l.assignedSales)}" title="${escapeHtml(l.assignedSales)}">${userInitials(l.assignedSales)}</div>
+        <span class="pcard-next"><span class="text-muted">Next:</span> ${l.nextFollowup ? urgencyChip(l.nextFollowup) : '<span class="text-muted">—</span>'}</span>
       </div>
       ${isOnHold && l.holdReason ? `<div class="pcard-note">${escapeHtml(l.holdReason)}</div>` : ''}
     </div>
@@ -824,7 +866,7 @@ function paSortIndicator(field){
 }
 
 function openArchivedPipelineModal(){
-  if(!isFounder()){ toast('Only Founder/Admin can view the Pipeline Archive.', 'error'); return; }
+  if(!canUsePipeline()){ toast('Your role cannot view the Pipeline Archive.', 'error'); return; }
   PA_PAGE = 1;
   const allOpportunities = archivedPipelineOpportunities();
   const html = `
@@ -916,7 +958,7 @@ function renderPaTable(overlay){
                 <div class="flex-row" style="gap:6px;flex-wrap:wrap">
                   <button class="btn btn-secondary btn-sm" data-view="${l.id}">View</button>
                   <button class="btn btn-primary btn-sm" data-restore="${l.id}">Restore</button>
-                  ${(!l.projectCode) ? `<button class="btn btn-danger btn-sm" data-delete="${l.id}">Delete</button>` : ''}
+                  ${(!l.projectCode && canDeleteLeads(CURRENT_USER.role)) ? `<button class="btn btn-danger btn-sm" data-delete="${l.id}">Delete</button>` : ''}
                 </div>
               </td>
             </tr>`).join('') : `<tr><td colspan="9"><div class="empty-row">No matching archived opportunities found.</div></td></tr>`}
@@ -994,7 +1036,7 @@ function renderPaPagination(totalCount, totalPages){
 }
 
 function openRestoreToPipelineModal(lead, onDone){
-  if(!isFounder()){ toast('Only Founder/Admin can restore an opportunity.', 'error'); return; }
+  if(!canUsePipeline()){ toast('Your role cannot restore pipeline items.', 'error'); return; }
   const fallback = !PIPELINE_STATUSES.includes(lead.status);
   const targetStage = fallback ? QUOTE_AND_DEMO_SENT_STATUS : lead.status;
   const html = `

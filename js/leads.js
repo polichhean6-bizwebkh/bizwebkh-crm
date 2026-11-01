@@ -640,7 +640,7 @@ function renderLeadDetail(leadId){
       ${lead.archived ? `
       <div class="panel" style="padding:10px 14px;background:var(--gray-soft);border:1px solid var(--line);margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
         <span class="text-muted" style="font-size:12.5px">This opportunity is archived — hidden from the active Pipeline (and Lead Records' default Active view) by default, but all its data is preserved.${lead.archiveReason?` Reason: ${escapeHtml(lead.archiveReason)}.`:''}</span>
-        ${isFounder() ? `<button class="btn btn-outline btn-sm" id="ldRestore">Restore</button>` : ''}
+        ${canUsePipeline() ? `<button class="btn btn-outline btn-sm" id="ldRestore">Restore</button>` : ''}
       </div>` : ''}
       <div class="flex-row" style="justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
         <div class="flex-row">${statusBadge(lead.status, pipelineStageLabel(lead.status))}${lead.lostReason?`<span class="text-muted" style="font-size:12px">Reason: ${escapeHtml(lead.lostReason)}</span>`:''}${lead.status===ON_HOLD_STATUS && lead.holdReason?`<span class="text-muted" style="font-size:12px">Note: ${escapeHtml(lead.holdReason)}</span>`:''}</div>
@@ -662,7 +662,7 @@ function renderLeadDetail(leadId){
     </div>
     <div class="modal-foot" style="justify-content:space-between">
       <div class="flex-row" style="gap:8px">
-        ${(!lead.archived && isFounder()) ? `<button class="btn btn-ghost btn-sm" id="ldArchive" style="color:var(--muted)">Archive</button>` : ''}
+        ${(!lead.archived && canUsePipeline()) ? `<button class="btn btn-ghost btn-sm" id="ldArchive" style="color:var(--muted)">Archive</button>` : ''}
         <button class="btn btn-danger btn-sm" id="ldDelete" style="opacity:.85">Delete Lead</button>
       </div>
       <button class="btn btn-secondary" id="ldClose2">Close</button>
@@ -732,7 +732,7 @@ function leadOverviewTab(lead){
           <span class="text-muted">Project Code</span>
           <span class="flex-row" style="gap:6px;justify-content:flex-end">
             <span class="cell-strong ${lead.projectCode?'':'text-muted'}">${lead.projectCode ? escapeHtml(lead.projectCode) : 'Not Set'}</span>
-            ${isFounder() ? `<button type="button" class="icon-btn-sm" id="ldEditCode" title="Edit Project Code" style="border:none;background:none;cursor:pointer;color:var(--muted);padding:2px;display:inline-flex">${icon('edit','width="14" height="14"')}</button>` : ''}
+            ${(isFounder() || canSetFirstProjectCode(lead)) ? `<button type="button" class="icon-btn-sm" id="ldEditCode" title="Edit Project Code" style="border:none;background:none;cursor:pointer;color:var(--muted);padding:2px;display:inline-flex">${icon('edit','width="14" height="14"')}</button>` : ''}
           </span>
         </div>` : ''}
       </div>
@@ -955,7 +955,10 @@ async function advanceLeadToPipeline(lead, projectCode){
 /* validation and duplicate-blocking always match exactly.                 */
 /* ---------------------------------------------------------------------- */
 function openEditProjectCodeModal(lead, onDone){
-  if(!isFounder()){ toast('Only Founder/Admin can edit Project Code.', 'error'); return; }
+  // Founder/Admin: full Edit Project Code. Any other staff: ONLY the first assignment on a lead that has no code yet (the lead's own Sales);
+  // an established code is never offered for change to them (the server refuses it as well).
+  const firstOnly = !isFounder();
+  if(firstOnly && !canSetFirstProjectCode(lead)){ toast(lead.projectCode ? `Project Code ${lead.projectCode} is already established; only Founder/Admin can change it.` : "Only Founder/Admin or the lead's own Sales can set the first Project Code.", 'error'); return; }
 
   // Global project-code integrity fix (C059/C060 incident): once a real
   // Project row exists for this lead's code, this Project Code is the
@@ -1008,7 +1011,7 @@ function openEditProjectCodeModal(lead, onDone){
   // check itself, which still exempts this lead separately below).
   const { lastUsed, suggested } = computeNextProjectCode(allKnownProjectCodes());
   const html = `
-    <div class="modal-head"><h3>Edit Project Code</h3><button class="modal-close" id="epcClose">&times;</button></div>
+    <div class="modal-head"><h3>${firstOnly ? 'Set Project Code' : 'Edit Project Code'}</h3><button class="modal-close" id="epcClose">&times;</button></div>
     <div class="modal-body">
       <p class="text-muted" style="margin-top:0;font-size:13px">${escapeHtml(lead.clientName)} — ${escapeHtml(lead.businessName)}</p>
       <div class="form-field">
@@ -1040,9 +1043,9 @@ function openEditProjectCodeModal(lead, onDone){
       const normalized = normalizeProjectCode(codeInput.value);
       const oldCode = lead.projectCode || null;
 
-      if(!normalized && required){
+      if(!normalized && (required || firstOnly)){
         codeInput.style.borderColor='var(--red)';
-        toast(`Project Code is required for a lead at "${pipelineStageLabel(lead.status)}".`, 'error');
+        toast(firstOnly ? 'Enter the Project Code to assign.' : `Project Code is required for a lead at "${pipelineStageLabel(lead.status)}".`, 'error');
         return;
       }
       // Root-cause fix (Rabbit Travel Cambodia incident): reject a code
@@ -1101,12 +1104,13 @@ function openEditProjectCodeModal(lead, onDone){
 /* ---------------------------------------------------------------------- */
 
 function openArchiveLeadModal(lead, onDone){
-  if(!isFounder()){ toast('Only Founder/Admin can archive an opportunity.', 'error'); return; }
+  if(!canUsePipeline()){ toast('Your role cannot archive pipeline items.', 'error'); return; }
   const html = `
     <div class="modal-head"><h3>Archive</h3><button class="modal-close" id="arClose">&times;</button></div>
     <div class="modal-body">
-      <p style="margin-top:0">Archive this opportunity?</p>
-      <p class="text-muted" style="font-size:12.5px">This will remove <b>${escapeHtml(lead.clientName)} — ${escapeHtml(lead.businessName)}</b> (${lead.id}${lead.projectCode?' · Project '+escapeHtml(lead.projectCode):''}) from the active Pipeline, but all lead information, notes, history and related records will be preserved. Nothing is deleted, and it can be restored at any time.</p>
+      <p style="margin-top:0"><b>Archive this item?</b></p>
+      <p style="margin:0 0 6px" id="ar_name"><b>${escapeHtml(lead.businessName)}</b> <span class="text-muted">— ${escapeHtml(lead.clientName)} (${lead.id}${lead.projectCode?' · '+escapeHtml(lead.projectCode):''})</span></p>
+      <p class="text-muted" style="font-size:12.5px">This item will be hidden from the active Pipeline but can be restored later. Nothing is deleted: its information, activity history and any project or payment records are preserved.</p>
       <div class="form-field"><label>Archive Reason (optional)</label><textarea id="ar_reason" placeholder="e.g. Inactive for 6+ months, no response."></textarea></div>
     </div>
     <div class="modal-foot">
@@ -1147,7 +1151,7 @@ function openArchiveLeadModal(lead, onDone){
 // unnecessarily"). See restoreLeadToPipeline() below for the Pipeline
 // Archive view's stage-fallback variant.
 async function restoreLead(lead, onDone){
-  if(!isFounder()){ toast('Only Founder/Admin can restore an opportunity.', 'error'); return; }
+  if(!canUsePipeline()){ toast('Your role cannot restore pipeline items.', 'error'); return; }
   lead.archived = false;
   lead.archivedAt = null;
   lead.archivedBy = null;
@@ -1175,7 +1179,7 @@ async function restoreLead(lead, onDone){
 /* duplicate card — it's the exact same lead record, just un-archived.    */
 /* ---------------------------------------------------------------------- */
 async function restoreLeadToPipeline(lead, onDone){
-  if(!isFounder()){ toast('Only Founder/Admin can restore an opportunity.', 'error'); return; }
+  if(!canUsePipeline()){ toast('Your role cannot restore pipeline items.', 'error'); return; }
   const fresh = DB.find('leads', lead.id) || lead;
   const prevStage = fresh.status;
   const validStage = PIPELINE_STATUSES.includes(fresh.status);

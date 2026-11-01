@@ -1,5 +1,5 @@
 /* ==========================================================================
-   BizWeb KH CRM — auth.js  (Neon Auth)
+   BizWeb KH CRM — auth.js  (REHEARSAL build: Neon Auth)
    Neon Auth wrapper. Same public surface as the Supabase build:
    Auth.login/Auth.logout/Auth.currentUser/Auth.requireAuth/
    Auth.redirectIfLoggedIn/Auth.restoreSession — so every other module (which reads
@@ -257,3 +257,15 @@ function canChooseAssignedSales(role){ return role !== 'sales'; }
 /* fixes every call site at once, instead of patching each one inline.    */
 /* ---------------------------------------------------------------------- */
 function isFounder(){ return CURRENT_USER.role === 'founder_admin'; }
+
+/* ---------------------------------------------------------------------- */
+/* Pipeline staff — every ACTIVE role that has the Pipeline page (see      */
+/* ROLE_PERMISSIONS above) may move, archive and restore ANY Pipeline card */
+/* regardless of who it is assigned to. Nothing else about a lead becomes  */
+/* editable by this: the server (api/crm, migration 006) lets a non-owner  */
+/* change only the pipeline fields (stage, follow-up, archive) and the     */
+/* first project code together with a stage move.                          */
+/* ---------------------------------------------------------------------- */
+function canUsePipeline(role){ return roleCanAccess(role || (CURRENT_USER && CURRENT_USER.role), 'pipeline'); }
+/* First assignment of a lead's Project Code from the card/detail: the Founder, or the Sales user the lead is assigned to. */
+function canSetFirstProjectCode(lead){ return !!lead && !lead.projectCode && (isFounder() || (CURRENT_USER.role === 'sales' && lead.assignedSales === CURRENT_USER.name)); }
