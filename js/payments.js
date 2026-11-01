@@ -373,17 +373,21 @@ function openRecordPaymentModal(projectId, onDone, presetInvoiceId=null, opts={}
 
   // Payment Purpose release: the user chooses only WHY the money came (Project Payment | Renewal). The Payment Label (First / Second / ... / Final Payment, Renewal Payment) is
   // calculated here for display while typing, and calculated again — authoritatively — by the server, which also refuses an amount above the remaining balance.
+  // infoRow() escapes its value, so rows that carry markup (the live-updated spans) use rpRow(), whose value is trusted HTML built here from escaped / numeric parts only.
+  const rpRow = (label, valueHtml) => `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;font-size:13px;border-bottom:1px solid #f2f5fa">
+    <span class="text-muted">${label}</span><span class="cell-strong" style="text-align:right">${valueHtml}</span>
+  </div>`;
   const html = `
     <div class="modal-head"><h3>${autoReceipt ? 'Record Payment &amp; Generate Receipt' : 'Record Payment'}</h3><button class="modal-close" id="rpClose">&times;</button></div>
     <div class="modal-body">
       <div class="pd-keyinfo" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
         <div>
-          ${infoRow('Project', escapeHtml(proj.id + ' — ' + proj.businessName))}
-          ${infoRow('Project Value', '<span id="rp_value">' + moneyPrecise(summary.confirmedValue) + '</span>')}
+          ${rpRow('Project', escapeHtml(proj.id + ' — ' + proj.businessName))}
+          ${rpRow('Project Value', '<span id="rp_value">' + moneyPrecise(summary.confirmedValue) + '</span>')}
         </div>
         <div>
-          ${infoRow('Paid', '<span id="rp_paid">' + moneyPrecise(summary.totalPaid) + '</span>')}
-          ${infoRow('Remaining', '<b id="rp_remaining">' + moneyPrecise(summary.remaining) + '</b>')}
+          ${rpRow('Paid', '<span id="rp_paid">' + moneyPrecise(summary.totalPaid) + '</span>')}
+          ${rpRow('Remaining', '<b id="rp_remaining">' + moneyPrecise(summary.remaining) + '</b>')}
         </div>
       </div>
       ${presetInvoice ? `
